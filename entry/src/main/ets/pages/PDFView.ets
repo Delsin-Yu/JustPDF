@@ -1,6 +1,7 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { router } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
+import { faceDetector } from '@kit.CoreVisionKit';
 
 const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
 const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 1)';
@@ -18,6 +19,7 @@ struct PDFView {
   private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
+  isInDualPageMode: boolean = false;
 
   setPageIndexAndGotoPage(newIndex: number) {
     this.pageIndex = newIndex;
@@ -44,17 +46,35 @@ struct PDFView {
   }
 
   gotoPreviousPage() {
-    let newPageIndex = this.pageIndex - 1;
-    if (newPageIndex < 0) {
-      return;
+    let newPageIndex = 0;
+    if (this.isInDualPageMode) {
+      newPageIndex = this.pageIndex - 2;
+      newPageIndex = Math.max(newPageIndex, 0);
+      if (newPageIndex == this.pageIndex) {
+        return;
+      }
+    } else {
+      newPageIndex = this.pageIndex - 1;
+      if (newPageIndex < 0) {
+        return;
+      }
     }
     this.setPageIndexAndGotoPage(newPageIndex);
   }
 
   gotoNextPage() {
-    let newPageIndex = this.pageIndex + 1;
-    if (newPageIndex >= this.pageCount) {
-      return;
+    let newPageIndex = 0;
+    if (this.isInDualPageMode) {
+      newPageIndex = this.pageIndex + 2;
+      newPageIndex = Math.min(newPageIndex, this.pageCount - 1);
+      if (newPageIndex == this.pageIndex) {
+        return;
+      }
+    } else {
+      newPageIndex = this.pageIndex + 1;
+      if (newPageIndex >= this.pageCount) {
+        return;
+      }
     }
     this.setPageIndexAndGotoPage(newPageIndex);
   }
@@ -67,16 +87,52 @@ struct PDFView {
         isContinuous: false,
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       }).width('100%').height('100%').id(PdfViewId)
+
+      Button({ type: ButtonType.Normal })
+        .fontSize(ButtonFontSize)
+        .fontWeight(FontWeight.Bold)
+        .size({ width: '30%', height: '100%' })
+        .backgroundColor(Color.Transparent)
+        .onClick(() => this.gotoPreviousPage())
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          left: { anchor: '__container__', align: HorizontalAlign.Start }
+        })
+
+      Button({ type: ButtonType.Normal })
+        .fontSize(ButtonFontSize)
+        .fontWeight(FontWeight.Bold)
+        .size({ width: '30%', height: '100%' })
+        .backgroundColor(Color.Transparent)
+        .onClick(() => this.gotoNextPage())
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          right: { anchor: '__container__', align: HorizontalAlign.End }
+        })
+
       Column({ space: StandardOffset }) {
         Toggle({ type: ToggleType.Button }) {
           Text("双页")
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
         }
-        .onChange(isOn => this.controller.setPageLayout(isOn ? pdfService.PageLayout.LAYOUT_DOUBLE : pdfService.PageLayout.LAYOUT_SINGLE))
+        .onChange(isOn => {
+          this.isInDualPageMode = isOn;
+          this.controller.setPageLayout(isOn ? pdfService.PageLayout.LAYOUT_DOUBLE :
+          pdfService.PageLayout.LAYOUT_SINGLE)
+          if (!isOn) {
+            return;
+          }
+          let currentPageIndex = this.pageIndex;
+          if (currentPageIndex % 2 == 0) {
+            return;
+          }
+          this.setPageIndexAndGotoPage(currentPageIndex - 1);
+        })
         .size(ButtonSize)
         .backgroundColor(ButtonColor)
         .selectedColor(ButtonColorHighlight)
+
         Button("视口")
           .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
           .fontSize(ButtonFontSize)
@@ -116,8 +172,13 @@ struct PDFView {
           .alignSelf(ItemAlign.End)
           .trackColor(TrackColor)
           .selectedColor(ButtonColor)
-          .onChange((value, _) => this.setPageIndexAndGotoPage(value))
-        Text(`${this.pageIndex}/${this.pageCount - 1}`)
+          .onChange((value, _) => {
+            if ((value != this.pageCount - 1) && this.isInDualPageMode && (value % 2 != 0)) {
+              value -= 1;
+            }
+            this.setPageIndexAndGotoPage(value)
+          })
+        Text(`${this.pageIndex + 1}/${this.pageCount}`)
           .fontSize(ButtonFontSize)
           .fontWeight(FontWeight.Bold)
           .textShadow({
@@ -128,18 +189,6 @@ struct PDFView {
           })
           .size(ButtonSize)
           .textAlign(TextAlign.Center)
-        Button("上一页")
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .onClick(() => this.gotoPreviousPage())
-        Button("下一页")
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .onClick(() => this.gotoNextPage())
       }
       .alignRules({
         bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
