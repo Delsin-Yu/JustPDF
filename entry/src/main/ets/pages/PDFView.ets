@@ -1,0 +1,176 @@
+import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
+import { router } from '@kit.ArkUI';
+import { KeyCode } from '@kit.InputKit';
+
+const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
+const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 1)';
+const TrackColor: ResourceColor = 'rgba(85, 85, 85, 0.4)';
+const StandardOffset: LPX = '5lpx';
+const ButtonFontSize: number = 20;
+const ButtonSize: SizeOptions = { height: '30lpx', width: '60lpx' };
+
+const PdfViewId = 'pdfview_control';
+
+
+@Entry
+@Component
+struct PDFView {
+  private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
+  @State pageCount: number = 0;
+  @State pageIndex: number = 0;
+
+  setPageIndexAndGotoPage(newIndex: number) {
+    this.pageIndex = newIndex;
+    this.controller.goToPage(this.pageIndex);
+  }
+
+  aboutToAppear() {
+    this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
+    this.controller.loadDocument((router.getParams() as Record<string, string>)['src']).then(() => {
+      this.pageCount = this.controller.getPageCount();
+    });
+  }
+
+  aboutToDisappear(): void {
+    this.controller.releaseDocument();
+  }
+
+  gotoFirstPage() {
+    this.setPageIndexAndGotoPage(0);
+  }
+
+  gotoLastPage() {
+    this.setPageIndexAndGotoPage(this.pageCount - 1)
+  }
+
+  gotoPreviousPage() {
+    let newPageIndex = this.pageIndex - 1;
+    if (newPageIndex < 0) {
+      return;
+    }
+    this.setPageIndexAndGotoPage(newPageIndex);
+  }
+
+  gotoNextPage() {
+    let newPageIndex = this.pageIndex + 1;
+    if (newPageIndex >= this.pageCount) {
+      return;
+    }
+    this.setPageIndexAndGotoPage(newPageIndex);
+  }
+
+  build() {
+    RelativeContainer() {
+      PdfView({
+        controller: this.controller,
+        pageFit: pdfService.PageFit.FIT_PAGE,
+        isContinuous: false,
+        pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
+      }).width('100%').height('100%').id(PdfViewId)
+      Column({ space: StandardOffset }) {
+        Toggle({ type: ToggleType.Button }) {
+          Text("双页")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+        }
+        .onChange(isOn => this.controller.setPageLayout(isOn ? pdfService.PageLayout.LAYOUT_DOUBLE : pdfService.PageLayout.LAYOUT_SINGLE))
+        .size(ButtonSize)
+        .backgroundColor(ButtonColor)
+        .selectedColor(ButtonColorHighlight)
+        Button("视口")
+          .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+        Button("首页")
+          .onClick(() => this.gotoFirstPage())
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+        Button("尾页")
+          .onClick(() => this.gotoLastPage())
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+      }.alignRules({
+        bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+        left: { anchor: '__container__', align: HorizontalAlign.Start }
+      }).offset({ left: StandardOffset, bottom: StandardOffset })
+
+      Column({ space: StandardOffset }) {
+        Slider({
+          value: this.pageIndex,
+          min: 0,
+          max: this.pageCount - 1,
+          style: SliderStyle.InSet,
+          direction: Axis.Vertical,
+          reverse: true
+        })
+          .showSteps(true)
+          .showTips(true)
+          .trackThickness('30lpx')
+          .height('60%')
+          .alignSelf(ItemAlign.End)
+          .trackColor(TrackColor)
+          .selectedColor(ButtonColor)
+          .onChange((value, _) => this.setPageIndexAndGotoPage(value))
+        Text(`${this.pageIndex}/${this.pageCount - 1}`)
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .textShadow({
+            type: ShadowType.BLUR,
+            radius: 8,
+            offsetX: 2,
+            offsetY: 5
+          })
+          .size(ButtonSize)
+          .textAlign(TextAlign.Center)
+        Button("上一页")
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .onClick(() => this.gotoPreviousPage())
+        Button("下一页")
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .onClick(() => this.gotoNextPage())
+      }
+      .alignRules({
+        bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+        right: { anchor: '__container__', align: HorizontalAlign.End }
+      })
+      .offset({ right: StandardOffset, bottom: StandardOffset })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('sys.color.white'))
+    .onKeyEvent(keyEvent => {
+      if (keyEvent.type != KeyType.Down) {
+        return;
+      }
+      if (this == null) {
+        return;
+      }
+
+      switch (keyEvent.keyCode) {
+        case KeyCode.KEYCODE_DPAD_UP:
+        case KeyCode.KEYCODE_DPAD_LEFT:
+          keyEvent.stopPropagation();
+          this.gotoPreviousPage();
+          break;
+        case KeyCode.KEYCODE_DPAD_DOWN:
+        case KeyCode.KEYCODE_DPAD_RIGHT:
+        case KeyCode.KEYCODE_SPACE:
+          keyEvent.stopPropagation();
+          this.gotoNextPage();
+          break;
+      }
+    })
+  }
+}
