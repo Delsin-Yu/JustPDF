@@ -1,7 +1,6 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { router } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
-import { faceDetector } from '@kit.CoreVisionKit';
 
 const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
 const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 1)';
@@ -22,6 +21,9 @@ struct PDFView {
   isInDualPageMode: boolean = false;
 
   setPageIndexAndGotoPage(newIndex: number) {
+    if (this.pageIndex == newIndex) {
+      return;
+    }
     this.pageIndex = newIndex;
     this.controller.goToPage(this.pageIndex);
   }
@@ -207,17 +209,31 @@ struct PDFView {
         return;
       }
 
+      let isCtrlPressed = false;
+
+      if (keyEvent.getModifierKeyState != null) {
+        isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+      }
+
       switch (keyEvent.keyCode) {
         case KeyCode.KEYCODE_DPAD_UP:
         case KeyCode.KEYCODE_DPAD_LEFT:
           keyEvent.stopPropagation();
-          this.gotoPreviousPage();
+          if (isCtrlPressed) {
+            this.gotoFirstPage();
+          } else {
+            this.gotoPreviousPage();
+          }
           break;
         case KeyCode.KEYCODE_DPAD_DOWN:
         case KeyCode.KEYCODE_DPAD_RIGHT:
         case KeyCode.KEYCODE_SPACE:
           keyEvent.stopPropagation();
-          this.gotoNextPage();
+          if (isCtrlPressed) {
+            this.gotoLastPage();
+          } else {
+            this.gotoNextPage();
+          }
           break;
       }
     })
