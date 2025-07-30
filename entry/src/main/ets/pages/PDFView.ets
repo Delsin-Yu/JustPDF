@@ -1,13 +1,16 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { router } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
+import { window } from '@kit.ArkUI';
 
 const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
+const ButtonColorSemiTransparent: ResourceColor = 'rgba(85, 85, 85, 0.2)';
 const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 1)';
 const TrackColor: ResourceColor = 'rgba(85, 85, 85, 0.4)';
-const StandardOffset: LPX = '5lpx';
+const StandardOffsetValue: number = 5;
+const StandardOffset: LPX = `${StandardOffsetValue}lpx`;
 const ButtonFontSize: number = 20;
-const ButtonSize: SizeOptions = { height: '30lpx', width: '60lpx' };
+const ButtonSize: SizeOptions = { height: '25lpx', width: '50lpx' };
 
 const PdfViewId = 'pdfview_control';
 
@@ -18,7 +21,10 @@ struct PDFView {
   private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
+  @State showControls: Visibility = Visibility.Visible;
   isInDualPageMode: boolean = false;
+  decorBarHeight: number = AppStorage.get("decorBarHeight") as number;
+  @State isExclusiveFullScreen: boolean = false;
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -90,6 +96,19 @@ struct PDFView {
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       }).width('100%').height('100%').id(PdfViewId)
 
+      Image('')
+        .width('100%')
+        .height(this.decorBarHeight)
+        .alignSelf(ItemAlign.Center)
+        .linearGradient({
+          colors: [['rgba(0, 0, 0, 0.2)', 0.0], ['rgba(0, 0, 0, 0)', 1.0]]
+        })
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          left: { anchor: '__container__', align: HorizontalAlign.Start }
+        })
+        .visibility(this.isExclusiveFullScreen ? Visibility.None : Visibility.Visible)
+
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
         .fontWeight(FontWeight.Bold)
@@ -113,6 +132,7 @@ struct PDFView {
         })
 
       Column({ space: StandardOffset }) {
+
         Toggle({ type: ToggleType.Button }) {
           Text("双页")
             .fontSize(ButtonFontSize)
@@ -134,6 +154,7 @@ struct PDFView {
         .size(ButtonSize)
         .backgroundColor(ButtonColor)
         .selectedColor(ButtonColorHighlight)
+        .visibility(this.showControls)
 
         Button("视口")
           .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
@@ -141,18 +162,38 @@ struct PDFView {
           .fontWeight(FontWeight.Bold)
           .size(ButtonSize)
           .backgroundColor(ButtonColor)
+          .visibility(this.showControls)
+
         Button("首页")
           .onClick(() => this.gotoFirstPage())
           .fontSize(ButtonFontSize)
           .fontWeight(FontWeight.Bold)
           .size(ButtonSize)
           .backgroundColor(ButtonColor)
+          .visibility(this.showControls)
+
         Button("尾页")
           .onClick(() => this.gotoLastPage())
           .fontSize(ButtonFontSize)
           .fontWeight(FontWeight.Bold)
           .size(ButtonSize)
           .backgroundColor(ButtonColor)
+          .visibility(this.showControls)
+
+
+        Button(this.showControls == Visibility.Visible ? "收起" : "展开")
+          .onClick(() => {
+            if (this.showControls == Visibility.Visible) {
+              this.showControls = Visibility.None;
+            } else {
+              this.showControls = Visibility.Visible;
+            }
+          })
+          .fontSize(ButtonFontSize)
+          .fontWeight(FontWeight.Bold)
+          .size(ButtonSize)
+          .backgroundColor(this.showControls == Visibility.Visible ? ButtonColor : ButtonColorSemiTransparent)
+
       }.alignRules({
         bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
         left: { anchor: '__container__', align: HorizontalAlign.Start }
@@ -169,8 +210,8 @@ struct PDFView {
         })
           .showSteps(true)
           .showTips(true)
-          .trackThickness('30lpx')
-          .height('60%')
+          .trackThickness('20lpx')
+          .height('50%')
           .alignSelf(ItemAlign.End)
           .trackColor(TrackColor)
           .selectedColor(ButtonColor)
@@ -180,6 +221,8 @@ struct PDFView {
             }
             this.setPageIndexAndGotoPage(value)
           })
+          .visibility(this.showControls)
+
         Text(`${this.pageIndex + 1}/${this.pageCount}`)
           .fontSize(ButtonFontSize)
           .fontWeight(FontWeight.Bold)
@@ -189,7 +232,6 @@ struct PDFView {
             offsetX: 2,
             offsetY: 5
           })
-          .size(ButtonSize)
           .textAlign(TextAlign.Center)
       }
       .alignRules({
@@ -197,6 +239,34 @@ struct PDFView {
         right: { anchor: '__container__', align: HorizontalAlign.End }
       })
       .offset({ right: StandardOffset, bottom: StandardOffset })
+
+      Column({ space: StandardOffset }) {
+        Toggle({ type: ToggleType.Button }) {
+          Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+        }
+        .onChange(isOn => {
+          let windowStage = AppStorage.get('windowStage') as window.WindowStage;
+          let mainWindow = windowStage.getMainWindowSync();
+          this.isExclusiveFullScreen = isOn;
+          if (isOn) {
+            mainWindow.maximize();
+          } else {
+            mainWindow.recover();
+          }
+        })
+        .size(ButtonSize)
+        .backgroundColor(ButtonColor)
+        .selectedColor(ButtonColorHighlight)
+      }
+      .alignRules({
+        top: { anchor: '__container__', align: VerticalAlign.Top },
+        right: { anchor: '__container__', align: HorizontalAlign.End }
+      })
+      .offset({ right: StandardOffset, top: !this.isExclusiveFullScreen ? this.decorBarHeight : StandardOffset })
+      .visibility(this.showControls)
+
     }
     .width('100%')
     .height('100%')
