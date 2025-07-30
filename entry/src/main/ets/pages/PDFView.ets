@@ -1,5 +1,4 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
-import { router } from '@kit.ArkUI';
 import { KeyCode } from '@kit.InputKit';
 import { window } from '@kit.ArkUI';
 
@@ -36,7 +35,7 @@ struct PDFView {
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
-    this.controller.loadDocument((router.getParams() as Record<string, string>)['src']).then(() => {
+    this.controller.loadDocument((this.getUIContext().getRouter().getParams() as Record<string, string>)['src']).then(() => {
       this.pageCount = this.controller.getPageCount();
     });
   }
