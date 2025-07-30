@@ -5,8 +5,6 @@ import { router, window } from '@kit.ArkUI';
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
-  private storage = new LocalStorage();
-
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
@@ -15,7 +13,7 @@ export default class EntryAbility extends UIAbility {
     if (uri == null || uri == undefined) {
       return;
     }
-    this.storage.setOrCreate('launchUri', uri);
+    AppStorage.setOrCreate('launchUri', uri);
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -23,7 +21,7 @@ export default class EntryAbility extends UIAbility {
     if (uri == null || uri == undefined) {
       return;
     }
-    this.storage.setOrCreate('launchUri', uri);
+    AppStorage.setOrCreate('launchUri', uri);
     router.clear();
     router.pushUrl({url: 'pages/Index'});
   }
@@ -36,7 +34,7 @@ export default class EntryAbility extends UIAbility {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
     AppStorage.setOrCreate('windowStage', windowStage);
-    windowStage.loadContent('pages/Index', this.storage, (err) => {
+    windowStage.loadContent('pages/Index', null, (err) => {
       let window = windowStage.getMainWindowSync();
       window.setWindowDecorVisible(false);
       AppStorage.setOrCreate('decorBarHeight', window.getWindowDecorHeight());
