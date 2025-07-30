@@ -1,6 +1,7 @@
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
 import { window } from '@kit.ArkUI';
+import { preferences } from '@kit.ArkData';
 
 const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(85, 85, 85, 0.2)';
@@ -24,6 +25,7 @@ struct PDFView {
   isInDualPageMode: boolean = false;
   decorBarHeight: number = AppStorage.get("decorBarHeight") as number;
   @State isExclusiveFullScreen: boolean = false;
+  preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -38,6 +40,7 @@ struct PDFView {
     this.controller.loadDocument((this.getUIContext().getRouter().getParams() as Record<string, string>)['src']).then(() => {
       this.pageCount = this.controller.getPageCount();
     });
+    this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
   }
 
   aboutToDisappear(): void {
@@ -187,6 +190,8 @@ struct PDFView {
             } else {
               this.showControls = Visibility.Visible;
             }
+            this.preferences.putSync('showControls', this.showControls);
+            this.preferences.flushSync();
           })
           .fontSize(ButtonFontSize)
           .fontWeight(FontWeight.Bold)
