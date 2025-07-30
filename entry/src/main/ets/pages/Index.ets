@@ -13,13 +13,11 @@ struct Index {
   aboutToAppear(): void {
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
-    let localStorage = context.getSharedLocalStorage();
     if(routerParams != null && routerParams['routerParams'] != '')
     {
-      if(localStorage == null) localStorage = new LocalStorage();
-      localStorage.setOrCreate('launchUri', routerParams['routerParams']);
+      AppStorage.setOrCreate('launchUri', routerParams['routerParams']);
     }
-    let launchUriLink = localStorage?.link<string>('launchUri');
+    let launchUriLink = AppStorage?.link<string>('launchUri');
     if(launchUriLink == null) return;
     let launchUri = launchUriLink.get();
     launchUriLink.set('');
