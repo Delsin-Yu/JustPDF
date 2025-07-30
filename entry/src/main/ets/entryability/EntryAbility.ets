@@ -1,6 +1,7 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { router, window } from '@kit.ArkUI';
+import { preferences } from '@kit.ArkData';
 
 const DOMAIN = 0x0000;
 
@@ -23,7 +24,7 @@ export default class EntryAbility extends UIAbility {
     }
     AppStorage.setOrCreate('launchUri', uri);
     router.clear();
-    router.replaceUrl({url: 'pages/Index'});
+    router.replaceUrl({ url: 'pages/Index' });
   }
 
   onDestroy(): void {
@@ -31,13 +32,40 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    // Main window is created, set main page for this ability
+    // Main applicationWindow is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    let dataPreferences = preferences.getPreferencesSync(this.context, { name: 'stagePersistence' });
     AppStorage.setOrCreate('windowStage', windowStage);
+    AppStorage.setOrCreate('preferences', dataPreferences);
     windowStage.loadContent('pages/Index', null, (err) => {
-      let window = windowStage.getMainWindowSync();
-      window.setWindowDecorVisible(false);
-      AppStorage.setOrCreate('decorBarHeight', window.getWindowDecorHeight());
+      let applicationWindow = windowStage.getMainWindowSync();
+      applicationWindow.setWindowDecorVisible(false);
+      applicationWindow.on('windowRectChange', rectChangeOptions => {
+        if (rectChangeOptions.reason == window.RectChangeReason.DRAG_START) {
+          return;
+        }
+        dataPreferences.putSync('windowRect', rectChangeOptions.rect);
+        if (rectChangeOptions.reason == window.RectChangeReason.MAXIMIZE) {
+          dataPreferences.putSync('isMaximized', true);
+        } else if (rectChangeOptions.reason == window.RectChangeReason.RECOVER) {
+          dataPreferences.putSync('isMaximized', false);
+        }
+        dataPreferences.flushSync();
+      });
+      if (dataPreferences.hasSync('windowRect')) {
+        let rect = dataPreferences.getSync('windowRect', {
+          left: 0,
+          top: 0,
+          width: 0,
+          height: 0
+        }) as window.Rect;
+        applicationWindow.resize(rect.width, rect.height);
+        applicationWindow.moveWindowToGlobal(rect.left, rect.top);
+      }
+      if ((dataPreferences.getSync('isMaximized', false) as boolean)) {
+        applicationWindow.maximize(window.MaximizePresentation.EXIT_IMMERSIVE)
+      }
+      AppStorage.setOrCreate('decorBarHeight', applicationWindow.getWindowDecorHeight());
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
@@ -47,7 +75,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
-    // Main window is destroyed, release UI related resources
+    // Main applicationWindow is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
