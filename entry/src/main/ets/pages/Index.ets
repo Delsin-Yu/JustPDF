@@ -1,7 +1,6 @@
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { router } from '@kit.ArkUI';
 
 const TAG = 'JustPDFIndex';
 
@@ -13,30 +12,32 @@ struct Index {
   aboutToAppear(): void {
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
-    if(routerParams != null && routerParams['routerParams'] != '')
-    {
+    if (routerParams != null && routerParams['routerParams'] != '') {
       AppStorage.setOrCreate('launchUri', routerParams['routerParams']);
     }
     let launchUriLink = AppStorage?.link<string>('launchUri');
-    if(launchUriLink == null) return;
+    if (launchUriLink == null) {
+      return;
+    }
     let launchUri = launchUriLink.get();
     launchUriLink.set('');
     this.loadAndViewFile(launchUri);
   }
 
   async loadAndViewFile(uri: string) {
-    let dir = getContext().filesDir;
+    let uiContext = this.getUIContext();
+    let dir = uiContext.getHostContext()!.filesDir;
     let file = dir + "/temp.pdf";
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_ONLY);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
-    router.pushUrl({ url: 'pages/PDFView', params: { src: file } });
+    uiContext.getRouter().pushUrl({ url: 'pages/PDFView', params: { src: file } });
   }
 
   build() {
     Row() {
-      Column({space: '30lpx'}) {
+      Column({ space: '30lpx' }) {
         Text("Just PDF")
           .fontSize('70lpx')
           .fontWeight(FontWeight.Bold)

@@ -23,7 +23,7 @@ export default class EntryAbility extends UIAbility {
     }
     AppStorage.setOrCreate('launchUri', uri);
     router.clear();
-    router.pushUrl({url: 'pages/Index'});
+    router.replaceUrl({url: 'pages/Index'});
   }
 
   onDestroy(): void {
