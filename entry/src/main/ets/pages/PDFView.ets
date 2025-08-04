@@ -26,6 +26,7 @@ struct PDFView {
   decorBarHeight: number = AppStorage.get("decorBarHeight") as number;
   @State isExclusiveFullScreen: boolean = false;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -41,6 +42,7 @@ struct PDFView {
       this.pageCount = this.controller.getPageCount();
     });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
+    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN);
   }
 
   aboutToDisappear(): void {
@@ -251,13 +253,10 @@ struct PDFView {
             .fontWeight(FontWeight.Bold)
         }
         .onChange(isOn => {
-          let windowStage = AppStorage.get('windowStage') as window.WindowStage;
-          let mainWindow = windowStage.getMainWindowSync();
-          this.isExclusiveFullScreen = isOn;
           if (isOn) {
-            mainWindow.maximize();
+            this.mainWindow.maximize();
           } else {
-            mainWindow.recover();
+            this.mainWindow.recover();
           }
         })
         .size(ButtonSize)
