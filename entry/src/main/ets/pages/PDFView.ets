@@ -22,7 +22,8 @@ struct PDFView {
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
-  isInDualPageMode: boolean = false;
+  @State isAlternateControlMode: boolean = false;
+  @State isInDualPageMode: boolean = false;
   decorBarHeight: number = AppStorage.get("decorBarHeight") as number;
   @State isExclusiveFullScreen: boolean = false;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
@@ -38,11 +39,29 @@ struct PDFView {
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
-    this.controller.loadDocument((this.getUIContext().getRouter().getParams() as Record<string, string>)['src']).then(() => {
-      this.pageCount = this.controller.getPageCount();
-    });
+    this.controller.loadDocument((this.getUIContext().getRouter().getParams() as Record<string, string>)['src'])
+      .then(() => {
+        this.pageCount = this.controller.getPageCount();
+        this.applyDualPageMode();
+      });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
-    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN);
+    this.isAlternateControlMode = this.preferences.getSync('isAlternateControlMode', false) as boolean;
+    this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
+    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
+      statusType == window.WindowStatusType.FULL_SCREEN);
+  }
+
+  applyDualPageMode(): void {
+    this.controller.setPageLayout(this.isInDualPageMode ? pdfService.PageLayout.LAYOUT_DOUBLE :
+    pdfService.PageLayout.LAYOUT_SINGLE)
+    if (!this.isInDualPageMode) {
+      return;
+    }
+    let currentPageIndex = this.pageIndex;
+    if (currentPageIndex % 2 == 0) {
+      return;
+    }
+    this.setPageIndexAndGotoPage(currentPageIndex - 1);
   }
 
   aboutToDisappear(): void {
@@ -123,6 +142,8 @@ struct PDFView {
           top: { anchor: '__container__', align: VerticalAlign.Top },
           left: { anchor: '__container__', align: HorizontalAlign.Start }
         })
+        .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
+
 
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
@@ -134,26 +155,35 @@ struct PDFView {
           top: { anchor: '__container__', align: VerticalAlign.Top },
           right: { anchor: '__container__', align: HorizontalAlign.End }
         })
+        .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
+
 
       Column({ space: StandardOffset }) {
-
-        Toggle({ type: ToggleType.Button }) {
+        Toggle({ type: ToggleType.Button, isOn: this.isInDualPageMode }) {
           Text("双页")
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
         }
         .onChange(isOn => {
           this.isInDualPageMode = isOn;
-          this.controller.setPageLayout(isOn ? pdfService.PageLayout.LAYOUT_DOUBLE :
-          pdfService.PageLayout.LAYOUT_SINGLE)
-          if (!isOn) {
-            return;
-          }
-          let currentPageIndex = this.pageIndex;
-          if (currentPageIndex % 2 == 0) {
-            return;
-          }
-          this.setPageIndexAndGotoPage(currentPageIndex - 1);
+          this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
+          this.preferences.flushSync();
+          this.applyDualPageMode();
+        })
+        .size(ButtonSize)
+        .backgroundColor(ButtonColor)
+        .selectedColor(ButtonColorHighlight)
+        .visibility(this.showControls)
+
+        Toggle({ type: ToggleType.Button, isOn: this.isAlternateControlMode }) {
+          Text("切换")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+        }
+        .onChange(isOn => {
+          this.isAlternateControlMode = isOn
+          this.preferences.putSync('isAlternateControlMode', this.isAlternateControlMode);
+          this.preferences.flushSync();
         })
         .size(ButtonSize)
         .backgroundColor(ButtonColor)
@@ -239,12 +269,35 @@ struct PDFView {
             offsetY: 5
           })
           .textAlign(TextAlign.Center)
+          .alignSelf(ItemAlign.End)
+
+        Row({ space: StandardOffset }) {
+          Button("<")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
+            .onClick(() => this.gotoPreviousPage())
+          Button(">")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
+            .onClick(() => this.gotoNextPage())
+        }
+        .visibility(this.isAlternateControlMode ? Visibility.Visible : Visibility.None)
       }
       .alignRules({
         bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
         right: { anchor: '__container__', align: HorizontalAlign.End }
       })
       .offset({ right: StandardOffset, bottom: StandardOffset })
+      .responseRegion({
+        x: 0,
+        y: 0,
+        width: '0%',
+        height: '0%'
+      })
 
       Column({ space: StandardOffset }) {
         Toggle({ type: ToggleType.Button }) {
