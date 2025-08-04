@@ -144,7 +144,6 @@ struct PDFView {
         })
         .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
 
-
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
         .fontWeight(FontWeight.Bold)
@@ -157,63 +156,60 @@ struct PDFView {
         })
         .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
 
-
       Column({ space: StandardOffset }) {
-        Toggle({ type: ToggleType.Button, isOn: this.isInDualPageMode }) {
-          Text("双页")
+
+        Column({ space: StandardOffset }) {
+          Toggle({ type: ToggleType.Button, isOn: this.isInDualPageMode }) {
+            Text("双页")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+          }
+          .onChange(isOn => {
+            this.isInDualPageMode = isOn;
+            this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
+            this.preferences.flushSync();
+            this.applyDualPageMode();
+          })
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .selectedColor(ButtonColorHighlight)
+
+          Toggle({ type: ToggleType.Button, isOn: this.isAlternateControlMode }) {
+            Text("切换")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+          }
+          .onChange(isOn => {
+            this.isAlternateControlMode = isOn
+            this.preferences.putSync('isAlternateControlMode', this.isAlternateControlMode);
+            this.preferences.flushSync();
+          })
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .selectedColor(ButtonColorHighlight)
+
+          Button("视口")
+            .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
-        }
-        .onChange(isOn => {
-          this.isInDualPageMode = isOn;
-          this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
-          this.preferences.flushSync();
-          this.applyDualPageMode();
-        })
-        .size(ButtonSize)
-        .backgroundColor(ButtonColor)
-        .selectedColor(ButtonColorHighlight)
-        .visibility(this.showControls)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
 
-        Toggle({ type: ToggleType.Button, isOn: this.isAlternateControlMode }) {
-          Text("切换")
+          Button("首页")
+            .onClick(() => this.gotoFirstPage())
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
+
+          Button("尾页")
+            .onClick(() => this.gotoLastPage())
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
         }
-        .onChange(isOn => {
-          this.isAlternateControlMode = isOn
-          this.preferences.putSync('isAlternateControlMode', this.isAlternateControlMode);
-          this.preferences.flushSync();
-        })
-        .size(ButtonSize)
-        .backgroundColor(ButtonColor)
-        .selectedColor(ButtonColorHighlight)
         .visibility(this.showControls)
-
-        Button("视口")
-          .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .visibility(this.showControls)
-
-        Button("首页")
-          .onClick(() => this.gotoFirstPage())
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .visibility(this.showControls)
-
-        Button("尾页")
-          .onClick(() => this.gotoLastPage())
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .visibility(this.showControls)
-
 
         Button(this.showControls == Visibility.Visible ? "收起" : "展开")
           .onClick(() => {
