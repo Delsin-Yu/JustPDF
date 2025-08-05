@@ -2,6 +2,7 @@ import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
 import { window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
+import app from '@system.app';
 
 const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(85, 85, 85, 0.2)';
@@ -49,6 +50,10 @@ struct PDFView {
     this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
     this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
       statusType == window.WindowStatusType.FULL_SCREEN);
+  }
+
+  onBackPress(): boolean | void {
+    app.terminate();
   }
 
   applyDualPageMode(): void {
