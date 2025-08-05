@@ -296,7 +296,7 @@ struct PDFView {
       })
 
       Column({ space: StandardOffset }) {
-        Toggle({ type: ToggleType.Button }) {
+        Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
           Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
