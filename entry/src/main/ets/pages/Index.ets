@@ -32,7 +32,7 @@ struct Index {
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_ONLY);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
-    uiContext.getRouter().pushUrl({ url: 'pages/PDFView', params: { src: file } });
+    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: { src: file } });
   }
 
   build() {
