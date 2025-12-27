@@ -64,7 +64,6 @@ export default class EntryAbility extends UIAbility {
       if ((dataPreferences.getSync('isMaximized', false) as boolean)) {
         applicationWindow.maximize(window.MaximizePresentation.EXIT_IMMERSIVE)
       }
-      AppStorage.setOrCreate('decorBarHeight', applicationWindow.getWindowDecorHeight());
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
