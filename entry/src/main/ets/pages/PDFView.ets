@@ -1,21 +1,30 @@
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
-import { window } from '@kit.ArkUI';
+import { window, SymbolGlyphModifier, LengthUnit } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 
-const ButtonColor: ResourceColor = `rgba(85, 85, 85, 0.5)`;
-const ButtonColorSemiTransparent: ResourceColor = 'rgba(85, 85, 85, 0.2)';
-const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 0.8)';
-const TrackColor: ResourceColor = 'rgba(85, 85, 85, 0.4)';
-const StandardOffset: VP = 10;
+const ButtonColor: ResourceColor = `rgba(60, 60, 60, 0.7)`;
+const ButtonColorSemiTransparent: ResourceColor = 'rgba(60, 60, 60, 0.2)';
+const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 0.9)';
+const TrackColor: ResourceColor = 'rgba(60, 60, 60, 0.4)';
+const StandardOffsetValue: number = 8;
+const StandardOffset: number = 8;
 const ButtonFontSize: Length = '20vp';
-const ButtonSize: SizeOptions = { height: '40vp', width: '80vp' };
+const ButtonSizeH: number = 40;
+const ButtonSizeW: number = 80;
+const ButtonSize: SizeOptions = { height: ButtonSizeH, width: ButtonSizeW };
 const PageFlipButtonWidth: Length = '30%';
 const ScrollBarWidth: Length = '40vp';
 
 const PdfViewId = 'pdfview_control';
+
+enum OperationMode {
+  SidePageTurn,
+  ButtonPageTurn,
+  ExternalPageTurn,
+}
 
 @Entry
 @Component
@@ -24,12 +33,22 @@ struct PDFView {
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
-  @State isAlternateControlMode: boolean = false;
+  @State currentOperationMode: OperationMode = OperationMode.SidePageTurn;
+  @State enableAnnotation: boolean = false;
   @State isInDualPageMode: boolean = false;
-  decorBarHeight: number = AppStorage.get("decorBarHeight") as number;
   @State isExclusiveFullScreen: boolean = false;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
+  boxUnchecked: SymbolGlyphModifier =
+    new SymbolGlyphModifier($r('sys.symbol.square'))
+      .fontColor([Color.White])
+      .fontSize(16)
+      .fontWeight(FontWeight.Regular);
+  boxChecked: SymbolGlyphModifier =
+    new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill'))
+      .fontColor([Color.White])
+      .fontSize(16)
+      .fontWeight(FontWeight.Regular);
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -47,10 +66,24 @@ struct PDFView {
         this.applyDualPageMode();
       });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
-    this.isAlternateControlMode = this.preferences.getSync('isAlternateControlMode', false) as boolean;
+    this.currentOperationMode =
+      this.preferences.getSync('currentOperationMode', OperationMode.SidePageTurn) as OperationMode;
+    this.enableAnnotation = this.preferences.getSync('enableAnnotation', false) as boolean;
     this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
     this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
       statusType == window.WindowStatusType.FULL_SCREEN);
+  }
+
+  isSidePageTurn(): boolean {
+    return this.currentOperationMode == OperationMode.SidePageTurn;
+  }
+
+  isButtonPageTurn(): boolean {
+    return this.currentOperationMode == OperationMode.ButtonPageTurn;
+  }
+
+  isExternalPageTurn(): boolean {
+    return this.currentOperationMode == OperationMode.ExternalPageTurn;
   }
 
   onBackPress(): boolean | void {
@@ -59,7 +92,7 @@ struct PDFView {
 
   applyDualPageMode(): void {
     this.controller.setPageLayout(this.isInDualPageMode ? pdfService.PageLayout.LAYOUT_DOUBLE :
-    pdfService.PageLayout.LAYOUT_SINGLE)
+      pdfService.PageLayout.LAYOUT_SINGLE)
     if (!this.isInDualPageMode) {
       return;
     }
@@ -116,6 +149,21 @@ struct PDFView {
     this.setPageIndexAndGotoPage(newPageIndex);
   }
 
+  applyOperationMode(mode: OperationMode, enableAnnotation: boolean): void {
+    this.currentOperationMode = mode;
+    this.enableAnnotation = enableAnnotation;
+    this.preferences.putSync('currentOperationMode', this.currentOperationMode);
+    this.preferences.putSync('enableAnnotation', this.enableAnnotation);
+    this.preferences.flushSync();
+  }
+
+  getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
+    if (mode == this.currentOperationMode && enableAnnotation == this.enableAnnotation) {
+      return this.boxChecked;
+    }
+    return this.boxUnchecked;
+  }
+
   build() {
     RelativeContainer() {
       PdfView({
@@ -125,18 +173,7 @@ struct PDFView {
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       }).width('100%').height('100%').id(PdfViewId)
 
-      Image('')
-        .width('100%')
-        .height(this.decorBarHeight)
-        .alignSelf(ItemAlign.Center)
-        .linearGradient({
-          colors: [['rgba(0, 0, 0, 0.2)', 0.0], ['rgba(0, 0, 0, 0)', 1.0]]
-        })
-        .alignRules({
-          top: { anchor: '__container__', align: VerticalAlign.Top },
-          left: { anchor: '__container__', align: HorizontalAlign.Start }
-        })
-        .visibility(this.isExclusiveFullScreen ? Visibility.None : Visibility.Visible)
+      //#region SidePageTurn Button
 
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
@@ -148,7 +185,7 @@ struct PDFView {
           top: { anchor: '__container__', align: VerticalAlign.Top },
           left: { anchor: '__container__', align: HorizontalAlign.Start }
         })
-        .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
 
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
@@ -160,16 +197,19 @@ struct PDFView {
           top: { anchor: '__container__', align: VerticalAlign.Top },
           right: { anchor: '__container__', align: HorizontalAlign.End }
         })
-        .visibility(this.isAlternateControlMode ? Visibility.None : Visibility.Visible)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
 
-      Column({ space: StandardOffset }) {
+      //#endregion
 
+      Row({ space: StandardOffset }) {
         Column({ space: StandardOffset }) {
+
           Toggle({ type: ToggleType.Button, isOn: this.isInDualPageMode }) {
             Text("双页")
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
           }
+          .visibility(this.showControls)
           .onChange(isOn => {
             this.isInDualPageMode = isOn;
             this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
@@ -180,21 +220,47 @@ struct PDFView {
           .backgroundColor(ButtonColor)
           .selectedColor(ButtonColorHighlight)
 
-          Toggle({ type: ToggleType.Button, isOn: this.isAlternateControlMode }) {
-            Text("切换")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-          }
-          .onChange(isOn => {
-            this.isAlternateControlMode = isOn
-            this.preferences.putSync('isAlternateControlMode', this.isAlternateControlMode);
-            this.preferences.flushSync();
-          })
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .selectedColor(ButtonColorHighlight)
+          Button("模式")
+            .visibility(this.showControls)
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .backgroundColor(ButtonColor)
+            .bindMenu([
+              {
+                value: "屏侧翻页",
+                action: () => this.applyOperationMode(OperationMode.SidePageTurn, false),
+                symbolIcon: this.getCheckIcon(OperationMode.SidePageTurn, false)
+              },
+              {
+                value: "按钮翻页",
+                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, false),
+                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, false)
+              },
+              {
+                value: "外设翻页",
+                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, false),
+                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, false)
+              },
+              {
+                value: "按钮翻页（标注）",
+                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
+                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
+              },
+              {
+                value: "外设翻页（标注）",
+                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
+                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
+              }
+            ], {
+              backgroundColor: ButtonColor,
+              outlineColor: Color.Transparent
+            })
+
+          Column().layoutWeight(1)
 
           Button("视口")
+            .visibility(this.showControls)
             .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
@@ -202,6 +268,7 @@ struct PDFView {
             .backgroundColor(ButtonColor)
 
           Button("首页")
+            .visibility(this.showControls)
             .onClick(() => this.gotoFirstPage())
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
@@ -209,122 +276,174 @@ struct PDFView {
             .backgroundColor(ButtonColor)
 
           Button("尾页")
+            .visibility(this.showControls)
             .onClick(() => this.gotoLastPage())
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
             .backgroundColor(ButtonColor)
-        }
-        .visibility(this.showControls)
 
-        Button(this.showControls == Visibility.Visible ? "收起" : "展开")
-          .onClick(() => {
-            if (this.showControls == Visibility.Visible) {
-              this.showControls = Visibility.None;
-            } else {
-              this.showControls = Visibility.Visible;
-            }
-            this.preferences.putSync('showControls', this.showControls);
-            this.preferences.flushSync();
-          })
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .size(ButtonSize)
-          .backgroundColor(this.showControls == Visibility.Visible ? ButtonColor : ButtonColorSemiTransparent)
 
-      }.alignRules({
-        bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
-        left: { anchor: '__container__', align: HorizontalAlign.Start }
-      }).offset({ left: StandardOffset, bottom: StandardOffset })
-
-      Column({ space: StandardOffset }) {
-        Slider({
-          value: this.pageIndex,
-          min: 0,
-          max: this.pageCount - 1,
-          style: SliderStyle.InSet,
-          direction: Axis.Vertical,
-          reverse: true
-        })
-          .showSteps(true)
-          .showTips(true)
-          .trackThickness(ScrollBarWidth)
-          .height('50%')
-          .alignSelf(ItemAlign.End)
-          .trackColor(TrackColor)
-          .selectedColor(ButtonColor)
-          .onChange((value, _) => {
-            if ((value != this.pageCount - 1) && this.isInDualPageMode && (value % 2 != 0)) {
-              value -= 1;
-            }
-            this.setPageIndexAndGotoPage(value)
-          })
-          .visibility(this.showControls)
-
-        Text(`${this.pageIndex + 1}/${this.pageCount}`)
-          .fontSize(ButtonFontSize)
-          .fontWeight(FontWeight.Bold)
-          .textShadow({
-            type: ShadowType.BLUR,
-            radius: 8,
-            offsetX: 2,
-            offsetY: 5
-          })
-          .textAlign(TextAlign.Center)
-          .alignSelf(ItemAlign.End)
-
-        Row({ space: StandardOffset }) {
-          Button("<")
+          Button(this.showControls == Visibility.Visible ? "收起" : "展开")
+            .onClick(() => {
+              if (this.showControls == Visibility.Visible) {
+                this.showControls = Visibility.None;
+              } else {
+                this.showControls = Visibility.Visible;
+              }
+              this.preferences.putSync('showControls', this.showControls);
+              this.preferences.flushSync();
+            })
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
-            .backgroundColor(ButtonColor)
-            .onClick(() => this.gotoPreviousPage())
-          Button(">")
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .backgroundColor(ButtonColor)
-            .onClick(() => this.gotoNextPage())
-        }
-        .visibility(this.isAlternateControlMode ? Visibility.Visible : Visibility.None)
-      }
-      .alignRules({
-        bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
-        right: { anchor: '__container__', align: HorizontalAlign.End }
-      })
-      .offset({ right: StandardOffset, bottom: StandardOffset })
-      .responseRegion({
-        x: 0,
-        y: 0,
-        width: '0%',
-        height: '0%'
-      })
+            .backgroundColor(this.showControls == Visibility.Visible ? ButtonColor : ButtonColorSemiTransparent)
 
-      Column({ space: StandardOffset }) {
-        Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
-          Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-        }
-        .visibility(deviceInfo.deviceType != "phone" ? Visibility.Visible : Visibility.Hidden)
-        .onChange(isOn => {
-          if (isOn) {
-            this.mainWindow.maximize();
-          } else {
-            this.mainWindow.recover();
+        }.height('100%').hitTestBehavior(HitTestMode.Transparent)
+
+        Column({ space: StandardOffset }) {
+
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Center,
+            space: {
+              main: { value: StandardOffsetValue, unit: LengthUnit.VP },
+              cross: { value: StandardOffsetValue, unit: LengthUnit.VP },
+            }
+          }) {
+
+            Button("绘制")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+
+            Button("擦除")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+
+            Button("撤回")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+
+            Button("重做")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+
           }
-        })
-        .size(ButtonSize)
-        .backgroundColor(ButtonColor)
-        .selectedColor(ButtonColorHighlight)
+          .align(Alignment.Center)
+          .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+
+        }.height('100%').hitTestBehavior(HitTestMode.Transparent).layoutWeight(1)
+
+        Column({ space: StandardOffset }) {
+
+          Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
+            Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+          }
+          .visibility((deviceInfo.deviceType == "phone" || this.showControls) ? Visibility.Hidden : Visibility.Visible)
+          .onChange(isOn => {
+            if (isOn) {
+              this.mainWindow.maximize();
+            } else {
+              this.mainWindow.recover();
+            }
+          })
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .selectedColor(ButtonColorHighlight)
+          .alignSelf(ItemAlign.End)
+
+          Column().layoutWeight(1)
+
+          Slider({
+            value: this.pageIndex,
+            min: 0,
+            max: this.pageCount - 1,
+            style: SliderStyle.InSet,
+            direction: Axis.Vertical,
+            reverse: true
+          })
+            .visibility(this.showControls)
+            .showSteps(true)
+            .showTips(true)
+            .trackThickness(ScrollBarWidth)
+            .height('50%')
+            .alignSelf(ItemAlign.End)
+            .trackColor(TrackColor)
+            .selectedColor(ButtonColor)
+            .onChange((value, _) => {
+              if ((value != this.pageCount - 1) && this.isInDualPageMode && (value % 2 != 0)) {
+                value -= 1;
+              }
+              this.setPageIndexAndGotoPage(value)
+            })
+
+          Text(`${this.pageIndex + 1}/${this.pageCount}`)
+            .size(ButtonSize)
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .textShadow({
+              type: ShadowType.BLUR,
+              radius: 8,
+              offsetX: 2,
+              offsetY: 5
+            })
+            .textAlign(TextAlign.Center)
+            .alignSelf(ItemAlign.End)
+
+          RelativeContainer() {
+            Button("<")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+              .onClick(() => this.gotoPreviousPage())
+              .alignRules({
+                top: { anchor: "__container__", align: VerticalAlign.Top },
+                left: { anchor: "__container__", align: HorizontalAlign.Start },
+              })
+              .offset({
+                left: -(ButtonSizeW + StandardOffset)
+              })
+            Button(">")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSize)
+              .backgroundColor(ButtonColor)
+              .onClick(() => this.gotoNextPage())
+          }
+          .size(ButtonSize)
+          .visibility(this.isButtonPageTurn() ? Visibility.Visible : Visibility.None)
+
+        }.height('100%').hitTestBehavior(HitTestMode.Transparent)
       }
-      .alignRules({
-        top: { anchor: '__container__', align: VerticalAlign.Top },
-        right: { anchor: '__container__', align: HorizontalAlign.End }
-      })
-      .offset({ right: StandardOffset, top: StandardOffset })
-      .visibility(this.showControls)
+      .hitTestBehavior(HitTestMode.Transparent)
+      .alignRules(
+        {
+          'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+          'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
+          'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
+          'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
+        }
+      )
+      .margin(
+        {
+          left: StandardOffset,
+          right: StandardOffset,
+          top: StandardOffset,
+          bottom: StandardOffset,
+        }
+      )
 
     }
     .width('100%')
