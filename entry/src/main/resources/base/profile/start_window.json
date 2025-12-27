@@ -1,0 +1,8 @@
+{
+  "startWindowType": "OPTIONAL_SHOW",
+  "startWindowColorModeType": "FOLLOW_SYSTEM",
+  "startWindowIllustration": "$media:foreground",
+  "startWindowBackgroundColor": "$color:start_window_background",
+  "startWindowBackgroundImage": "$media:background",
+  "startWindowBackgroundImageFit": "Cover"
+}
