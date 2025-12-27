@@ -60,7 +60,8 @@ struct PDFView {
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
-    this.controller.loadDocument((this.getUIContext().getRouter().getParams() as Record<string, string>)['src'])
+    let pdfPath: string = (this.getUIContext().getRouter().getParams() as Record<string, string>)['src'];
+    this.controller.loadDocument(pdfPath)
       .then(() => {
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
@@ -155,6 +156,8 @@ struct PDFView {
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
     this.preferences.putSync('enableAnnotation', this.enableAnnotation);
     this.preferences.flushSync();
+    if (enableAnnotation) this.controller.enableAnnotation(pdfViewManager.SupportedAnnotationType.POLYGON, Color.Red);
+    else this.controller.disableAnnotation();
   }
 
   getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
@@ -242,16 +245,16 @@ struct PDFView {
                 action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, false),
                 symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, false)
               },
-              {
-                value: "按钮翻页（标注）",
-                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
-                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
-              },
-              {
-                value: "外设翻页（标注）",
-                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
-                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
-              }
+              // {
+              //   value: "按钮翻页（标注）",
+              //   action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
+              //   symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
+              // },
+              // {
+              //   value: "外设翻页（标注）",
+              //   action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
+              //   symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
+              // }
             ], {
               backgroundColor: ButtonColor,
               outlineColor: Color.Transparent
@@ -282,7 +285,6 @@ struct PDFView {
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
             .backgroundColor(ButtonColor)
-
 
           Button(this.showControls == Visibility.Visible ? "收起" : "展开")
             .onClick(() => {
