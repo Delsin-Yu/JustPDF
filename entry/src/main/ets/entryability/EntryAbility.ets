@@ -39,7 +39,6 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('preferences', dataPreferences);
     windowStage.loadContent('pages/Index', null, (err) => {
       let applicationWindow = windowStage.getMainWindowSync();
-      applicationWindow.setWindowDecorVisible(false);
       applicationWindow.on('windowRectChange', rectChangeOptions => {
         if (rectChangeOptions.reason == window.RectChangeReason.DRAG_START) {
           return;

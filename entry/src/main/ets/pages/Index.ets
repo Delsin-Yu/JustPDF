@@ -7,7 +7,6 @@ const TAG = 'JustPDFIndex';
 @Entry
 @Component
 struct Index {
-  @State message: string = 'Hello World';
 
   aboutToAppear(): void {
     let context = this.getUIContext();
@@ -41,10 +40,11 @@ struct Index {
         Text("Just PDF")
           .fontSize('70lpx')
           .fontWeight(FontWeight.Bold)
-        Button("Select File")
+        Button("选择文件")
+          .type(ButtonType.Capsule)
           .fontSize('30lpx')
           .fontWeight(FontWeight.Bold)
-          .width('250lpx')
+          .width('200lpx')
           .height('50lpx')
           .onClick(async () => {
             try {

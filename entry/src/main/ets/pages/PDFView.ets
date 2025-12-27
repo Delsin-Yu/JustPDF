@@ -1,20 +1,21 @@
+import { deviceInfo } from '@kit.BasicServicesKit';
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
 import { window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 
-const ButtonColor: ResourceColor = 'rgba(85, 85, 85, 1)';
+const ButtonColor: ResourceColor = `rgba(85, 85, 85, 0.5)`;
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(85, 85, 85, 0.2)';
-const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 1)';
+const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 0.8)';
 const TrackColor: ResourceColor = 'rgba(85, 85, 85, 0.4)';
-const StandardOffsetValue: number = 5;
-const StandardOffset: LPX = `${StandardOffsetValue}lpx`;
-const ButtonFontSize: number = 20;
-const ButtonSize: SizeOptions = { height: '25lpx', width: '50lpx' };
+const StandardOffset: VP = 10;
+const ButtonFontSize: Length = '20vp';
+const ButtonSize: SizeOptions = { height: '40vp', width: '80vp' };
+const PageFlipButtonWidth: Length = '30%';
+const ScrollBarWidth: Length = '40vp';
 
 const PdfViewId = 'pdfview_control';
-
 
 @Entry
 @Component
@@ -140,7 +141,7 @@ struct PDFView {
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
         .fontWeight(FontWeight.Bold)
-        .size({ width: '30%', height: '100%' })
+        .size({ width: PageFlipButtonWidth, height: '100%' })
         .backgroundColor(Color.Transparent)
         .onClick(() => this.gotoPreviousPage())
         .alignRules({
@@ -152,7 +153,7 @@ struct PDFView {
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
         .fontWeight(FontWeight.Bold)
-        .size({ width: '30%', height: '100%' })
+        .size({ width: PageFlipButtonWidth, height: '100%' })
         .backgroundColor(Color.Transparent)
         .onClick(() => this.gotoNextPage())
         .alignRules({
@@ -247,7 +248,7 @@ struct PDFView {
         })
           .showSteps(true)
           .showTips(true)
-          .trackThickness('20lpx')
+          .trackThickness(ScrollBarWidth)
           .height('50%')
           .alignSelf(ItemAlign.End)
           .trackColor(TrackColor)
@@ -306,6 +307,7 @@ struct PDFView {
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
         }
+        .visibility(deviceInfo.deviceType != "phone" ? Visibility.Visible : Visibility.Hidden)
         .onChange(isOn => {
           if (isOn) {
             this.mainWindow.maximize();
@@ -321,7 +323,7 @@ struct PDFView {
         top: { anchor: '__container__', align: VerticalAlign.Top },
         right: { anchor: '__container__', align: HorizontalAlign.End }
       })
-      .offset({ right: StandardOffset, top: !this.isExclusiveFullScreen ? this.decorBarHeight : StandardOffset })
+      .offset({ right: StandardOffset, top: StandardOffset })
       .visibility(this.showControls)
 
     }
