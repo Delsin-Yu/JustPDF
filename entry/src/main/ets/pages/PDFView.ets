@@ -4,6 +4,7 @@ import { KeyCode } from '@kit.InputKit';
 import { window, SymbolGlyphModifier, LengthUnit } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const ButtonColor: ResourceColor = `rgba(60, 60, 60, 0.7)`;
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(60, 60, 60, 0.2)';
@@ -30,6 +31,8 @@ enum OperationMode {
 @Component
 struct PDFView {
   private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
+  private settings: RenderingContextSettings = new RenderingContextSettings(true);
+  private canvasRenderingContext: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
@@ -37,6 +40,11 @@ struct PDFView {
   @State enableAnnotation: boolean = false;
   @State isInDualPageMode: boolean = false;
   @State isExclusiveFullScreen: boolean = false;
+  @State leftPageCanvasPosition: Position = { x: 0, y: 0 };
+  @State rightPageCanvasPosition: Position = { x: 0, y: 0 };
+  @State leftPageCanvasSize: SizeOptions = { width: 0, height: 0 };
+  @State rightPageCanvasSize: SizeOptions = { width: 0, height: 0 };
+  @State viewScale: number = 0;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   boxUnchecked: SymbolGlyphModifier =
@@ -60,9 +68,63 @@ struct PDFView {
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
-    let pdfPath: string = (this.getUIContext().getRouter().getParams() as Record<string, string>)['src'];
-    this.controller.loadDocument(pdfPath)
-      .then(() => {
+    let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
+    let systemPath = args['systemPath'];
+    let sandboxPath = args['sandboxPath'];
+    this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
+    this.controller.registerScrollListener(scrollParam => {
+      //hilog.info(0, "PDFView", `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}`);
+      let centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
+      let centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
+
+      let extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
+      let extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
+
+      let leftX = -scrollParam.offsetX * extraX;
+      let leftY = -scrollParam.offsetY * extraY;
+
+      if (this.isInDualPageMode) {
+        let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
+        let pageWidth = (scrollParam.pdfWidth - space) / 2;
+        let pageHeight = scrollParam.pdfHeight;
+        this.leftPageCanvasSize = { width: `${pageWidth}px`, height: `${pageHeight}px` };
+        this.rightPageCanvasSize = { width: `${pageWidth}px`, height: `${pageHeight}px` };
+        if (centerX) {
+          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
+        }
+        let rightX = leftX + pageWidth + space;
+        if (centerY) {
+          leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+        }
+        let rightY = leftY;
+
+        this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
+        this.rightPageCanvasPosition = { x: `${rightX}px`, y: `${rightY}px` };
+
+        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
+
+      } else {
+        if (centerX) {
+          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
+        }
+        if (centerY) {
+          leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+        }
+        this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
+        this.leftPageCanvasSize = { width: `${scrollParam.pdfWidth}px`, height: `${scrollParam.pdfHeight}px` };
+
+        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
+
+      }
+
+    });
+    this.controller.loadDocument(sandboxPath)
+      .then(parseResult => {
+        if (parseResult != pdfService.ParseResult.PARSE_SUCCESS) {
+          hilog.error(0, 'PDFView', `Err on loading pdf file: ${parseResult}`)
+          app.terminate();
+          return;
+        }
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
       });
@@ -156,8 +218,12 @@ struct PDFView {
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
     this.preferences.putSync('enableAnnotation', this.enableAnnotation);
     this.preferences.flushSync();
-    if (enableAnnotation) this.controller.enableAnnotation(pdfViewManager.SupportedAnnotationType.POLYGON, Color.Red);
-    else this.controller.disableAnnotation();
+    if (enableAnnotation) {
+      this.controller.enableAnnotation(pdfViewManager.SupportedAnnotationType.POLYGON,
+        Color.Red);
+    } else {
+      this.controller.disableAnnotation();
+    }
   }
 
   getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
@@ -169,12 +235,38 @@ struct PDFView {
 
   build() {
     RelativeContainer() {
+
       PdfView({
         controller: this.controller,
         pageFit: pdfService.PageFit.FIT_PAGE,
         isContinuous: false,
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       }).width('100%').height('100%').id(PdfViewId)
+
+      Canvas(this.canvasRenderingContext)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .backgroundColor('rgba(255,0,0,0.2)')
+        .alignRules(
+          {
+            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
+          }
+        )
+        .offset(this.leftPageCanvasPosition)
+        .size(this.leftPageCanvasSize)
+
+      Canvas(this.canvasRenderingContext)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .backgroundColor('rgba(0,255,0,0.2)')
+        .alignRules(
+          {
+            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
+          }
+        )
+        .offset(this.rightPageCanvasPosition)
+        .size(this.rightPageCanvasSize)
+        .visibility(this.isInDualPageMode ? Visibility.Visible : Visibility.Hidden)
 
       //#region SidePageTurn Button
 
