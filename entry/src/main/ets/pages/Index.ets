@@ -7,7 +7,6 @@ const TAG = 'JustPDFIndex';
 @Entry
 @Component
 struct Index {
-
   aboutToAppear(): void {
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
@@ -28,10 +27,14 @@ struct Index {
     let dir = uiContext.getHostContext()!.filesDir;
     let file = dir + "/temp.pdf";
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
-    let sourceFile = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+    let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
-    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: { src: file } });
+    let args: Record<string, string> = {
+      'systemPath': uri,
+      'sandboxPath': file
+    }
+    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }
 
   build() {
