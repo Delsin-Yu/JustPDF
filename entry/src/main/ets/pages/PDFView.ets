@@ -31,6 +31,7 @@ enum OperationMode {
 @Component
 struct PDFView {
   private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
+  private document: pdfService.PdfDocument = new pdfService.PdfDocument();
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private canvasRenderingContext: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   @State pageCount: number = 0;
@@ -66,6 +67,17 @@ struct PDFView {
     this.controller.goToPage(this.pageIndex);
   }
 
+  isDualPageEnabled(): boolean {
+    let isDualPage = this.isInDualPageMode;
+
+    let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
+
+    if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
+      isDualPage = this.pageCount % 2 == 0;
+    }
+    return isDualPage;
+  }
+
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
     let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
@@ -83,20 +95,71 @@ struct PDFView {
       let leftX = -scrollParam.offsetX * extraX;
       let leftY = -scrollParam.offsetY * extraY;
 
-      if (this.isInDualPageMode) {
-        let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
-        let pageWidth = (scrollParam.pdfWidth - space) / 2;
-        let pageHeight = scrollParam.pdfHeight;
-        this.leftPageCanvasSize = { width: `${pageWidth}px`, height: `${pageHeight}px` };
-        this.rightPageCanvasSize = { width: `${pageWidth}px`, height: `${pageHeight}px` };
+      let isDualPage = this.isInDualPageMode;
+
+      let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
+
+      if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
+        isDualPage = this.pageCount % 2 == 0;
+      }
+
+      let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
+      if (isDualPage) {
+
+        let leftPageIndex = 0;
+        let rightPageIndex = 0;
+        if (pageIndexIsLastPage) {
+          leftPageIndex = this.pageIndex - 1;
+          rightPageIndex = this.pageIndex;
+        } else {
+          leftPageIndex = this.pageIndex;
+          rightPageIndex = this.pageIndex + 1;
+        }
+
+        let leftPage = this.document.getPage(leftPageIndex);
+        let rightPage = this.document.getPage(rightPageIndex);
+
+        let rawLeftPageWidth = leftPage.getWidth();
+        let rawLeftPageHeight = leftPage.getHeight();
+        let rawRightPageWidth = rightPage.getWidth();
+        let rawRightPageHeight = rightPage.getHeight();
+        let rawPdfWidth = rawLeftPageWidth + rawRightPageWidth;
+        let rawPdfHeight = Math.max(rawLeftPageHeight, rawRightPageHeight);
+
+        let scaledPdfWidth = scrollParam.pdfWidth - space;
+        let scaledPdfHeight = scrollParam.pdfHeight;
+
+        let leftPageWidth = scaledPdfWidth * (rawLeftPageWidth / rawPdfWidth);
+        let rightPageWidth = scaledPdfWidth * (rawRightPageWidth / rawPdfWidth);
+
+        let leftPageHeight = rawLeftPageHeight * scaledPdfHeight / rawPdfHeight;
+        let rightPageHeight = rawRightPageHeight * scaledPdfHeight / rawPdfHeight;
+
+        // hilog.info(0, "PDFView",
+        //   `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}, lpw: ${leftPageWidth}, lph: ${leftPageHeight}, rpw: ${rightPageWidth}, rph: ${rightPageHeight}`);
+
+        this.leftPageCanvasSize = { width: `${leftPageWidth}px`, height: `${leftPageHeight}px` };
+        this.rightPageCanvasSize = { width: `${rightPageWidth}px`, height: `${rightPageHeight}px` };
         if (centerX) {
           leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
         }
-        let rightX = leftX + pageWidth + space;
-        if (centerY) {
-          leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-        }
+        let rightX = leftX + leftPageWidth + space;
         let rightY = leftY;
+        if (centerY) {
+          if (leftPageHeight > rightPageHeight) {
+            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+            rightY = (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
+          } else {
+            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
+            rightY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+          }
+        } else {
+          if (leftPageHeight > rightPageHeight) {
+            rightY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
+          } else {
+            leftY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
+          }
+        }
 
         this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
         this.rightPageCanvasPosition = { x: `${rightX}px`, y: `${rightY}px` };
@@ -111,13 +174,14 @@ struct PDFView {
           leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
         }
         this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
-        this.leftPageCanvasSize = { width: `${scrollParam.pdfWidth}px`, height: `${scrollParam.pdfHeight}px` };
+        this.leftPageCanvasSize = { width: `${scrollParam.pdfWidth - space}px`, height: `${scrollParam.pdfHeight}px` };
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
 
       }
 
     });
+    this.document.loadDocument(sandboxPath);
     this.controller.loadDocument(sandboxPath)
       .then(parseResult => {
         if (parseResult != pdfService.ParseResult.PARSE_SUCCESS) {
@@ -266,7 +330,7 @@ struct PDFView {
         )
         .offset(this.rightPageCanvasPosition)
         .size(this.rightPageCanvasSize)
-        .visibility(this.isInDualPageMode ? Visibility.Visible : Visibility.Hidden)
+        .visibility(this.isDualPageEnabled() ? Visibility.Visible : Visibility.Hidden)
 
       //#region SidePageTurn Button
 
