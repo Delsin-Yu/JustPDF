@@ -1,7 +1,7 @@
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
-import { window, SymbolGlyphModifier, LengthUnit } from '@kit.ArkUI';
+import { window, SymbolGlyphModifier, LengthUnit, Scale } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -45,6 +45,8 @@ struct PDFView {
   @State rightPageCanvasPosition: Position = { x: 0, y: 0 };
   @State leftPageCanvasSize: SizeOptions = { width: 0, height: 0 };
   @State rightPageCanvasSize: SizeOptions = { width: 0, height: 0 };
+  @State leftPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
+  @State rightPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
   @State viewScale: number = 0;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
@@ -138,8 +140,11 @@ struct PDFView {
         // hilog.info(0, "PDFView",
         //   `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}, lpw: ${leftPageWidth}, lph: ${leftPageHeight}, rpw: ${rightPageWidth}, rph: ${rightPageHeight}`);
 
-        this.leftPageCanvasSize = { width: `${leftPageWidth}px`, height: `${leftPageHeight}px` };
-        this.rightPageCanvasSize = { width: `${rightPageWidth}px`, height: `${rightPageHeight}px` };
+        this.leftPageCanvasSize = { width: `${rawLeftPageWidth}px`, height: `${rawLeftPageHeight}px` };
+        this.rightPageCanvasSize = { width: `${rawRightPageWidth}px`, height: `${rawRightPageHeight}px` };
+        this.leftPageCanvasScale = { x: leftPageWidth / rawLeftPageWidth, y: leftPageHeight / rawLeftPageHeight, centerX: `0px`, centerY: `0px` };
+        this.rightPageCanvasScale = { x: rightPageWidth / rawRightPageWidth, y: rightPageHeight / rawRightPageHeight, centerX: `0px`, centerY: `0px` };
+
         if (centerX) {
           leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
         }
@@ -167,6 +172,8 @@ struct PDFView {
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
 
       } else {
+        let leftPage = this.document.getPage(this.pageIndex);
+
         if (centerX) {
           leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
         }
@@ -174,7 +181,10 @@ struct PDFView {
           leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
         }
         this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
-        this.leftPageCanvasSize = { width: `${scrollParam.pdfWidth - space}px`, height: `${scrollParam.pdfHeight}px` };
+        let rawLeftPageWidth = leftPage.getWidth();
+        let rawLeftPageHeight = leftPage.getHeight();
+        this.leftPageCanvasSize = { width: `${rawLeftPageWidth}px`, height: `${rawLeftPageHeight}px` };
+        this.leftPageCanvasScale = { x: scrollParam.pdfWidth / rawLeftPageWidth, y: scrollParam.pdfHeight / rawLeftPageHeight, centerX: `0px`, centerY: `0px` };
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
 
@@ -318,6 +328,7 @@ struct PDFView {
         )
         .offset(this.leftPageCanvasPosition)
         .size(this.leftPageCanvasSize)
+        .scale(this.leftPageCanvasScale)
 
       Canvas(this.canvasRenderingContext)
         .hitTestBehavior(HitTestMode.Transparent)
@@ -330,6 +341,7 @@ struct PDFView {
         )
         .offset(this.rightPageCanvasPosition)
         .size(this.rightPageCanvasSize)
+        .scale(this.rightPageCanvasScale)
         .visibility(this.isDualPageEnabled() ? Visibility.Visible : Visibility.Hidden)
 
       //#region SidePageTurn Button
