@@ -1,10 +1,11 @@
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { pdfService, pdfViewManager, PdfView } from '@kit.PDFKit';
+import { pdfService, PdfView, pdfViewManager } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
-import { window, SymbolGlyphModifier, LengthUnit, Scale } from '@kit.ArkUI';
+import { LengthUnit, SymbolGlyphModifier, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { HashMap } from '@kit.ArkTS';
 
 const ButtonColor: ResourceColor = `rgba(60, 60, 60, 0.7)`;
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(60, 60, 60, 0.2)';
@@ -30,10 +31,6 @@ enum OperationMode {
 @Entry
 @Component
 struct PDFView {
-  private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
-  private document: pdfService.PdfDocument = new pdfService.PdfDocument();
-  private settings: RenderingContextSettings = new RenderingContextSettings(true);
-  private canvasRenderingContext: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
@@ -41,12 +38,12 @@ struct PDFView {
   @State enableAnnotation: boolean = false;
   @State isInDualPageMode: boolean = false;
   @State isExclusiveFullScreen: boolean = false;
-  @State leftPageCanvasPosition: Position = { x: 0, y: 0 };
-  @State rightPageCanvasPosition: Position = { x: 0, y: 0 };
-  @State leftPageCanvasSize: SizeOptions = { width: 0, height: 0 };
-  @State rightPageCanvasSize: SizeOptions = { width: 0, height: 0 };
-  @State leftPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
-  @State rightPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
+  // @State leftPageCanvasPosition: Position = { x: 0, y: 0 };
+  // @State rightPageCanvasPosition: Position = { x: 0, y: 0 };
+  // @State leftPageCanvasSize: Size = { width: 0, height: 0 };
+  // @State rightPageCanvasSize: Size = { width: 0, height: 0 };
+  // @State leftPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
+  // @State rightPageCanvasScale: ScaleOptions = { x: 0, y: 0 };
   @State viewScale: number = 0;
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
@@ -60,6 +57,8 @@ struct PDFView {
       .fontColor([Color.White])
       .fontSize(16)
       .fontWeight(FontWeight.Regular);
+  private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
+  private document: pdfService.PdfDocument = new pdfService.PdfDocument();
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -81,116 +80,9 @@ struct PDFView {
   }
 
   aboutToAppear() {
-    this.controller.registerPageChangedListener(newPageIndex => this.pageIndex = newPageIndex);
     let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     let systemPath = args['systemPath'];
     let sandboxPath = args['sandboxPath'];
-    this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
-    this.controller.registerScrollListener(scrollParam => {
-      //hilog.info(0, "PDFView", `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}`);
-      let centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
-      let centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
-
-      let extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
-      let extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
-
-      let leftX = -scrollParam.offsetX * extraX;
-      let leftY = -scrollParam.offsetY * extraY;
-
-      let isDualPage = this.isInDualPageMode;
-
-      let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
-
-      if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
-        isDualPage = this.pageCount % 2 == 0;
-      }
-
-      let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
-      if (isDualPage) {
-
-        let leftPageIndex = 0;
-        let rightPageIndex = 0;
-        if (pageIndexIsLastPage) {
-          leftPageIndex = this.pageIndex - 1;
-          rightPageIndex = this.pageIndex;
-        } else {
-          leftPageIndex = this.pageIndex;
-          rightPageIndex = this.pageIndex + 1;
-        }
-
-        let leftPage = this.document.getPage(leftPageIndex);
-        let rightPage = this.document.getPage(rightPageIndex);
-
-        let rawLeftPageWidth = leftPage.getWidth();
-        let rawLeftPageHeight = leftPage.getHeight();
-        let rawRightPageWidth = rightPage.getWidth();
-        let rawRightPageHeight = rightPage.getHeight();
-        let rawPdfWidth = rawLeftPageWidth + rawRightPageWidth;
-        let rawPdfHeight = Math.max(rawLeftPageHeight, rawRightPageHeight);
-
-        let scaledPdfWidth = scrollParam.pdfWidth - space;
-        let scaledPdfHeight = scrollParam.pdfHeight;
-
-        let leftPageWidth = scaledPdfWidth * (rawLeftPageWidth / rawPdfWidth);
-        let rightPageWidth = scaledPdfWidth * (rawRightPageWidth / rawPdfWidth);
-
-        let leftPageHeight = rawLeftPageHeight * scaledPdfHeight / rawPdfHeight;
-        let rightPageHeight = rawRightPageHeight * scaledPdfHeight / rawPdfHeight;
-
-        // hilog.info(0, "PDFView",
-        //   `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}, lpw: ${leftPageWidth}, lph: ${leftPageHeight}, rpw: ${rightPageWidth}, rph: ${rightPageHeight}`);
-
-        this.leftPageCanvasSize = { width: `${rawLeftPageWidth}px`, height: `${rawLeftPageHeight}px` };
-        this.rightPageCanvasSize = { width: `${rawRightPageWidth}px`, height: `${rawRightPageHeight}px` };
-        this.leftPageCanvasScale = { x: leftPageWidth / rawLeftPageWidth, y: leftPageHeight / rawLeftPageHeight, centerX: `0px`, centerY: `0px` };
-        this.rightPageCanvasScale = { x: rightPageWidth / rawRightPageWidth, y: rightPageHeight / rawRightPageHeight, centerX: `0px`, centerY: `0px` };
-
-        if (centerX) {
-          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
-        }
-        let rightX = leftX + leftPageWidth + space;
-        let rightY = leftY;
-        if (centerY) {
-          if (leftPageHeight > rightPageHeight) {
-            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-            rightY = (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
-          } else {
-            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
-            rightY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-          }
-        } else {
-          if (leftPageHeight > rightPageHeight) {
-            rightY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
-          } else {
-            leftY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
-          }
-        }
-
-        this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
-        this.rightPageCanvasPosition = { x: `${rightX}px`, y: `${rightY}px` };
-
-        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
-
-      } else {
-        let leftPage = this.document.getPage(this.pageIndex);
-
-        if (centerX) {
-          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
-        }
-        if (centerY) {
-          leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-        }
-        this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
-        let rawLeftPageWidth = leftPage.getWidth();
-        let rawLeftPageHeight = leftPage.getHeight();
-        this.leftPageCanvasSize = { width: `${rawLeftPageWidth}px`, height: `${rawLeftPageHeight}px` };
-        this.leftPageCanvasScale = { x: scrollParam.pdfWidth / rawLeftPageWidth, y: scrollParam.pdfHeight / rawLeftPageHeight, centerX: `0px`, centerY: `0px` };
-
-        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
-
-      }
-
-    });
     this.document.loadDocument(sandboxPath);
     this.controller.loadDocument(sandboxPath)
       .then(parseResult => {
@@ -199,6 +91,128 @@ struct PDFView {
           app.terminate();
           return;
         }
+        this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
+        // this.controller.registerScrollListener(scrollParam => {
+        //   //hilog.info(0, "PDFView", `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}`);
+        //   let centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
+        //   let centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
+        //
+        //   let extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
+        //   let extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
+        //
+        //   let leftX = -scrollParam.offsetX * extraX;
+        //   let leftY = -scrollParam.offsetY * extraY;
+        //
+        //   let isDualPage = this.isInDualPageMode;
+        //
+        //   let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
+        //
+        //   if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
+        //     isDualPage = this.pageCount % 2 == 0;
+        //   }
+        //
+        //   let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
+        //   if (isDualPage) {
+        //
+        //     let leftPageIndex = 0;
+        //     let rightPageIndex = 0;
+        //     if (pageIndexIsLastPage) {
+        //       leftPageIndex = this.pageIndex - 1;
+        //       rightPageIndex = this.pageIndex;
+        //     } else {
+        //       leftPageIndex = this.pageIndex;
+        //       rightPageIndex = this.pageIndex + 1;
+        //     }
+        //
+        //     let leftPage = this.document.getPage(leftPageIndex);
+        //     let rightPage = this.document.getPage(rightPageIndex);
+        //
+        //     let rawLeftPageWidth = leftPage.getWidth();
+        //     let rawLeftPageHeight = leftPage.getHeight();
+        //     let rawRightPageWidth = rightPage.getWidth();
+        //     let rawRightPageHeight = rightPage.getHeight();
+        //     let rawPdfWidth = rawLeftPageWidth + rawRightPageWidth;
+        //     let rawPdfHeight = Math.max(rawLeftPageHeight, rawRightPageHeight);
+        //
+        //     let scaledPdfWidth = scrollParam.pdfWidth - space;
+        //     let scaledPdfHeight = scrollParam.pdfHeight;
+        //
+        //     let leftPageWidth = scaledPdfWidth * (rawLeftPageWidth / rawPdfWidth);
+        //     let rightPageWidth = scaledPdfWidth * (rawRightPageWidth / rawPdfWidth);
+        //
+        //     let leftPageHeight = rawLeftPageHeight * scaledPdfHeight / rawPdfHeight;
+        //     let rightPageHeight = rawRightPageHeight * scaledPdfHeight / rawPdfHeight;
+        //
+        //     // hilog.info(0, "PDFView",
+        //     //   `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}, lpw: ${leftPageWidth}, lph: ${leftPageHeight}, rpw: ${rightPageWidth}, rph: ${rightPageHeight}`);
+        //
+        //     this.leftPageCanvasSize = { width: rawLeftPageWidth, height: rawLeftPageHeight };
+        //     this.rightPageCanvasSize = { width: rawRightPageWidth, height: rawRightPageHeight };
+        //     this.leftPageCanvasScale = {
+        //       x: leftPageWidth / rawLeftPageWidth,
+        //       y: leftPageHeight / rawLeftPageHeight,
+        //       centerX: `0px`,
+        //       centerY: `0px`
+        //     };
+        //     this.rightPageCanvasScale = {
+        //       x: rightPageWidth / rawRightPageWidth,
+        //       y: rightPageHeight / rawRightPageHeight,
+        //       centerX: `0px`,
+        //       centerY: `0px`
+        //     };
+        //
+        //     if (centerX) {
+        //       leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
+        //     }
+        //     let rightX = leftX + leftPageWidth + space;
+        //     let rightY = leftY;
+        //     if (centerY) {
+        //       if (leftPageHeight > rightPageHeight) {
+        //         leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+        //         rightY =
+        //           (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
+        //       } else {
+        //         leftY =
+        //           (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
+        //         rightY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+        //       }
+        //     } else {
+        //       if (leftPageHeight > rightPageHeight) {
+        //         rightY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
+        //       } else {
+        //         leftY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
+        //       }
+        //     }
+        //
+        //     this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
+        //     this.rightPageCanvasPosition = { x: `${rightX}px`, y: `${rightY}px` };
+        //
+        //     hilog.info(0, "PDFView",
+        //       `(${rawLeftPageWidth.toFixed(2)},${rawLeftPageHeight.toFixed(2)}), (${rawRightPageWidth.toFixed(2)},${rawRightPageHeight.toFixed(2)})`);
+        //
+        //   } else {
+        //     let leftPage = this.document.getPage(this.pageIndex);
+        //
+        //     if (centerX) {
+        //       leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
+        //     }
+        //     if (centerY) {
+        //       leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
+        //     }
+        //     this.leftPageCanvasPosition = { x: `${leftX}px`, y: `${leftY}px` };
+        //     let rawLeftPageWidth = leftPage.getWidth();
+        //     let rawLeftPageHeight = leftPage.getHeight();
+        //     this.leftPageCanvasSize = { width: rawLeftPageWidth, height: rawLeftPageHeight };
+        //     this.leftPageCanvasScale = {
+        //       x: scrollParam.pdfWidth / rawLeftPageWidth,
+        //       y: scrollParam.pdfHeight / rawLeftPageHeight,
+        //       centerX: `0px`,
+        //       centerY: `0px`
+        //     };
+        //
+        //     // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
+        //   }
+        // });
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
       });
@@ -207,8 +221,8 @@ struct PDFView {
       this.preferences.getSync('currentOperationMode', OperationMode.SidePageTurn) as OperationMode;
     this.enableAnnotation = this.preferences.getSync('enableAnnotation', false) as boolean;
     this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
-    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
-      statusType == window.WindowStatusType.FULL_SCREEN);
+    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) =>
+    this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN);
   }
 
   isSidePageTurn(): boolean {
@@ -292,12 +306,6 @@ struct PDFView {
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
     this.preferences.putSync('enableAnnotation', this.enableAnnotation);
     this.preferences.flushSync();
-    if (enableAnnotation) {
-      this.controller.enableAnnotation(pdfViewManager.SupportedAnnotationType.POLYGON,
-        Color.Red);
-    } else {
-      this.controller.disableAnnotation();
-    }
   }
 
   getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
@@ -317,32 +325,36 @@ struct PDFView {
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       }).width('100%').height('100%').id(PdfViewId)
 
-      Canvas(this.canvasRenderingContext)
-        .hitTestBehavior(HitTestMode.Transparent)
-        .backgroundColor('rgba(255,0,0,0.2)')
-        .alignRules(
-          {
-            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-          }
-        )
-        .offset(this.leftPageCanvasPosition)
-        .size(this.leftPageCanvasSize)
-        .scale(this.leftPageCanvasScale)
+      // Canvas(this.lCtx) {
+      //   // Polyline({ width: '100%', height: '100%' })
+      //   //   .hitTestBehavior(HitTestMode.Transparent)
+      //   //   .points(this.leftPageStrokes)
+      //   //   .fillOpacity(0)
+      //   //   .stroke(Color.Red)
+      //   //   .strokeWidth(`3px`)
+      // }
+      // .backgroundColor('rgba(255,0,0,0.2)')
+      // .hitTestBehavior(HitTestMode.Transparent)
+      // .offset(this.leftPageCanvasPosition)
+      // .size({ width: `${this.leftPageCanvasSize.width}px`, height: `${this.leftPageCanvasSize.height}px` })
+      // .scale(this.leftPageCanvasScale)
+      // .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+      //
+      // Canvas(this.rCtx) {
+      //   // Polyline({ width: '100%', height: '100%' })
+      //   //   .hitTestBehavior(HitTestMode.Transparent)
+      //   //   .points(this.rightPageStrokes)
+      //   //   .fillOpacity(0)
+      //   //   .stroke(Color.Red)
+      //   //   .strokeWidth(`3px`)
+      // }
+      // .backgroundColor('rgba(0,255,0,0.2)')
+      // .hitTestBehavior(HitTestMode.Transparent)
+      // .offset(this.rightPageCanvasPosition)
+      // .size({ width: `${this.rightPageCanvasSize.width}px`, height: `${this.rightPageCanvasSize.height}px` })
+      // .scale(this.rightPageCanvasScale)
+      // .visibility((this.enableAnnotation && this.isDualPageEnabled()) ? Visibility.Visible : Visibility.Hidden)
 
-      Canvas(this.canvasRenderingContext)
-        .hitTestBehavior(HitTestMode.Transparent)
-        .backgroundColor('rgba(0,255,0,0.2)')
-        .alignRules(
-          {
-            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-          }
-        )
-        .offset(this.rightPageCanvasPosition)
-        .size(this.rightPageCanvasSize)
-        .scale(this.rightPageCanvasScale)
-        .visibility(this.isDualPageEnabled() ? Visibility.Visible : Visibility.Hidden)
 
       //#region SidePageTurn Button
 
@@ -428,7 +440,7 @@ struct PDFView {
               outlineColor: Color.Transparent
             })
 
-          Column().layoutWeight(1)
+          Blank()
 
           Button("视口")
             .visibility(this.showControls)
@@ -533,7 +545,7 @@ struct PDFView {
           .selectedColor(ButtonColorHighlight)
           .alignSelf(ItemAlign.End)
 
-          Column().layoutWeight(1)
+          Blank()
 
           Slider({
             value: this.pageIndex,
