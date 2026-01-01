@@ -85,7 +85,7 @@ struct PDFView {
   isDualPageEnabled(): boolean {
     let isDualPage = this.isInDualPageMode;
 
-    let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
+    const pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
 
     if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
       isDualPage = this.pageCount % 2 == 0;
@@ -104,8 +104,8 @@ struct PDFView {
     if (this.pageStrokes.hasKey(pageIndex)) {
       return this.pageStrokes.get(pageIndex);
     }
-    let strokes: Array<Float32Array> = [];
-    let page = this.getPdfPage(pageIndex);
+    const strokes: Array<Float32Array> = [];
+    const page = this.getPdfPage(pageIndex);
     if (page == null) {
       return strokes;
     }
@@ -148,12 +148,12 @@ struct PDFView {
   }
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number) {
-    let strokes = this.getPageStrokes(pageIndex);
+    const strokes = this.getPageStrokes(pageIndex);
     ctx.strokeStyle = 'red';
     ctx.lineWidth = 2 * CanvasOverSampling;
-    for (let stroke of strokes) {
+    for (const stroke of strokes) {
       ctx.beginPath();
-      let pointCount = stroke.length / 2;
+      const pointCount = stroke.length / 2;
       if (pointCount <= 0) {
         continue;
       }
@@ -180,7 +180,7 @@ struct PDFView {
   loadCurrentViewStrokes(pageIndex: number) {
     let isDualPage = this.isInDualPageMode;
 
-    let pageIndexIsLastPage = pageIndex == this.pageCount - 1;
+    const pageIndexIsLastPage = pageIndex == this.pageCount - 1;
 
     if (isDualPage && pageIndexIsLastPage || pageIndex == this.pageCount - 2) {
       isDualPage = this.pageCount % 2 == 0;
@@ -212,30 +212,30 @@ struct PDFView {
       this.pageIndex = newPageIndex
       this.loadCurrentViewStrokes(newPageIndex);
     });
-    let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
-    let systemPath = args['systemPath'];
-    let sandboxPath = args['sandboxPath'];
+    const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
+    const systemPath = args['systemPath'];
+    const sandboxPath = args['sandboxPath'];
     this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
     this.controller.registerScrollListener(scrollParam => {
       //hilog.info(0, "PDFView", `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}`);
-      let centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
-      let centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
+      const centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
+      const centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
 
-      let extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
-      let extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
+      const extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
+      const extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
 
       let leftX = -scrollParam.offsetX * extraX;
       let leftY = -scrollParam.offsetY * extraY;
 
       let isDualPage = this.isInDualPageMode;
 
-      let pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
+      const pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
 
       if (isDualPage && pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
         isDualPage = this.pageCount % 2 == 0;
       }
 
-      let space = this.controller.getPageHorizontalSpacing() * this.viewScale;
+      const space = this.controller.getPageHorizontalSpacing() * this.viewScale;
       if (isDualPage) {
 
         let leftPageIndex = 0;
@@ -248,23 +248,23 @@ struct PDFView {
           rightPageIndex = this.pageIndex + 1;
         }
 
-        let rawLeftPageSize = this.getPdfPage(leftPageIndex)?.size;
-        let rawRightPageSize = this.getPdfPage(rightPageIndex)?.size;
+        const rawLeftPageSize = this.getPdfPage(leftPageIndex)?.size;
+        const rawRightPageSize = this.getPdfPage(rightPageIndex)?.size;
         if (rawLeftPageSize == null || rawRightPageSize == null) {
           return;
         }
 
-        let rawPdfWidth = rawLeftPageSize.x + rawRightPageSize.x;
-        let rawPdfHeight = Math.max(rawLeftPageSize.y, rawRightPageSize.y);
+        const rawPdfWidth = rawLeftPageSize.x + rawRightPageSize.x;
+        const rawPdfHeight = Math.max(rawLeftPageSize.y, rawRightPageSize.y);
 
-        let scaledPdfWidth = scrollParam.pdfWidth - space;
-        let scaledPdfHeight = scrollParam.pdfHeight;
+        const scaledPdfWidth = scrollParam.pdfWidth - space;
+        const scaledPdfHeight = scrollParam.pdfHeight;
 
-        let leftPageWidth = scaledPdfWidth * (rawLeftPageSize.x / rawPdfWidth);
-        let rightPageWidth = scaledPdfWidth * (rawRightPageSize.x / rawPdfWidth);
+        const leftPageWidth = scaledPdfWidth * (rawLeftPageSize.x / rawPdfWidth);
+        const rightPageWidth = scaledPdfWidth * (rawRightPageSize.x / rawPdfWidth);
 
-        let leftPageHeight = rawLeftPageSize.y * scaledPdfHeight / rawPdfHeight;
-        let rightPageHeight = rawRightPageSize.y * scaledPdfHeight / rawPdfHeight;
+        const leftPageHeight = rawLeftPageSize.y * scaledPdfHeight / rawPdfHeight;
+        const rightPageHeight = rawRightPageSize.y * scaledPdfHeight / rawPdfHeight;
 
         this.leftPageCanvasSize = {
           x: rawLeftPageSize.x * CanvasOverSampling,
@@ -286,7 +286,7 @@ struct PDFView {
         if (centerX) {
           leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
         }
-        let rightX = leftX + leftPageWidth + space;
+        const rightX = leftX + leftPageWidth + space;
         let rightY = leftY;
         if (centerY) {
           if (leftPageHeight > rightPageHeight) {
@@ -305,13 +305,13 @@ struct PDFView {
           }
         }
 
-        this.leftPageCanvasPosition = { x: leftX, y: leftX };
-        this.rightPageCanvasPosition = { x: rightX, y: rightX };
+        this.leftPageCanvasPosition = { x: leftX, y: leftY };
+        this.rightPageCanvasPosition = { x: rightX, y: rightY };
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
 
       } else {
-        let leftPageSize = this.getPdfPage(this.pageIndex)?.size;
+        const leftPageSize = this.getPdfPage(this.pageIndex)?.size;
         if (leftPageSize == null) {
           return;
         }
@@ -323,8 +323,8 @@ struct PDFView {
           leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
         }
         this.leftPageCanvasPosition = { x: leftX, y: leftY };
-        let rawLeftPageWidth = leftPageSize.x;
-        let rawLeftPageHeight = leftPageSize.y;
+        const rawLeftPageWidth = leftPageSize.x;
+        const rawLeftPageHeight = leftPageSize.y;
         this.leftPageCanvasSize = {
           x: rawLeftPageWidth * CanvasOverSampling,
           y: rawLeftPageHeight * CanvasOverSampling
@@ -335,15 +335,14 @@ struct PDFView {
         };
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
-
       }
-
     });
-    let document = new pdfService.PdfDocument();
+
+    const document = new pdfService.PdfDocument();
     document.loadDocument(sandboxPath);
-    let documentPages = document.getPageCount();
+    const documentPages = document.getPageCount();
     for (let i = 0; i < documentPages; i++) {
-      let page = document.getPage(i);
+      const page = document.getPage(i);
       this.pages.set(i, { size: { x: page.getWidth(), y: page.getHeight() }, page: page });
     }
     document.releaseDocument();
@@ -390,7 +389,7 @@ struct PDFView {
     if (!this.isInDualPageMode) {
       return;
     }
-    let currentPageIndex = this.pageIndex;
+    const currentPageIndex = this.pageIndex;
     if (currentPageIndex % 2 == 0) {
       return;
     }
