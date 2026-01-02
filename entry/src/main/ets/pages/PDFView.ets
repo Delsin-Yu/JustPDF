@@ -21,6 +21,20 @@ const PageFlipButtonWidth: Length = '30%';
 const ScrollBarWidth: Length = '40vp';
 const CanvasOverSampling: number = 3;
 const PdfViewId = 'pdfview_control';
+const TopLeft: AlignRuleOption = {
+  top: { anchor: '__container__', align: VerticalAlign.Top },
+  left: { anchor: '__container__', align: HorizontalAlign.Start },
+};
+const TopRight: AlignRuleOption = {
+  top: { anchor: '__container__', align: VerticalAlign.Top },
+  right: { anchor: '__container__', align: HorizontalAlign.End }
+}
+const FullRect: AlignRuleOption = {
+  'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+  'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
+  'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
+  'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
+}
 
 enum OperationMode {
   SidePageTurn,
@@ -38,15 +52,38 @@ interface PdfPage {
   page: pdfService.PdfPage;
 }
 
+interface PathWithPoints {
+  path: Path2D;
+  points: Array<Float2>;
+}
+
 @Entry
 @Component
 struct PDFView {
   private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
-  private lRCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private rRCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private pageStrokes = new HashMap<number, Array<Float32Array>>();
+  private lctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private rctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private dlctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private drctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private pageStrokes = new HashMap<number, Array<PathWithPoints>>();
   private pages = new HashMap<number, PdfPage>();
+  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
+  private boxUnchecked: SymbolGlyphModifier =
+    new SymbolGlyphModifier($r('sys.symbol.square'))
+      .fontColor([Color.White])
+      .fontSize(16)
+      .fontWeight(FontWeight.Regular);
+  private boxChecked: SymbolGlyphModifier =
+    new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill'))
+      .fontColor([Color.White])
+      .fontSize(16)
+      .fontWeight(FontWeight.Regular);
+  private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
+  private leftPageIndex: number = 0;
+  private rightPageIndex: number = 0;
+
   @State pageCount: number = 0;
   @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
@@ -61,18 +98,20 @@ struct PDFView {
   @State leftPageCanvasScale: Float2 = { x: 0, y: 0 };
   @State rightPageCanvasScale: Float2 = { x: 0, y: 0 };
   @State viewScale: number = 0;
-  preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
-  mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
-  boxUnchecked: SymbolGlyphModifier =
-    new SymbolGlyphModifier($r('sys.symbol.square'))
-      .fontColor([Color.White])
-      .fontSize(16)
-      .fontWeight(FontWeight.Regular);
-  boxChecked: SymbolGlyphModifier =
-    new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill'))
-      .fontColor([Color.White])
-      .fontSize(16)
-      .fontWeight(FontWeight.Regular);
+  @State isDisplayingDualPage: boolean = false;
+  @State isDrawing: boolean = false;
+
+  static toPixelPosition(value: Float2): Position {
+    return {x: `${value.x}px`, y: `${value.y}px`};
+  }
+
+  static toSize(value: Float2): SizeOptions {
+    return {width: `${value.x}px`, height: `${value.y}px`};
+  }
+
+  static toScale(value: Float2): ScaleOptions {
+    return {x: value.x, y: value.y, centerX: 0, centerY: 0};
+  }
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -93,6 +132,11 @@ struct PDFView {
     return isDualPage;
   }
 
+
+
+  /**
+   * @throws
+   */
   getPdfPage(pageIndex: number): Nullable<PdfPage> {
     if (this.pages.hasKey(pageIndex)) {
       return this.pages.get(pageIndex);
@@ -100,117 +144,90 @@ struct PDFView {
     return undefined;
   }
 
-  getPageStrokes(pageIndex: number): Array<Float32Array> {
-    if (this.pageStrokes.hasKey(pageIndex)) {
-      return this.pageStrokes.get(pageIndex);
-    }
-    const strokes: Array<Float32Array> = [];
-    const page = this.getPdfPage(pageIndex);
-    if (page == null) {
-      return strokes;
-    }
-
-    const w = page.size.x;
-    const h = page.size.y;
-    const cx = w / 2;
-    const cy = h / 2;
-
-    const p1: Float2 = { x: 0, y: 0 };
-    const p2: Float2 = { x: w, y: h };
-    const q1: Float2 = { x: w, y: 0 };
-    const q2: Float2 = { x: 0, y: h };
-
-    const angle = -(15 * pageIndex) * Math.PI / 180;
-    const cosA = Math.cos(angle);
-    const sinA = Math.sin(angle);
-    const rotate = (x: number, y: number) => {
-      const dx = x - cx;
-      const dy = y - cy;
-      return { x: cx + dx * cosA - dy * sinA, y: cy + dx * sinA + dy * cosA } as Float2;
-    };
-
-    const rp1 = rotate(p1.x, p1.y);
-    const rp2 = rotate(p2.x, p2.y);
-    const stroke1 = new Float32Array([rp1.x, rp1.y, rp2.x, rp2.y]);
-
-    const rq1 = rotate(q1.x, q1.y);
-    const rq2 = rotate(q2.x, q2.y);
-    const stroke2 = new Float32Array([rq1.x, rq1.y, rq2.x, rq2.y]);
-
-    strokes.push(stroke1);
-    strokes.push(stroke2);
-    this.pageStrokes.set(pageIndex, strokes);
-    return strokes;
-  }
-
-  clearCtx(ctx: CanvasRenderingContext2D) {
-    ctx.reset();
-  }
-
-  loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number) {
-    const strokes = this.getPageStrokes(pageIndex);
-    ctx.strokeStyle = 'red';
+  applyStrokeStyle(ctx: CanvasRenderingContext2D) {
+    ctx.strokeStyle = 'rgb(255,0,0)';
     ctx.lineWidth = 2 * CanvasOverSampling;
-    for (const stroke of strokes) {
-      ctx.beginPath();
-      const pointCount = stroke.length / 2;
-      if (pointCount <= 0) {
-        continue;
-      }
-      const x0 = stroke[0] * CanvasOverSampling;
-      const y0 = stroke[1] * CanvasOverSampling;
-      // Move to first point
-      ctx.moveTo(x0, y0);
-      if (pointCount == 1) {
-        // Single-point stroke: draw a small filled circle as a dot
-        ctx.fillStyle = 'red';
-        ctx.arc(x0, y0, 2 * CanvasOverSampling, 0, 2 * Math.PI);
-        ctx.fill();
-      } else {
-        for (let i = 1; i < pointCount; i++) {
-          const xi = stroke[i * 2] * CanvasOverSampling;
-          const yi = stroke[i * 2 + 1] * CanvasOverSampling;
-          ctx.lineTo(xi, yi);
-        }
-        ctx.stroke();
-      }
-    }
+    ctx.lineCap = 'round';
   }
 
-  loadCurrentViewStrokes(pageIndex: number) {
-    let isDualPage = this.isInDualPageMode;
+  /**
+   * @throws
+   */
+  loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number) {
+    if (!this.pageStrokes.hasKey(pageIndex)) {
+      return;
+    }
+    const strokes = this.pageStrokes.get(pageIndex);
+    this.applyStrokeStyle(ctx);
+    strokes.forEach(stroke => ctx.stroke(stroke.path));
+  }
 
-    const pageIndexIsLastPage = pageIndex == this.pageCount - 1;
-
-    if (isDualPage && pageIndexIsLastPage || pageIndex == this.pageCount - 2) {
-      isDualPage = this.pageCount % 2 == 0;
+  handleDrawTouch(
+    drawCtx: CanvasRenderingContext2D,
+    targetCtx: CanvasRenderingContext2D,
+    pageIndex: number,
+    event: TouchEvent
+  ): void {
+    const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
+    if (!isSingleTouch) {
+      return;
     }
 
-    this.clearCtx(this.lRCtx);
-    this.clearCtx(this.rRCtx);
+    const touchPoint: Float2 = { x: event.touches[0].x, y: event.touches[0].y };
 
-    if (isDualPage) {
-      let leftPageIndex = 0;
-      let rightPageIndex = 0;
-      if (pageIndexIsLastPage) {
-        leftPageIndex = pageIndex - 1;
-        rightPageIndex = pageIndex;
-      } else {
-        leftPageIndex = pageIndex;
-        rightPageIndex = pageIndex + 1;
+    if (event.type == TouchType.Down) {
+      this.isDrawing = true;
+      this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
+      this.activeDrawPath.points.push(touchPoint);
+    } else if (event.type == TouchType.Move) {
+      this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
+      drawCtx.reset();
+      this.applyStrokeStyle(drawCtx);
+      drawCtx.stroke(this.activeDrawPath.path);
+      this.activeDrawPath.points.push(touchPoint);
+    } else if (event.type == TouchType.Up) {
+      this.activeDrawPath.points.push(touchPoint);
+      if (!this.pageStrokes.hasKey(pageIndex)) {
+        this.pageStrokes.set(pageIndex, []);
       }
-
-      this.loadPageStrokes(this.lRCtx, leftPageIndex);
-      this.loadPageStrokes(this.rRCtx, rightPageIndex);
-    } else {
-      this.loadPageStrokes(this.lRCtx, pageIndex);
+      this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+      this.activeDrawPath = { path: new Path2D(), points: [] };
+      drawCtx.reset();
+      this.loadPageStrokes(targetCtx, pageIndex);
+      this.isDrawing = false;
     }
   }
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => {
       this.pageIndex = newPageIndex
-      this.loadCurrentViewStrokes(newPageIndex);
+      let isDualPageMode = this.isInDualPageMode;
+      const pageIndexIsLastPage = newPageIndex == this.pageCount - 1;
+      if (isDualPageMode && pageIndexIsLastPage || newPageIndex == this.pageCount - 2) {
+        isDualPageMode = this.pageCount % 2 == 0;
+      }
+      this.isDisplayingDualPage = isDualPageMode;
+      this.lctx.reset();
+      this.rctx.reset();
+      if (isDualPageMode) {
+        let leftPageIndex = 0;
+        let rightPageIndex = 0;
+        if (pageIndexIsLastPage) {
+          leftPageIndex = newPageIndex - 1;
+          rightPageIndex = newPageIndex;
+        } else {
+          leftPageIndex = newPageIndex;
+          rightPageIndex = newPageIndex + 1;
+        }
+
+        this.leftPageIndex = leftPageIndex;
+        this.rightPageIndex = rightPageIndex;
+        this.loadPageStrokes(this.lctx, leftPageIndex);
+        this.loadPageStrokes(this.rctx, rightPageIndex);
+      } else {
+        this.leftPageIndex = newPageIndex;
+        this.loadPageStrokes(this.lctx, newPageIndex);
+      }
     });
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     const systemPath = args['systemPath'];
@@ -356,7 +373,12 @@ struct PDFView {
         }
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
-        this.loadCurrentViewStrokes(this.pageIndex);
+        if (this.isDisplayingDualPage) {
+          this.loadPageStrokes(this.lctx, this.leftPageIndex);
+          this.loadPageStrokes(this.rctx, this.rightPageIndex);
+        } else {
+          this.loadPageStrokes(this.lctx, this.leftPageIndex);
+        }
       });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
     this.currentOperationMode =
@@ -448,12 +470,6 @@ struct PDFView {
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
     this.preferences.putSync('enableAnnotation', this.enableAnnotation);
     this.preferences.flushSync();
-    if (enableAnnotation) {
-      this.controller.enableAnnotation(pdfViewManager.SupportedAnnotationType.POLYGON,
-        Color.Red);
-    } else {
-      this.controller.disableAnnotation();
-    }
   }
 
   getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
@@ -471,34 +487,46 @@ struct PDFView {
         pageFit: pdfService.PageFit.FIT_PAGE,
         isContinuous: false,
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
-      }).width('100%').height('100%').id(PdfViewId)
+      })
+        .hitTestBehavior(this.isDrawing ? HitTestMode.None : HitTestMode.Transparent)
+        .size({ width: '100%', height: '100%' })
+        .id(PdfViewId)
 
-      Canvas(this.lRCtx)
-        .hitTestBehavior(HitTestMode.Transparent)
+      Canvas(this.lctx)
+        .hitTestBehavior(HitTestMode.None)
         // .backgroundColor('rgba(255,0,0,0.1)')
-        .alignRules(
-          {
-            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-          }
-        )
-        .offset({x: `${this.leftPageCanvasPosition.x}px`, y: `${this.leftPageCanvasPosition.y}px`})
-        .size({width: `${this.leftPageCanvasSize.x}px`, height: `${this.leftPageCanvasSize.y}px`})
-        .scale({x: this.leftPageCanvasScale.x, y: this.leftPageCanvasScale.y, centerX: 0, centerY: 0})
+        .alignRules(TopLeft)
+        .offset(PDFView.toPixelPosition(this.leftPageCanvasPosition))
+        .size(PDFView.toSize(this.leftPageCanvasSize))
+        .scale(PDFView.toScale(this.leftPageCanvasScale))
+        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
 
-      Canvas(this.rRCtx)
+      Canvas(this.dlctx)
         .hitTestBehavior(HitTestMode.Transparent)
+        .alignRules(TopLeft)
+        .offset(PDFView.toPixelPosition(this.leftPageCanvasPosition))
+        .size(PDFView.toSize(this.leftPageCanvasSize))
+        .scale(PDFView.toScale(this.leftPageCanvasScale))
+        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.leftPageIndex, event))
+
+      Canvas(this.rctx)
+        .hitTestBehavior(HitTestMode.None)
         // .backgroundColor('rgba(0,255,0,0.1)')
-        .alignRules(
-          {
-            'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-            'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-          }
-        )
-        .offset({x: `${this.rightPageCanvasPosition.x}px`, y: `${this.rightPageCanvasPosition.y}px`})
-        .size({width: `${this.rightPageCanvasSize.x}px`, height: `${this.rightPageCanvasSize.y}px`})
-        .scale({x: this.rightPageCanvasScale.x, y: this.rightPageCanvasScale.y, centerX: 0, centerY: 0})
-        .visibility(this.isDualPageEnabled() ? Visibility.Visible : Visibility.Hidden)
+        .alignRules(TopLeft)
+        .offset(PDFView.toPixelPosition(this.rightPageCanvasPosition))
+        .size(PDFView.toSize(this.rightPageCanvasSize))
+        .scale(PDFView.toScale(this.rightPageCanvasScale))
+        .visibility((this.isDualPageEnabled() && this.enableAnnotation) ? Visibility.Visible : Visibility.Hidden)
+
+      Canvas(this.drctx)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .alignRules(TopLeft)
+        .offset(PDFView.toPixelPosition(this.rightPageCanvasPosition))
+        .size(PDFView.toSize(this.rightPageCanvasSize))
+        .scale(PDFView.toScale(this.rightPageCanvasScale))
+        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+        .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.rightPageIndex, event))
 
       //#region SidePageTurn Button
 
@@ -508,11 +536,39 @@ struct PDFView {
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .backgroundColor(Color.Transparent)
         .onClick(() => this.gotoPreviousPage())
-        .alignRules({
-          top: { anchor: '__container__', align: VerticalAlign.Top },
-          left: { anchor: '__container__', align: HorizontalAlign.Start }
-        })
+        .alignRules(TopLeft)
         .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .onTouch(event => {
+          const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
+          if (!isSingleTouch) {
+            return;
+          }
+          const touchPoint: Float2 = { x: event.touches[0].x, y: event.touches[0].y };
+          if (event.type == TouchType.Down) {
+            this.isDrawing = true;
+            this.controller.enablePageDrag(false, false);
+            this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
+            this.activeDrawPath.points.push(touchPoint);
+          } else if (event.type == TouchType.Move) {
+            this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
+            this.lctx.reset();
+            this.loadPageStrokes(this.lctx, this.leftPageIndex);
+            this.applyStrokeStyle(this.lctx);
+            this.lctx.stroke(this.activeDrawPath.path);
+            this.activeDrawPath.points.push(touchPoint);
+          } else if (event.type == TouchType.Up) {
+            this.controller.enablePageDrag(true, true);
+            this.activeDrawPath.points.push(touchPoint);
+            if(!this.pageStrokes.hasKey(this.leftPageIndex)) {
+              this.pageStrokes.set(this.leftPageIndex, []);
+            }
+            this.pageStrokes.get(this.leftPageIndex).push(this.activeDrawPath);
+            this.activeDrawPath = { path: new Path2D(), points: [] };
+            this.lctx.reset();
+            this.loadPageStrokes(this.lctx, this.leftPageIndex);
+            this.isDrawing = false;
+          }
+        })
 
       Button({ type: ButtonType.Normal })
         .fontSize(ButtonFontSize)
@@ -520,10 +576,7 @@ struct PDFView {
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .backgroundColor(Color.Transparent)
         .onClick(() => this.gotoNextPage())
-        .alignRules({
-          top: { anchor: '__container__', align: VerticalAlign.Top },
-          right: { anchor: '__container__', align: HorizontalAlign.End }
-        })
+        .alignRules(TopRight)
         .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
 
       //#endregion
@@ -569,16 +622,16 @@ struct PDFView {
                 action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, false),
                 symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, false)
               },
-              // {
-              //   value: "按钮翻页（标注）",
-              //   action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
-              //   symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
-              // },
-              // {
-              //   value: "外设翻页（标注）",
-              //   action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
-              //   symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
-              // }
+              {
+                value: "按钮翻页（标注）",
+                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
+                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
+              },
+              {
+                value: "外设翻页（标注）",
+                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
+                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
+              }
             ], {
               backgroundColor: ButtonColor,
               outlineColor: Color.Transparent
@@ -734,10 +787,7 @@ struct PDFView {
               .size(ButtonSize)
               .backgroundColor(ButtonColor)
               .onClick(() => this.gotoPreviousPage())
-              .alignRules({
-                top: { anchor: "__container__", align: VerticalAlign.Top },
-                left: { anchor: "__container__", align: HorizontalAlign.Start },
-              })
+              .alignRules(TopLeft)
               .offset({
                 left: -(ButtonSizeW + StandardOffset)
               })
@@ -754,14 +804,7 @@ struct PDFView {
         }.height('100%').hitTestBehavior(HitTestMode.Transparent)
       }
       .hitTestBehavior(HitTestMode.Transparent)
-      .alignRules(
-        {
-          'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-          'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
-          'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-          'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
-        }
-      )
+      .alignRules(FullRect)
       .margin(
         {
           left: StandardOffset,
@@ -772,8 +815,7 @@ struct PDFView {
       )
 
     }
-    .width('100%')
-    .height('100%')
+    .size({ width: '100%', height: '100%' })
     .backgroundColor($r('sys.color.white'))
     .onKeyEvent(keyEvent => {
       if (keyEvent.type != KeyType.Down) {
