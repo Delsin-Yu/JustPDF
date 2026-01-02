@@ -74,6 +74,10 @@ function toScale(value: Vector2): ScaleOptions {
   };
 }
 
+function toVisibility(value: boolean): Visibility {
+  return value ? Visibility.Visible : Visibility.None;
+}
+
 function Float2(x: number, y: number): Vector2 {
   return { x: x, y: y };
 }
@@ -181,9 +185,7 @@ struct PDFView {
     if (!isSingleTouch) {
       return;
     }
-
     const touchPoint = Float2(event.touches[0].x, event.touches[0].y);
-
     if (event.type == TouchType.Down) {
       this.isDrawing = true;
       this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
@@ -497,7 +499,6 @@ struct PDFView {
         isContinuous: false,
         pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
       })
-        .hitTestBehavior(this.isDrawing ? HitTestMode.None : HitTestMode.Transparent)
         .size({ width: '100%', height: '100%' })
         .id(PdfViewId)
 
@@ -508,16 +509,7 @@ struct PDFView {
         .offset(toPos(this.leftPageCanvasPosition))
         .size(toSize(this.leftPageCanvasSize))
         .scale(toScale(this.leftPageCanvasScale))
-        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
-
-      Canvas(this.dlctx)
-        .hitTestBehavior(HitTestMode.Transparent)
-        .alignRules(TopLeft)
-        .offset(toPos(this.leftPageCanvasPosition))
-        .size(toSize(this.leftPageCanvasSize))
-        .scale(toScale(this.leftPageCanvasScale))
-        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
-        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.leftPageIndex, event))
+        .visibility(toVisibility(this.enableAnnotation))
 
       Canvas(this.rctx)
         .hitTestBehavior(HitTestMode.None)
@@ -526,7 +518,16 @@ struct PDFView {
         .offset(toPos(this.rightPageCanvasPosition))
         .size(toSize(this.rightPageCanvasSize))
         .scale(toScale(this.rightPageCanvasScale))
-        .visibility((this.isDualPageEnabled() && this.enableAnnotation) ? Visibility.Visible : Visibility.Hidden)
+        .visibility(toVisibility((this.isDualPageEnabled() && this.enableAnnotation)))
+
+      Canvas(this.dlctx)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .alignRules(TopLeft)
+        .offset(toPos(this.leftPageCanvasPosition))
+        .size(toSize(this.leftPageCanvasSize))
+        .scale(toScale(this.leftPageCanvasScale))
+        .visibility(toVisibility(this.enableAnnotation))
+        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.leftPageIndex, event))
 
       Canvas(this.drctx)
         .hitTestBehavior(HitTestMode.Transparent)
@@ -534,7 +535,7 @@ struct PDFView {
         .offset(toPos(this.rightPageCanvasPosition))
         .size(toSize(this.rightPageCanvasSize))
         .scale(toScale(this.rightPageCanvasScale))
-        .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+        .visibility(toVisibility(this.enableAnnotation))
         .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.rightPageIndex, event))
 
       //#region SidePageTurn Button
@@ -696,7 +697,7 @@ struct PDFView {
 
           }
           .align(Alignment.Center)
-          .visibility(this.enableAnnotation ? Visibility.Visible : Visibility.Hidden)
+          .visibility(toVisibility(this.enableAnnotation))
 
         }.height('100%').hitTestBehavior(HitTestMode.Transparent).layoutWeight(1)
 
