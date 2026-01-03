@@ -95,16 +95,8 @@ struct PDFView {
   private pages = new HashMap<number, PdfPage>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
-  private boxUnchecked: SymbolGlyphModifier =
-    new SymbolGlyphModifier($r('sys.symbol.square'))
-      .fontColor([Color.White])
-      .fontSize(16)
-      .fontWeight(FontWeight.Regular);
-  private boxChecked: SymbolGlyphModifier =
-    new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill'))
-      .fontColor([Color.White])
-      .fontSize(16)
-      .fontWeight(FontWeight.Regular);
+  private boxUnchecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
+  private boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
   private leftPageIndex: number = 0;
   private rightPageIndex: number = 0;
@@ -123,7 +115,6 @@ struct PDFView {
   @State rightPageCanvasScale: Vector2 = Float2(0, 0);
   @State viewScale: number = 0;
   @State isDisplayingDualPage: boolean = false;
-  @State isDrawing: boolean = false;
 
   setPageIndexAndGotoPage(newIndex: number) {
     if (this.pageIndex == newIndex) {
@@ -187,7 +178,6 @@ struct PDFView {
     }
     const touchPoint = Float2(event.touches[0].x, event.touches[0].y);
     if (event.type == TouchType.Down) {
-      this.isDrawing = true;
       this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
       this.activeDrawPath.points.push(touchPoint);
     } else if (event.type == TouchType.Move) {
@@ -205,7 +195,6 @@ struct PDFView {
       this.activeDrawPath = { path: new Path2D(), points: [] };
       drawCtx.reset();
       this.loadPageStrokes(targetCtx, pageIndex);
-      this.isDrawing = false;
     }
   }
 
@@ -475,11 +464,9 @@ struct PDFView {
     this.setPageIndexAndGotoPage(newPageIndex);
   }
 
-  applyOperationMode(mode: OperationMode, enableAnnotation: boolean): void {
+  applyOperationMode(mode: OperationMode): void {
     this.currentOperationMode = mode;
-    this.enableAnnotation = enableAnnotation;
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
-    this.preferences.putSync('enableAnnotation', this.enableAnnotation);
     this.preferences.flushSync();
   }
 
@@ -502,6 +489,24 @@ struct PDFView {
         .size({ width: '100%', height: '100%' })
         .id(PdfViewId)
 
+      //#region SidePageTurn Button
+
+      Button({ type: ButtonType.Normal })
+        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .backgroundColor('rgba(0, 0, 0, 0.02)')
+        .onClick(() => this.gotoPreviousPage())
+        .alignRules(TopLeft)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+
+      Button({ type: ButtonType.Normal })
+        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .backgroundColor('rgba(0, 0, 0, 0.02)')
+        .onClick(() => this.gotoNextPage())
+        .alignRules(TopRight)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+
+      //#endregion
+
       Canvas(this.lctx)
         .hitTestBehavior(HitTestMode.None)
         // .backgroundColor('rgba(255,0,0,0.1)')
@@ -509,7 +514,6 @@ struct PDFView {
         .offset(toPos(this.leftPageCanvasPosition))
         .size(toSize(this.leftPageCanvasSize))
         .scale(toScale(this.leftPageCanvasScale))
-        .visibility(toVisibility(this.enableAnnotation))
 
       Canvas(this.rctx)
         .hitTestBehavior(HitTestMode.None)
@@ -518,10 +522,10 @@ struct PDFView {
         .offset(toPos(this.rightPageCanvasPosition))
         .size(toSize(this.rightPageCanvasSize))
         .scale(toScale(this.rightPageCanvasScale))
-        .visibility(toVisibility((this.isDualPageEnabled() && this.enableAnnotation)))
+        .visibility(toVisibility((this.isDualPageEnabled())))
 
       Canvas(this.dlctx)
-        .hitTestBehavior(HitTestMode.Transparent)
+        .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
         .alignRules(TopLeft)
         .offset(toPos(this.leftPageCanvasPosition))
         .size(toSize(this.leftPageCanvasSize))
@@ -530,35 +534,13 @@ struct PDFView {
         .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.leftPageIndex, event))
 
       Canvas(this.drctx)
-        .hitTestBehavior(HitTestMode.Transparent)
+        .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
         .alignRules(TopLeft)
         .offset(toPos(this.rightPageCanvasPosition))
         .size(toSize(this.rightPageCanvasSize))
         .scale(toScale(this.rightPageCanvasScale))
         .visibility(toVisibility(this.enableAnnotation))
         .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.rightPageIndex, event))
-
-      //#region SidePageTurn Button
-
-      Button({ type: ButtonType.Normal })
-        .fontSize(ButtonFontSize)
-        .fontWeight(FontWeight.Bold)
-        .size({ width: PageFlipButtonWidth, height: '100%' })
-        .backgroundColor(Color.Transparent)
-        .onClick(() => this.gotoPreviousPage())
-        .alignRules(TopLeft)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
-
-      Button({ type: ButtonType.Normal })
-        .fontSize(ButtonFontSize)
-        .fontWeight(FontWeight.Bold)
-        .size({ width: PageFlipButtonWidth, height: '100%' })
-        .backgroundColor(Color.Transparent)
-        .onClick(() => this.gotoNextPage())
-        .alignRules(TopRight)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
-
-      //#endregion
 
       Row({ space: StandardOffset }) {
         Column({ space: StandardOffset }) {
@@ -588,35 +570,40 @@ struct PDFView {
             .bindMenu([
               {
                 value: "屏侧翻页",
-                action: () => this.applyOperationMode(OperationMode.SidePageTurn, false),
+                action: () => this.applyOperationMode(OperationMode.SidePageTurn),
                 symbolIcon: this.getCheckIcon(OperationMode.SidePageTurn, false)
               },
               {
                 value: "按钮翻页",
-                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, false),
+                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn),
                 symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, false)
               },
               {
                 value: "外设翻页",
-                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, false),
+                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn),
                 symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, false)
-              },
-              {
-                value: "按钮翻页（标注）",
-                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn, true),
-                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, true)
-              },
-              {
-                value: "外设翻页（标注）",
-                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn, true),
-                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, true)
               }
             ], {
               backgroundColor: ButtonColor,
               outlineColor: Color.Transparent
             })
 
-          Column().layoutWeight(1)
+          Toggle({ type: ToggleType.Button, isOn: this.enableAnnotation }) {
+            Text("标注")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+          }
+          .visibility(this.showControls)
+          .onChange(isOn => {
+            this.enableAnnotation = isOn;
+            this.preferences.putSync('enableAnnotation', this.isInDualPageMode);
+            this.preferences.flushSync();
+          })
+          .size(ButtonSize)
+          .backgroundColor(ButtonColor)
+          .selectedColor(ButtonColorHighlight)
+
+          Blank();
 
           Button("视口")
             .visibility(this.showControls)
