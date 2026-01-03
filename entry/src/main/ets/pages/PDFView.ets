@@ -57,6 +57,19 @@ interface PathWithPoints {
   points: Array<Vector2>;
 }
 
+interface PDFViewDisplayStatus {
+  pageIndex: number;
+  leftPageIndex: number;
+  rightPageIndex: number;
+  isDisplayingDualPage: boolean;
+}
+
+interface PDFViewPageMetrics {
+  position: Vector2;
+  size: Vector2;
+  scale: Vector2;
+}
+
 function toPos(value: Vector2): Position {
   return { x: `${value.x}px`, y: `${value.y}px` };
 }
@@ -98,41 +111,36 @@ struct PDFView {
   private boxUnchecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
   private boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
-  private leftPageIndex: number = 0;
-  private rightPageIndex: number = 0;
   @State pageCount: number = 0;
-  @State pageIndex: number = 0;
   @State showControls: Visibility = Visibility.Visible;
   @State currentOperationMode: OperationMode = OperationMode.SidePageTurn;
   @State enableAnnotation: boolean = false;
   @State isInDualPageMode: boolean = false;
   @State isExclusiveFullScreen: boolean = false;
-  @State leftPageCanvasPosition: Vector2 = Float2(0, 0);
-  @State rightPageCanvasPosition: Vector2 = Float2(0, 0);
-  @State leftPageCanvasSize: Vector2 = Float2(0, 0);
-  @State rightPageCanvasSize: Vector2 = Float2(0, 0);
-  @State leftPageCanvasScale: Vector2 = Float2(0, 0);
-  @State rightPageCanvasScale: Vector2 = Float2(0, 0);
+  @State leftPageMetrics: PDFViewPageMetrics = {
+    position: Float2(0, 0),
+    size: Float2(0, 0),
+    scale: Float2(0, 0)
+  };
+  @State rightPageMetrics: PDFViewPageMetrics = {
+    position: Float2(0, 0),
+    size: Float2(0, 0),
+    scale: Float2(0, 0)
+  };
   @State viewScale: number = 0;
-  @State isDisplayingDualPage: boolean = false;
+  @State currentPageStatus: PDFViewDisplayStatus = {
+    pageIndex: 0,
+    leftPageIndex: 0,
+    rightPageIndex: 0,
+    isDisplayingDualPage: false
+  };
 
   setPageIndexAndGotoPage(newIndex: number) {
-    if (this.pageIndex == newIndex) {
+    if (this.currentPageStatus.pageIndex == newIndex) {
       return;
     }
-    this.pageIndex = newIndex;
-    this.controller.goToPage(this.pageIndex);
-  }
-
-  isDualPageEnabled(): boolean {
-    let isDualPage = this.isInDualPageMode;
-
-    const pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
-
-    if (pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
-      isDualPage = this.pageCount % 2 == 0;
-    }
-    return isDualPage;
+    this.currentPageStatus.pageIndex = newIndex;
+    this.controller.goToPage(this.currentPageStatus.pageIndex);
   }
 
   /**
@@ -198,35 +206,47 @@ struct PDFView {
     }
   }
 
-  aboutToAppear() {
-    this.controller.registerPageChangedListener(newPageIndex => {
-      this.pageIndex = newPageIndex
-      let isDualPageMode = this.isInDualPageMode;
-      const pageIndexIsLastPage = newPageIndex == this.pageCount - 1;
-      if (isDualPageMode && pageIndexIsLastPage || newPageIndex == this.pageCount - 2) {
-        isDualPageMode = this.pageCount % 2 == 0;
-      }
-      this.isDisplayingDualPage = isDualPageMode;
-      this.lctx.reset();
-      this.rctx.reset();
-      if (isDualPageMode) {
-        let leftPageIndex = 0;
-        let rightPageIndex = 0;
-        if (pageIndexIsLastPage) {
-          leftPageIndex = newPageIndex - 1;
-          rightPageIndex = newPageIndex;
-        } else {
+  updateCurrentPageStatus(newPageIndex: number): void {
+    this.currentPageStatus.pageIndex = newPageIndex;
+    let isDualPageMode = this.isInDualPageMode;
+    const pageIndexIsLastPage = newPageIndex == this.pageCount - 1;
+    if (isDualPageMode && (pageIndexIsLastPage || newPageIndex == this.pageCount - 2)) {
+      isDualPageMode = this.pageCount % 2 == 0;
+    }
+    this.currentPageStatus.isDisplayingDualPage = isDualPageMode;
+    if (isDualPageMode) {
+      let leftPageIndex = 0;
+      let rightPageIndex = 0;
+      if (pageIndexIsLastPage) {
+        leftPageIndex = newPageIndex - 1;
+        rightPageIndex = newPageIndex;
+      } else {
+        if (newPageIndex % 2 == 0) {
           leftPageIndex = newPageIndex;
           rightPageIndex = newPageIndex + 1;
+        } else {
+          leftPageIndex = newPageIndex - 1;
+          rightPageIndex = newPageIndex;
         }
+      }
+      this.currentPageStatus.leftPageIndex = leftPageIndex;
+      this.currentPageStatus.rightPageIndex = rightPageIndex;
+    } else {
+      this.currentPageStatus.leftPageIndex = newPageIndex;
+      this.currentPageStatus.rightPageIndex = -1;
+    }
+  }
 
-        this.leftPageIndex = leftPageIndex;
-        this.rightPageIndex = rightPageIndex;
-        this.loadPageStrokes(this.lctx, leftPageIndex);
-        this.loadPageStrokes(this.rctx, rightPageIndex);
+  aboutToAppear() {
+    this.controller.registerPageChangedListener(newPageIndex => {
+      this.updateCurrentPageStatus(newPageIndex);
+      this.lctx.reset();
+      this.rctx.reset();
+      if (this.currentPageStatus.isDisplayingDualPage) {
+        this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
+        this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
       } else {
-        this.leftPageIndex = newPageIndex;
-        this.loadPageStrokes(this.lctx, newPageIndex);
+        this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
       }
     });
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
@@ -244,29 +264,11 @@ struct PDFView {
       let leftX = -scrollParam.offsetX * extraX;
       let leftY = -scrollParam.offsetY * extraY;
 
-      let isDualPage = this.isInDualPageMode;
-
-      const pageIndexIsLastPage = this.pageIndex == this.pageCount - 1;
-
-      if (isDualPage && pageIndexIsLastPage || this.pageIndex == this.pageCount - 2) {
-        isDualPage = this.pageCount % 2 == 0;
-      }
-
       const space = this.controller.getPageHorizontalSpacing() * this.viewScale;
-      if (isDualPage) {
+      if (this.currentPageStatus.isDisplayingDualPage) {
 
-        let leftPageIndex = 0;
-        let rightPageIndex = 0;
-        if (pageIndexIsLastPage) {
-          leftPageIndex = this.pageIndex - 1;
-          rightPageIndex = this.pageIndex;
-        } else {
-          leftPageIndex = this.pageIndex;
-          rightPageIndex = this.pageIndex + 1;
-        }
-
-        const rawLeftPageSize = this.getPdfPage(leftPageIndex)?.size;
-        const rawRightPageSize = this.getPdfPage(rightPageIndex)?.size;
+        const rawLeftPageSize = this.getPdfPage(this.currentPageStatus.leftPageIndex)?.size;
+        const rawRightPageSize = this.getPdfPage(this.currentPageStatus.rightPageIndex)?.size;
         if (rawLeftPageSize == null || rawRightPageSize == null) {
           return;
         }
@@ -283,19 +285,19 @@ struct PDFView {
         const leftPageHeight = rawLeftPageSize.y * scaledPdfHeight / rawPdfHeight;
         const rightPageHeight = rawRightPageSize.y * scaledPdfHeight / rawPdfHeight;
 
-        this.leftPageCanvasSize = Float2(
+        this.leftPageMetrics.size = Float2(
           rawLeftPageSize.x * CanvasOverSampling,
           rawLeftPageSize.y * CanvasOverSampling
         );
-        this.rightPageCanvasSize = Float2(
+        this.rightPageMetrics.size = Float2(
           rawRightPageSize.x * CanvasOverSampling,
           rawRightPageSize.y * CanvasOverSampling
         );
-        this.leftPageCanvasScale = Float2(
+        this.leftPageMetrics.scale = Float2(
           leftPageWidth / rawLeftPageSize.x / CanvasOverSampling,
           leftPageHeight / rawLeftPageSize.y / CanvasOverSampling
         );
-        this.rightPageCanvasScale = Float2(
+        this.rightPageMetrics.scale = Float2(
           rightPageWidth / rawRightPageSize.x / CanvasOverSampling,
           rightPageHeight / rawRightPageSize.y / CanvasOverSampling
         );
@@ -322,13 +324,13 @@ struct PDFView {
           }
         }
 
-        this.leftPageCanvasPosition = Float2(leftX, leftY);
-        this.rightPageCanvasPosition = Float2(rightX, rightY);
+        this.leftPageMetrics.position = Float2(leftX, leftY);
+        this.rightPageMetrics.position = Float2(rightX, rightY);
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
 
       } else {
-        const leftPageSize = this.getPdfPage(this.pageIndex)?.size;
+        const leftPageSize = this.getPdfPage(this.currentPageStatus.pageIndex)?.size;
         if (leftPageSize == null) {
           return;
         }
@@ -339,14 +341,14 @@ struct PDFView {
         if (centerY) {
           leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
         }
-        this.leftPageCanvasPosition = Float2(leftX, leftY);
+        this.leftPageMetrics.position = Float2(leftX, leftY);
         const rawLeftPageWidth = leftPageSize.x;
         const rawLeftPageHeight = leftPageSize.y;
-        this.leftPageCanvasSize = Float2(
+        this.leftPageMetrics.size = Float2(
           rawLeftPageWidth * CanvasOverSampling,
           rawLeftPageHeight * CanvasOverSampling
         );
-        this.leftPageCanvasScale = Float2(
+        this.leftPageMetrics.scale = Float2(
           scrollParam.pdfWidth / rawLeftPageWidth / CanvasOverSampling,
           scrollParam.pdfHeight / rawLeftPageHeight / CanvasOverSampling
         );
@@ -373,11 +375,12 @@ struct PDFView {
         }
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
-        if (this.isDisplayingDualPage) {
-          this.loadPageStrokes(this.lctx, this.leftPageIndex);
-          this.loadPageStrokes(this.rctx, this.rightPageIndex);
+        this.updateCurrentPageStatus(0);
+        if (this.currentPageStatus.isDisplayingDualPage) {
+          this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
+          this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
         } else {
-          this.loadPageStrokes(this.lctx, this.leftPageIndex);
+          this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
         }
       });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
@@ -411,7 +414,7 @@ struct PDFView {
     if (!this.isInDualPageMode) {
       return;
     }
-    const currentPageIndex = this.pageIndex;
+    const currentPageIndex = this.currentPageStatus.pageIndex;
     if (currentPageIndex % 2 == 0) {
       return;
     }
@@ -433,13 +436,13 @@ struct PDFView {
   gotoPreviousPage() {
     let newPageIndex = 0;
     if (this.isInDualPageMode) {
-      newPageIndex = this.pageIndex - 2;
+      newPageIndex = this.currentPageStatus.pageIndex - 2;
       newPageIndex = Math.max(newPageIndex, 0);
-      if (newPageIndex == this.pageIndex) {
+      if (newPageIndex == this.currentPageStatus.pageIndex) {
         return;
       }
     } else {
-      newPageIndex = this.pageIndex - 1;
+      newPageIndex = this.currentPageStatus.pageIndex - 1;
       if (newPageIndex < 0) {
         return;
       }
@@ -450,13 +453,13 @@ struct PDFView {
   gotoNextPage() {
     let newPageIndex = 0;
     if (this.isInDualPageMode) {
-      newPageIndex = this.pageIndex + 2;
+      newPageIndex = this.currentPageStatus.pageIndex + 2;
       newPageIndex = Math.min(newPageIndex, this.pageCount - 1);
-      if (newPageIndex == this.pageIndex) {
+      if (newPageIndex == this.currentPageStatus.pageIndex) {
         return;
       }
     } else {
-      newPageIndex = this.pageIndex + 1;
+      newPageIndex = this.currentPageStatus.pageIndex + 1;
       if (newPageIndex >= this.pageCount) {
         return;
       }
@@ -511,36 +514,36 @@ struct PDFView {
         .hitTestBehavior(HitTestMode.None)
         // .backgroundColor('rgba(255,0,0,0.1)')
         .alignRules(TopLeft)
-        .offset(toPos(this.leftPageCanvasPosition))
-        .size(toSize(this.leftPageCanvasSize))
-        .scale(toScale(this.leftPageCanvasScale))
+        .offset(toPos(this.leftPageMetrics.position))
+        .size(toSize(this.leftPageMetrics.size))
+        .scale(toScale(this.leftPageMetrics.scale))
 
       Canvas(this.rctx)
         .hitTestBehavior(HitTestMode.None)
         // .backgroundColor('rgba(0,255,0,0.1)')
         .alignRules(TopLeft)
-        .offset(toPos(this.rightPageCanvasPosition))
-        .size(toSize(this.rightPageCanvasSize))
-        .scale(toScale(this.rightPageCanvasScale))
-        .visibility(toVisibility((this.isDualPageEnabled())))
+        .offset(toPos(this.rightPageMetrics.position))
+        .size(toSize(this.rightPageMetrics.size))
+        .scale(toScale(this.rightPageMetrics.scale))
+        .visibility(toVisibility((this.currentPageStatus.isDisplayingDualPage)))
 
       Canvas(this.dlctx)
         .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
         .alignRules(TopLeft)
-        .offset(toPos(this.leftPageCanvasPosition))
-        .size(toSize(this.leftPageCanvasSize))
-        .scale(toScale(this.leftPageCanvasScale))
+        .offset(toPos(this.leftPageMetrics.position))
+        .size(toSize(this.leftPageMetrics.size))
+        .scale(toScale(this.leftPageMetrics.scale))
         .visibility(toVisibility(this.enableAnnotation))
-        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.leftPageIndex, event))
+        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.currentPageStatus.leftPageIndex, event))
 
       Canvas(this.drctx)
         .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
         .alignRules(TopLeft)
-        .offset(toPos(this.rightPageCanvasPosition))
-        .size(toSize(this.rightPageCanvasSize))
-        .scale(toScale(this.rightPageCanvasScale))
-        .visibility(toVisibility(this.enableAnnotation))
-        .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.rightPageIndex, event))
+        .offset(toPos(this.rightPageMetrics.position))
+        .size(toSize(this.rightPageMetrics.size))
+        .scale(toScale(this.rightPageMetrics.scale))
+        .visibility(toVisibility(this.enableAnnotation && this.currentPageStatus.isDisplayingDualPage))
+        .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.currentPageStatus.rightPageIndex, event))
 
       Row({ space: StandardOffset }) {
         Column({ space: StandardOffset }) {
@@ -556,6 +559,7 @@ struct PDFView {
             this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
             this.preferences.flushSync();
             this.applyDualPageMode();
+            this.updateCurrentPageStatus(this.currentPageStatus.pageIndex);
           })
           .size(ButtonSize)
           .backgroundColor(ButtonColor)
@@ -644,7 +648,7 @@ struct PDFView {
             .size(ButtonSize)
             .backgroundColor(this.showControls == Visibility.Visible ? ButtonColor : ButtonColorSemiTransparent)
 
-        }.height('100%').hitTestBehavior(HitTestMode.Transparent)
+        }.height('100%')
 
         Column({ space: StandardOffset }) {
 
@@ -686,7 +690,7 @@ struct PDFView {
           .align(Alignment.Center)
           .visibility(toVisibility(this.enableAnnotation))
 
-        }.height('100%').hitTestBehavior(HitTestMode.Transparent).layoutWeight(1)
+        }.height('100%').layoutWeight(1)
 
         Column({ space: StandardOffset }) {
 
@@ -711,13 +715,14 @@ struct PDFView {
           Column().layoutWeight(1)
 
           Slider({
-            value: this.pageIndex,
+            value: this.currentPageStatus.pageIndex,
             min: 0,
             max: this.pageCount - 1,
             style: SliderStyle.InSet,
             direction: Axis.Vertical,
             reverse: true
           })
+            .monopolizeEvents(true)
             .visibility(this.showControls)
             .showSteps(true)
             .showTips(true)
@@ -733,7 +738,7 @@ struct PDFView {
               this.setPageIndexAndGotoPage(value)
             })
 
-          Text(`${this.pageIndex + 1}/${this.pageCount}`)
+          Text(`${this.currentPageStatus.pageIndex + 1}/${this.pageCount}`)
             .size(ButtonSize)
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
@@ -767,7 +772,7 @@ struct PDFView {
           .size(ButtonSize)
           .visibility(this.isButtonPageTurn() ? Visibility.Visible : Visibility.None)
 
-        }.height('100%').hitTestBehavior(HitTestMode.Transparent)
+        }.height('100%')
       }
       .hitTestBehavior(HitTestMode.Transparent)
       .alignRules(FullRect)
