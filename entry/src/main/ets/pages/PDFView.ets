@@ -1,7 +1,7 @@
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { pdfService, PdfView, pdfViewManager } from '@kit.PDFKit';
 import { KeyCode } from '@kit.InputKit';
-import { LengthMetricsUnit, LengthUnit, SymbolGlyphModifier, window } from '@kit.ArkUI';
+import { display, LengthMetricsUnit, LengthUnit, SymbolGlyphModifier, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -13,14 +13,13 @@ const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
 const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
 const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
 const TrackColor: ResourceColor = 'rgba(50, 50, 50, 0.4)';
-const StandardOffsetValue: number = 8;
 const StandardOffset: number = 8;
 const ButtonFontSize: Length = '20vp';
 const HalfButtonFontSize: Length = '10vp';
 const ButtonSizeH: number = 40;
 const ButtonSizeW: number = 80;
 const ButtonSize: SizeOptions = { height: ButtonSizeH, width: ButtonSizeW };
-const ButtonSizeWWide: number = 100;
+const ButtonSizeWWide: number = 90;
 const ButtonSizeWide: SizeOptions = { height: ButtonSizeH, width: ButtonSizeWWide };
 const PageFlipButtonWidth: Length = '30%';
 const ScrollBarWidth: Length = '40vp';
@@ -40,12 +39,6 @@ const FullRect: AlignRuleOption = {
   'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
   'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
   'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
-}
-
-enum OperationMode {
-  SidePageTurn,
-  ButtonPageTurn,
-  ExternalPageTurn,
 }
 
 interface Vector2 {
@@ -107,6 +100,12 @@ function Float2(x: number, y: number): Vector2 {
   return { x: x, y: y };
 }
 
+function clear<T>(stack: Stack<T>): void {
+  while (!stack.isEmpty()) {
+    stack.pop();
+  }
+}
+
 const squareSymbol = $r('sys.symbol.square');
 const squareCheckedSymbol = $r('sys.symbol.checkmark_square_fill');
 
@@ -121,6 +120,8 @@ struct PDFView {
   private dlctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private drctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private pageStrokes = new HashMap<number, Array<PathWithPoints>>();
+  private pageRawSizes = new HashMap<number, Vector2>();
+  private document = new pdfService.PdfDocument();
   private pages = new HashMap<number, PdfPage>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
@@ -136,11 +137,14 @@ struct PDFView {
   private pathsToErase: Set<PathWithPoints> = new Set();
   private undoHistory: Stack<History> = new Stack<History>();
   private redoHistory: Stack<History> = new Stack<History>();
+  private systemPath = '';
+  private sandBoxPath = '';
+  @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
   @State pageCount: number = 0;
   @State showControls: boolean = true;
-  @State currentOperationMode: OperationMode = OperationMode.SidePageTurn;
+  @State currentOperationMode: 'side' | 'button' | 'extern' = 'side';
   @State currentDrawMode: 'add' | 'erase' | 'drag' = 'add';
   @State isInDualPageMode: boolean = false;
   @State isExclusiveFullScreen: boolean = false;
@@ -186,6 +190,17 @@ struct PDFView {
     ctx.lineCap = 'round';
   }
 
+  updateUnsavedStrokesFlag() {
+    for (const pageIndex of this.pageStrokes.keys()) {
+      const strokes = this.pageStrokes.get(pageIndex);
+      if (strokes.length > 0) {
+        this.hasUnsavedStrokes = true;
+        return;
+      }
+    }
+    this.hasUnsavedStrokes = false;
+  }
+
   /**
    * @throws
    */
@@ -201,7 +216,7 @@ struct PDFView {
   appendUndoHistory(history: History): void {
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
-    while (!this.redoHistory.isEmpty()) this.redoHistory.pop();
+    clear(this.redoHistory);
     this.redoHistoryCount = 0;
   }
 
@@ -230,6 +245,7 @@ struct PDFView {
     }
     this.redoHistory.push(history);
     this.redoHistoryCount = this.redoHistory.length;
+    this.updateUnsavedStrokesFlag();
     this.redraw();
   }
 
@@ -258,7 +274,70 @@ struct PDFView {
     }
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
+    this.updateUnsavedStrokesFlag();
     this.redraw();
+  }
+
+  executeSave(): void {
+    for (const pageIndex of this.pageStrokes.keys()) {
+      const strokes = this.pageStrokes.get(pageIndex);
+      const pdfPage = this.getPdfPage(pageIndex);
+      if (pdfPage == null) {
+        continue;
+      }
+      const pdfPageSize = pdfPage.size;
+      const pdfRawPageSize = this.pageRawSizes.get(pageIndex);
+      if (pdfRawPageSize == undefined) {
+        continue;
+      }
+      for (const stroke of strokes) {
+        let annotationInfo = new pdfService.InkAnnotationInfo();
+        annotationInfo.lineColor = 0xFFCA1A1A;
+
+        // Transform stroke points from canvas coordinates to PDF coordinates
+        const transformedPoints: Vector2[] = [];
+        for (const point of stroke.points) {
+          let transformedPoint = Float2(
+            (point.x / pdfRawPageSize.x) * pdfPageSize.x,
+            (1 - point.y / pdfRawPageSize.y) * pdfPageSize.y
+          );
+          transformedPoints.push(transformedPoint);
+        };
+        annotationInfo.inkPoints = transformedPoints;
+        pdfPage.page.addAnnotation(annotationInfo);
+      };
+    };
+    this.pageStrokes.clear();
+    clear(this.undoHistory);
+    clear(this.redoHistory);
+    this.undoHistoryCount = 0;
+    this.redoHistoryCount = 0;
+    this.hasUnsavedStrokes = false;
+
+    let pageCount = this.document.getPageCount();
+    for (let index = 0; index < pageCount; index++) {
+      let page = this.document.getPage(index);
+      let annotations = page.getAnnotations();
+      annotations.forEach(annotation => {
+        hilog.info(0, 'PDFView', `Annotation on page ${index}: type=${annotation.type}`);
+      });
+    }
+
+    let success = this.document.saveDocument(this.sandBoxPath); //TODO: Error Handling
+    if (!success) {
+      hilog.error(0, 'PDFView', `Err on saving pdf file`)
+    }
+    this.controller.releaseDocument();
+    this.controller.loadDocument(this.sandBoxPath).then(result => {
+      if (result != pdfService.ParseResult.PARSE_SUCCESS) {
+        hilog.error(0, 'PDFView', `Err on re-loading pdf file: ${result}`)
+        app.terminate();
+        return;
+      }
+      this.controller.goToPage(this.currentPageStatus.pageIndex);
+      this.redraw();
+      this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
+    });
   }
 
   redraw(): void {
@@ -271,6 +350,30 @@ struct PDFView {
       this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
     }
   }
+
+  // addHalfDiagonalPath(): void {
+  //
+  //   let rawPageSize = this.pageRawSizes.get(this.currentPageStatus.leftPageIndex);
+  //   const leftPageCenterX = rawPageSize.x / 2;
+  //   const leftPageCenterY = rawPageSize.y / 2;
+  //   this.activeDrawPath.path.moveTo(0, 0);
+  //   this.activeDrawPath.path.lineTo(leftPageCenterX, leftPageCenterY);
+  //   this.activeDrawPath.points.push(Float2(0, 0));
+  //   this.activeDrawPath.points.push(Float2(leftPageCenterX, leftPageCenterY));
+  //   // Then add it to the current page's strokes and undo history
+  //   if (!this.pageStrokes.hasKey(this.currentPageStatus.leftPageIndex)) {
+  //     this.pageStrokes.set(this.currentPageStatus.leftPageIndex, []);
+  //   }
+  //   this.pageStrokes.get(this.currentPageStatus.leftPageIndex).push(this.activeDrawPath);
+  //   this.appendUndoHistory({
+  //     path: this.activeDrawPath,
+  //     mode: 'add',
+  //     pageIndex: this.currentPageStatus.leftPageIndex
+  //   });
+  //   this.activeDrawPath = { path: new Path2D(), points: [] };
+  //   this.updateUnsavedStrokesFlag();
+  //   this.redraw();
+  // }
 
   /**
    * @throws
@@ -310,6 +413,7 @@ struct PDFView {
         });
         this.activeDrawPath = { path: new Path2D(), points: [] };
         drawCtx.reset();
+        this.updateUnsavedStrokesFlag();
         this.loadPageStrokes(targetCtx, pageIndex);
       }
     } else {
@@ -362,6 +466,7 @@ struct PDFView {
 
           this.pathsToErase.clear();
           targetCtx.reset();
+          this.updateUnsavedStrokesFlag();
           this.loadPageStrokes(targetCtx, pageIndex);
         }
       }
@@ -401,6 +506,14 @@ struct PDFView {
     }
   }
 
+  recordPageRawSize(pageIndex: number, size: Vector2): void {
+    if(this.pageRawSizes.hasKey(pageIndex)) return;
+    this.pageRawSizes.set(pageIndex, {
+      x: Math.round(size.x),
+      y: Math.round(size.y)
+    });
+  }
+
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => {
       this.updateCurrentPageStatus(newPageIndex);
@@ -409,11 +522,10 @@ struct PDFView {
       this.redraw();
     });
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
-    const systemPath = args['systemPath'];
-    const sandboxPath = args['sandboxPath'];
+    this.systemPath = args['systemPath'];
+    this.sandBoxPath = args['sandboxPath'];
     this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
     this.controller.registerScrollListener(scrollParam => {
-      //hilog.info(0, "PDFView", `s: ${this.viewScale.toFixed(2)} x: ${scrollParam.offsetX.toFixed(2)}, y: ${scrollParam.offsetY.toFixed(2)}, vw: ${scrollParam.viewWidth.toFixed(2)}, vh: ${scrollParam.viewHeight.toFixed(2)}, pw: ${scrollParam.pdfWidth.toFixed(2)}, ph: ${scrollParam.pdfHeight.toFixed(2)}`);
       const centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
       const centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
 
@@ -486,6 +598,19 @@ struct PDFView {
         this.leftPageMetrics.position = Float2(leftX, leftY);
         this.rightPageMetrics.position = Float2(rightX, rightY);
 
+        this.recordPageRawSize(this.currentPageStatus.leftPageIndex, {
+          x: leftPageWidth,
+          y: scaledPdfHeight
+        });
+        this.recordPageRawSize(this.currentPageStatus.rightPageIndex, {
+          x: rightPageWidth,
+          y: scaledPdfHeight
+        });
+
+
+        hilog.info(0, "PDFView", `Left Page Pos: (${this.leftPageMetrics.position.x.toFixed(2)}, ${this.leftPageMetrics.position.y.toFixed(2)}), Size: (${this.leftPageMetrics.size.x.toFixed(2)}, ${this.leftPageMetrics.size.y.toFixed(2)}), RawSize: (${rawLeftPageSize.x.toFixed(2)}, ${rawLeftPageSize.y.toFixed(2)}) Scale: (${this.leftPageMetrics.scale.x.toFixed(2)}, ${this.leftPageMetrics.scale.y.toFixed(2)})`);
+        hilog.info(0, "PDFView", `Right Page Pos: (${this.rightPageMetrics.position.x.toFixed(2)}, ${this.rightPageMetrics.position.y.toFixed(2)}), Size: (${this.rightPageMetrics.size.x.toFixed(2)}, ${this.rightPageMetrics.size.y.toFixed(2)}), RawSize: (${rawRightPageSize.x.toFixed(2)}, ${rawRightPageSize.y.toFixed(2)}) Scale: (${this.rightPageMetrics.scale.x.toFixed(2)}, ${this.rightPageMetrics.scale.y.toFixed(2)})`);
+
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
 
       } else {
@@ -511,21 +636,26 @@ struct PDFView {
           scrollParam.pdfWidth / rawLeftPageWidth / CanvasOverSampling,
           scrollParam.pdfHeight / rawLeftPageHeight / CanvasOverSampling
         );
+        this.recordPageRawSize(this.currentPageStatus.pageIndex, {
+          x: scrollParam.pdfWidth,
+          y: scrollParam.pdfHeight
+        });
+
+        hilog.info(0, "PDFView", `Left Page Pos: (${this.leftPageMetrics.position.x.toFixed(2)}, ${this.leftPageMetrics.position.y.toFixed(2)}), Size: (${this.leftPageMetrics.size.x.toFixed(2)}, ${this.leftPageMetrics.size.y.toFixed(2)}), RawSize: (${rawLeftPageWidth.toFixed(2)}, ${rawLeftPageHeight.toFixed(2)}) Scale: (${this.leftPageMetrics.scale.x.toFixed(2)}, ${this.leftPageMetrics.scale.y.toFixed(2)})`);
 
         // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
       }
     });
 
-    const document = new pdfService.PdfDocument();
-    document.loadDocument(sandboxPath);
-    const documentPages = document.getPageCount();
+    this.document = new pdfService.PdfDocument();
+    this.document.loadDocument(this.sandBoxPath);
+    const documentPages = this.document.getPageCount();
     for (let i = 0; i < documentPages; i++) {
-      const page = document.getPage(i);
+      const page = this.document.getPage(i);
       this.pages.set(i, { size: Float2(page.getWidth(), page.getHeight()), page: page });
     }
-    document.releaseDocument();
 
-    this.controller.loadDocument(sandboxPath)
+    this.controller.loadDocument(this.sandBoxPath)
       .then(parseResult => {
         if (parseResult != pdfService.ParseResult.PARSE_SUCCESS) {
           hilog.error(0, 'PDFView', `Err on loading pdf file: ${parseResult}`)
@@ -533,29 +663,21 @@ struct PDFView {
           return;
         }
         this.pageCount = this.controller.getPageCount();
+        if (this.pageCount == 0) {
+          hilog.error(0, 'PDFView', `Err on loading pdf file: empty document`)
+          app.terminate();
+          return;
+        }
         this.applyDualPageMode();
         this.updateCurrentPageStatus(0);
         this.redraw();
       });
     this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as boolean;
-    this.currentOperationMode =
-      this.preferences.getSync('currentOperationMode', OperationMode.SidePageTurn) as OperationMode;
+    this.currentOperationMode = this.preferences.getSync('currentOperationMode', 'side') as 'side' | 'button' | 'extern';
     this.currentDrawMode = this.preferences.getSync('currentDrawMode', 'add') as 'add' | 'erase';
     this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
     this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
       statusType == window.WindowStatusType.FULL_SCREEN);
-  }
-
-  isSidePageTurn(): boolean {
-    return this.currentOperationMode == OperationMode.SidePageTurn;
-  }
-
-  isButtonPageTurn(): boolean {
-    return this.currentOperationMode == OperationMode.ButtonPageTurn;
-  }
-
-  isExternalPageTurn(): boolean {
-    return this.currentOperationMode == OperationMode.ExternalPageTurn;
   }
 
   onBackPress(): boolean | void {
@@ -621,13 +743,13 @@ struct PDFView {
     this.setPageIndexAndGotoPage(newPageIndex);
   }
 
-  applyOperationMode(mode: OperationMode): void {
+  applyOperationMode(mode: 'side' | 'button' | 'extern') {
     this.currentOperationMode = mode;
     this.preferences.putSync('currentOperationMode', this.currentOperationMode);
     this.preferences.flushSync();
   }
 
-  getCheckIcon(mode: OperationMode): SymbolGlyphModifier {
+  getCheckIcon(mode: 'side' | 'button' | 'extern'): SymbolGlyphModifier {
     if (mode == this.currentOperationMode) {
       return this.boxChecked;
     }
@@ -652,7 +774,7 @@ struct PDFView {
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .onClick(() => this.gotoPreviousPage())
         .alignRules(TopLeft)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .visibility(toVisibility(this.currentOperationMode == 'side'))
         .hitTestBehavior(HitTestMode.Transparent)
         .backgroundColor(Color.Transparent)
 
@@ -661,14 +783,14 @@ struct PDFView {
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .onClick(() => this.gotoNextPage())
         .alignRules(TopRight)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .visibility(toVisibility(this.currentOperationMode == 'side'))
         .hitTestBehavior(HitTestMode.Transparent)
         .backgroundColor(Color.Transparent)
 
       Image('')
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .alignRules(TopLeft)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .visibility(toVisibility(this.currentOperationMode == 'side'))
         .hitTestBehavior(HitTestMode.None)
         .linearGradient({
           direction: GradientDirection.Left,
@@ -682,7 +804,7 @@ struct PDFView {
       Image('')
         .size({ width: PageFlipButtonWidth, height: '100%' })
         .alignRules(TopRight)
-        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .visibility(toVisibility(this.currentOperationMode == 'side'))
         .hitTestBehavior(HitTestMode.None)
         .linearGradient({
           direction: GradientDirection.Right,
@@ -764,18 +886,18 @@ struct PDFView {
             .bindMenu([
               {
                 value: "屏侧翻页",
-                action: () => this.applyOperationMode(OperationMode.SidePageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.SidePageTurn)
+                action: () => this.applyOperationMode('side'),
+                symbolIcon: this.getCheckIcon('side')
               },
               {
                 value: "按钮翻页",
-                action: () => this.applyOperationMode(OperationMode.ButtonPageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn)
+                action: () => this.applyOperationMode('button'),
+                symbolIcon: this.getCheckIcon('button')
               },
               {
                 value: "外设翻页",
-                action: () => this.applyOperationMode(OperationMode.ExternalPageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn)
+                action: () => this.applyOperationMode('extern'),
+                symbolIcon: this.getCheckIcon('extern')
               }
             ], {
               backgroundColor: ButtonColor,
@@ -828,119 +950,138 @@ struct PDFView {
             .backgroundColor(this.showControls ? ButtonColor : ButtonColorSemiTransparent)
 
         }.height('100%')
-
         Column({ space: StandardOffset }) {
-
           Blank()
+          Button() {
+            Text() {
+              Span("拖动")
+                .fontColor(Color.White)
+              SymbolSpan(this.currentDrawMode == 'drag' ? squareCheckedSymbol : squareSymbol)
+                .fontColor([Color.White])
+            }
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+          }
+          .size(ButtonSizeWide)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
+          .backgroundColor(this.currentDrawMode == 'drag' ? ButtonColorHighlight : ButtonColor)
+          .onClick(() => {
+            this.currentDrawMode = 'drag';
+            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+            this.preferences.flushSync();
+          })
 
-          Flex({
-            direction: FlexDirection.Row,
-            wrap: FlexWrap.Wrap,
-            justifyContent: FlexAlign.Center,
-            space: {
-              main: { value: StandardOffsetValue, unit: LengthUnit.VP },
-              cross: { value: StandardOffsetValue, unit: LengthUnit.VP },
+          Button() {
+            Text() {
+              Span("绘制")
+                .fontColor(Color.White)
+              SymbolSpan(this.currentDrawMode == 'add' ? squareCheckedSymbol : squareSymbol)
+                .fontColor([Color.White])
+            }
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+          }
+          .size(ButtonSizeWide)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
+          .backgroundColor(this.currentDrawMode == 'add' ? ButtonColorHighlight : ButtonColor)
+          .onClick(() => {
+            this.currentDrawMode = 'add';
+            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+            this.preferences.flushSync();
+          })
+
+          Button() {
+            Text() {
+              Span("擦除")
+                .fontColor(Color.White)
+              SymbolSpan(this.currentDrawMode == 'erase' ? squareCheckedSymbol : squareSymbol)
+                .fontColor([Color.White])
+            }
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+          }
+          .size(ButtonSizeWide)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
+          .backgroundColor(this.currentDrawMode == 'erase' ? ButtonColorHighlight : ButtonColor)
+          .onClick(() => {
+            this.currentDrawMode = 'erase';
+            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+            this.preferences.flushSync();
+          })
+        }.height('100%')
+        Blank()
+        Column({ space: StandardOffset }) {
+          Blank()
+          Badge({
+            count: this.undoHistoryCount,
+            maxCount: 2147483647,
+            position: BadgePosition.RightTop,
+            style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
+          }) {
+            Button(`撤回`)
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSizeWide)
+              .hitTestBehavior(HitTestMode.Block)
+              .monopolizeEvents(true)
+              .backgroundColor(ButtonColor)
+              .onClick(() => this.executeUndo())
+          }
+          .size(ButtonSizeWide)
+
+          Badge({
+            count: this.redoHistoryCount,
+            maxCount: 2147483647,
+            position: BadgePosition.RightTop,
+            style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
+          }) {
+            Button(`重做`)
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+              .size(ButtonSizeWide)
+              .hitTestBehavior(HitTestMode.Block)
+              .monopolizeEvents(true)
+              .backgroundColor(ButtonColor)
+              .onClick(() => this.executeRedo())
+          }
+          .size(ButtonSizeWide)
+
+          Badge({
+            value: '!',
+            position: BadgePosition.RightTop,
+            style: {
+              badgeColor: BaseColor,
+              borderColor: Color.Transparent,
+              fontSize: HalfButtonFontSize,
+              fontWeight: FontWeight.Bold,
+              badgeSize: this.hasUnsavedStrokes ? null : 0
             }
           }) {
-
-            Button() {
-              Text() {
-                Span("拖动")
-                  .fontColor(Color.White)
-                SymbolSpan(this.currentDrawMode == 'drag' ? squareCheckedSymbol : squareSymbol)
-                  .fontColor([Color.White])
-              }
+            Button(`保存`)
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
-            }
-            .size(ButtonSizeWide)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(this.currentDrawMode == 'drag' ? ButtonColorHighlight : ButtonColor)
-            .onClick(() => {
-              this.currentDrawMode = 'drag';
-              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-              this.preferences.flushSync();
-            })
-
-            Button() {
-              Text() {
-                Span("绘制")
-                  .fontColor(Color.White)
-                SymbolSpan(this.currentDrawMode == 'add' ? squareCheckedSymbol : squareSymbol)
-                  .fontColor([Color.White])
-              }
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-            }
-            .size(ButtonSizeWide)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(this.currentDrawMode == 'add' ? ButtonColorHighlight : ButtonColor)
-            .onClick(() => {
-              this.currentDrawMode = 'add';
-              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-              this.preferences.flushSync();
-            })
-
-            Button() {
-              Text() {
-                Span("擦除")
-                  .fontColor(Color.White)
-                SymbolSpan(this.currentDrawMode == 'erase' ? squareCheckedSymbol : squareSymbol)
-                  .fontColor([Color.White])
-              }
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-            }
-            .size(ButtonSizeWide)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(this.currentDrawMode == 'erase' ? ButtonColorHighlight : ButtonColor)
-            .onClick(() => {
-              this.currentDrawMode = 'erase';
-              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-              this.preferences.flushSync();
-            })
-
-            Badge({
-              count: this.undoHistoryCount,
-              maxCount: 2147483647,
-              position: BadgePosition.RightTop,
-              style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
-            }) {
-              Button(`撤回`)
-                .fontSize(ButtonFontSize)
-                .fontWeight(FontWeight.Bold)
-                .size(ButtonSizeWide)
-                .hitTestBehavior(HitTestMode.Block)
-                .monopolizeEvents(true)
-                .backgroundColor(ButtonColor)
-                .onClick(() => this.executeUndo())
-            }
-            .size(ButtonSizeWide)
-
-            Badge({
-              count: this.redoHistoryCount,
-              maxCount: 2147483647,
-              position: BadgePosition.RightTop,
-              style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
-            }) {
-              Button(`重做`)
-                .fontSize(ButtonFontSize)
-                .fontWeight(FontWeight.Bold)
-                .size(ButtonSizeWide)
-                .hitTestBehavior(HitTestMode.Block)
-                .monopolizeEvents(true)
-                .backgroundColor(ButtonColor)
-                .onClick(() => this.executeRedo())
-            }
-            .size(ButtonSizeWide)
-
+              .size(ButtonSizeWide)
+              .hitTestBehavior(HitTestMode.Block)
+              .monopolizeEvents(true)
+              .backgroundColor(ButtonColor)
+              .onClick(() => this.executeSave())
           }
-          .align(Alignment.Center)
+          .size(ButtonSizeWide)
 
-        }.height('100%').layoutWeight(1)
+          Button("<")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSizeWide)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(ButtonColor)
+            .onClick(() => this.gotoPreviousPage())
+            .visibility(toVisibility(this.currentOperationMode == 'button'))
+
+        }.height('100%')
 
         Column({ space: StandardOffset }) {
 
@@ -964,7 +1105,7 @@ struct PDFView {
           .selectedColor(ButtonColorHighlight)
           .alignSelf(ItemAlign.End)
 
-          Column().layoutWeight(1)
+          Blank()
 
           Slider({
             value: this.currentPageStatus.pageIndex,
@@ -975,7 +1116,7 @@ struct PDFView {
             reverse: true
           })
             .monopolizeEvents(true)
-            .visibility(toVisibility(this.showControls && this.pageCount > 0))
+            .visibility(toVisibility(this.showControls && this.pageCount > 1))
             .showSteps(true)
             .showTips(true)
             .trackThickness(ScrollBarWidth)
@@ -1005,32 +1146,19 @@ struct PDFView {
             .textAlign(TextAlign.Center)
             .alignSelf(ItemAlign.End)
 
-          RelativeContainer() {
-            Button("<")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .hitTestBehavior(HitTestMode.Block)
-              .monopolizeEvents(true)
-              .backgroundColor(ButtonColor)
-              .onClick(() => this.gotoPreviousPage())
-              .alignRules(TopLeft)
-              .offset({
-                left: -(ButtonSizeW + StandardOffset)
-              })
-            Button(">")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .hitTestBehavior(HitTestMode.Block)
-              .monopolizeEvents(true)
-              .backgroundColor(ButtonColor)
-              .onClick(() => this.gotoNextPage())
-          }
-          .size(ButtonSize)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .visibility(this.isButtonPageTurn() ? Visibility.Visible : Visibility.None)
+          Button(">")
+            .fontSize(ButtonFontSize)
+            .fontWeight(FontWeight.Bold)
+            .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(ButtonColor)
+            .onClick(() => this.gotoNextPage())
+            .visibility(toVisibility(this.currentOperationMode == 'button'))
+
+          // Button('Debug')
+          //   .onClick(() => this.addHalfDiagonalPath())
+
 
         }.height('100%')
       }
