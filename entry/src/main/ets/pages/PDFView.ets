@@ -5,18 +5,23 @@ import { LengthMetricsUnit, LengthUnit, SymbolGlyphModifier, window } from '@kit
 import { preferences } from '@kit.ArkData';
 import app from '@system.app';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HashMap } from '@kit.ArkTS';
+import { HashMap, Stack } from '@kit.ArkTS';
 
-const ButtonColor: ResourceColor = `rgba(60, 60, 60, 0.7)`;
-const ButtonColorSemiTransparent: ResourceColor = 'rgba(60, 60, 60, 0.2)';
-const ButtonColorHighlight: ResourceColor = 'rgba(180, 180, 180, 0.9)';
-const TrackColor: ResourceColor = 'rgba(60, 60, 60, 0.4)';
+
+const BaseColor: ResourceColor = `rgba(50, 50, 50, 1)`;
+const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
+const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
+const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
+const TrackColor: ResourceColor = 'rgba(50, 50, 50, 0.4)';
 const StandardOffsetValue: number = 8;
 const StandardOffset: number = 8;
 const ButtonFontSize: Length = '20vp';
+const HalfButtonFontSize: Length = '10vp';
 const ButtonSizeH: number = 40;
 const ButtonSizeW: number = 80;
 const ButtonSize: SizeOptions = { height: ButtonSizeH, width: ButtonSizeW };
+const ButtonSizeWWide: number = 100;
+const ButtonSizeWide: SizeOptions = { height: ButtonSizeH, width: ButtonSizeWWide };
 const PageFlipButtonWidth: Length = '30%';
 const ScrollBarWidth: Length = '40vp';
 const CanvasOverSampling: number = 3;
@@ -25,6 +30,7 @@ const TopLeft: AlignRuleOption = {
   top: { anchor: '__container__', align: VerticalAlign.Top },
   left: { anchor: '__container__', align: HorizontalAlign.Start },
 };
+const DualPageSpacing: number = 5;
 const TopRight: AlignRuleOption = {
   top: { anchor: '__container__', align: VerticalAlign.Top },
   right: { anchor: '__container__', align: HorizontalAlign.End }
@@ -70,6 +76,12 @@ interface PDFViewPageMetrics {
   scale: Vector2;
 }
 
+interface History {
+  path: PathWithPoints;
+  mode: 'add' | 'erase';
+  pageIndex: number;
+}
+
 function toPos(value: Vector2): Position {
   return { x: `${value.x}px`, y: `${value.y}px` };
 }
@@ -95,6 +107,10 @@ function Float2(x: number, y: number): Vector2 {
   return { x: x, y: y };
 }
 
+const squareSymbol = $r('sys.symbol.square');
+const squareCheckedSymbol = $r('sys.symbol.checkmark_square_fill');
+
+
 @Entry
 @Component
 struct PDFView {
@@ -108,13 +124,24 @@ struct PDFView {
   private pages = new HashMap<number, PdfPage>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
-  private boxUnchecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
-  private boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.checkmark_square_fill')).fontColor([Color.White]).fontSize(16).fontWeight(FontWeight.Regular);
+  private boxUnchecked: SymbolGlyphModifier = new SymbolGlyphModifier(squareSymbol)
+    .fontColor([Color.White])
+    .fontSize(ButtonFontSize)
+    .fontWeight(FontWeight.Medium);
+  private boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier(squareCheckedSymbol)
+    .fontColor([Color.White])
+    .fontSize(ButtonFontSize)
+    .fontWeight(FontWeight.Medium);
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
+  private pathsToErase: Set<PathWithPoints> = new Set();
+  private undoHistory: Stack<History> = new Stack<History>();
+  private redoHistory: Stack<History> = new Stack<History>();
+  @State undoHistoryCount: number = 0;
+  @State redoHistoryCount: number = 0;
   @State pageCount: number = 0;
-  @State showControls: Visibility = Visibility.Visible;
+  @State showControls: boolean = true;
   @State currentOperationMode: OperationMode = OperationMode.SidePageTurn;
-  @State enableAnnotation: boolean = false;
+  @State currentDrawMode: 'add' | 'erase' | 'drag' = 'add';
   @State isInDualPageMode: boolean = false;
   @State isExclusiveFullScreen: boolean = false;
   @State leftPageMetrics: PDFViewPageMetrics = {
@@ -154,8 +181,8 @@ struct PDFView {
   }
 
   applyStrokeStyle(ctx: CanvasRenderingContext2D) {
-    ctx.strokeStyle = 'rgb(255,0,0)';
-    ctx.lineWidth = 2 * CanvasOverSampling;
+    ctx.strokeStyle = 'rgba(255, 132, 0, 1.00)';
+    ctx.lineWidth = 1 * CanvasOverSampling;
     ctx.lineCap = 'round';
   }
 
@@ -169,6 +196,80 @@ struct PDFView {
     const strokes = this.pageStrokes.get(pageIndex);
     this.applyStrokeStyle(ctx);
     strokes.forEach(stroke => ctx.stroke(stroke.path));
+  }
+
+  appendUndoHistory(history: History): void {
+    this.undoHistory.push(history);
+    this.undoHistoryCount = this.undoHistory.length;
+    while (!this.redoHistory.isEmpty()) this.redoHistory.pop();
+    this.redoHistoryCount = 0;
+  }
+
+  executeUndo(): void {
+    if (this.undoHistory.isEmpty()) {
+      return;
+    }
+    const history = this.undoHistory.pop();
+    this.undoHistoryCount = this.undoHistory.length;
+    if(this.currentPageStatus.pageIndex != history.pageIndex) {
+      this.setPageIndexAndGotoPage(history.pageIndex);
+    }
+    if (history.mode == 'add') {
+      if (this.pageStrokes.hasKey(history.pageIndex)) {
+        const strokes = this.pageStrokes.get(history.pageIndex);
+        const index = strokes.indexOf(history.path);
+        if (index >= 0) {
+          strokes.splice(index, 1);
+        }
+      }
+    } else if (history.mode == 'erase') {
+      if (!this.pageStrokes.hasKey(history.pageIndex)) {
+        this.pageStrokes.set(history.pageIndex, []);
+      }
+      this.pageStrokes.get(history.pageIndex).push(history.path);
+    }
+    this.redoHistory.push(history);
+    this.redoHistoryCount = this.redoHistory.length;
+    this.redraw();
+  }
+
+  executeRedo(): void {
+    if (this.redoHistory.isEmpty()) {
+      return;
+    }
+    const history = this.redoHistory.pop();
+    this.redoHistoryCount = this.redoHistory.length;
+    if(this.currentPageStatus.pageIndex != history.pageIndex) {
+      this.setPageIndexAndGotoPage(history.pageIndex);
+    }
+    if (history.mode == 'add') {
+      if (!this.pageStrokes.hasKey(history.pageIndex)) {
+        this.pageStrokes.set(history.pageIndex, []);
+      }
+      this.pageStrokes.get(history.pageIndex).push(history.path);
+    } else if (history.mode == 'erase') {
+      if (this.pageStrokes.hasKey(history.pageIndex)) {
+        const strokes = this.pageStrokes.get(history.pageIndex);
+        const index = strokes.indexOf(history.path);
+        if (index >= 0) {
+          strokes.splice(index, 1);
+        }
+      }
+    }
+    this.undoHistory.push(history);
+    this.undoHistoryCount = this.undoHistory.length;
+    this.redraw();
+  }
+
+  redraw(): void {
+    this.lctx.reset();
+    this.rctx.reset();
+    if (this.currentPageStatus.isDisplayingDualPage) {
+      this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
+      this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
+    } else {
+      this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
+    }
   }
 
   /**
@@ -185,24 +286,85 @@ struct PDFView {
       return;
     }
     const touchPoint = Float2(event.touches[0].x, event.touches[0].y);
-    if (event.type == TouchType.Down) {
-      this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
-      this.activeDrawPath.points.push(touchPoint);
-    } else if (event.type == TouchType.Move) {
-      this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
-      drawCtx.reset();
-      this.applyStrokeStyle(drawCtx);
-      drawCtx.stroke(this.activeDrawPath.path);
-      this.activeDrawPath.points.push(touchPoint);
-    } else if (event.type == TouchType.Up) {
-      this.activeDrawPath.points.push(touchPoint);
-      if (!this.pageStrokes.hasKey(pageIndex)) {
-        this.pageStrokes.set(pageIndex, []);
+
+    if (this.currentDrawMode == 'add') {
+      if (event.type == TouchType.Down) {
+        this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
+        this.activeDrawPath.points.push(touchPoint);
+      } else if (event.type == TouchType.Move) {
+        this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
+        drawCtx.reset();
+        this.applyStrokeStyle(drawCtx);
+        drawCtx.stroke(this.activeDrawPath.path);
+        this.activeDrawPath.points.push(touchPoint);
+      } else if (event.type == TouchType.Up) {
+        this.activeDrawPath.points.push(touchPoint);
+        if (!this.pageStrokes.hasKey(pageIndex)) {
+          this.pageStrokes.set(pageIndex, []);
+        }
+        this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+        this.appendUndoHistory({
+          path: this.activeDrawPath,
+          mode: 'add',
+          pageIndex: pageIndex
+        });
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        drawCtx.reset();
+        this.loadPageStrokes(targetCtx, pageIndex);
       }
-      this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
-      this.activeDrawPath = { path: new Path2D(), points: [] };
-      drawCtx.reset();
-      this.loadPageStrokes(targetCtx, pageIndex);
+    } else {
+      if (!this.pageStrokes.hasKey(pageIndex)) {
+        return;
+      }
+
+      const eraseThreshold = 20 * CanvasOverSampling;
+      const strokes = this.pageStrokes.get(pageIndex);
+
+      if (event.type == TouchType.Down) {
+        this.pathsToErase.clear();
+      }
+
+      if (event.type == TouchType.Down || event.type == TouchType.Move) {
+        for (const stroke of strokes) {
+          if (this.pathsToErase.has(stroke)) {
+            continue;
+          }
+          for (const point of stroke.points) {
+            const dx = touchPoint.x - point.x;
+            const dy = touchPoint.y - point.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance < eraseThreshold) {
+              this.pathsToErase.add(stroke);
+              break;
+            }
+          }
+        }
+
+        targetCtx.reset();
+        this.applyStrokeStyle(targetCtx);
+        for (const stroke of strokes) {
+          if (!this.pathsToErase.has(stroke)) {
+            targetCtx.stroke(stroke.path);
+          }
+        }
+      } else if (event.type == TouchType.Up) {
+        if (this.pathsToErase.size > 0) {
+          const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
+          this.pageStrokes.set(pageIndex, remainingStrokes);
+
+          this.pathsToErase.forEach(erasedPath => {
+            this.appendUndoHistory({
+              path: erasedPath,
+              mode: 'erase',
+              pageIndex: pageIndex
+            });
+          });
+
+          this.pathsToErase.clear();
+          targetCtx.reset();
+          this.loadPageStrokes(targetCtx, pageIndex);
+        }
+      }
     }
   }
 
@@ -231,23 +393,20 @@ struct PDFView {
       }
       this.currentPageStatus.leftPageIndex = leftPageIndex;
       this.currentPageStatus.rightPageIndex = rightPageIndex;
+      this.controller.setPageSpacing(DualPageSpacing, 0);
     } else {
       this.currentPageStatus.leftPageIndex = newPageIndex;
       this.currentPageStatus.rightPageIndex = -1;
+      this.controller.setPageSpacing(0, 0);
     }
   }
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => {
       this.updateCurrentPageStatus(newPageIndex);
-      this.lctx.reset();
-      this.rctx.reset();
-      if (this.currentPageStatus.isDisplayingDualPage) {
-        this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
-        this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
-      } else {
-        this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
-      }
+      this.controller.setPageFit(pdfService.PageFit.FIT_WIDTH);
+      this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
+      this.redraw();
     });
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     const systemPath = args['systemPath'];
@@ -376,17 +535,12 @@ struct PDFView {
         this.pageCount = this.controller.getPageCount();
         this.applyDualPageMode();
         this.updateCurrentPageStatus(0);
-        if (this.currentPageStatus.isDisplayingDualPage) {
-          this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
-          this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
-        } else {
-          this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
-        }
+        this.redraw();
       });
-    this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as Visibility;
+    this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as boolean;
     this.currentOperationMode =
       this.preferences.getSync('currentOperationMode', OperationMode.SidePageTurn) as OperationMode;
-    this.enableAnnotation = this.preferences.getSync('enableAnnotation', false) as boolean;
+    this.currentDrawMode = this.preferences.getSync('currentDrawMode', 'add') as 'add' | 'erase';
     this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
     this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
       statusType == window.WindowStatusType.FULL_SCREEN);
@@ -473,8 +627,8 @@ struct PDFView {
     this.preferences.flushSync();
   }
 
-  getCheckIcon(mode: OperationMode, enableAnnotation: boolean): SymbolGlyphModifier {
-    if (mode == this.currentOperationMode && enableAnnotation == this.enableAnnotation) {
+  getCheckIcon(mode: OperationMode): SymbolGlyphModifier {
+    if (mode == this.currentOperationMode) {
       return this.boxChecked;
     }
     return this.boxUnchecked;
@@ -496,17 +650,49 @@ struct PDFView {
 
       Button({ type: ButtonType.Normal })
         .size({ width: PageFlipButtonWidth, height: '100%' })
-        .backgroundColor('rgba(0, 0, 0, 0.02)')
         .onClick(() => this.gotoPreviousPage())
         .alignRules(TopLeft)
         .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .backgroundColor(Color.Transparent)
+
 
       Button({ type: ButtonType.Normal })
         .size({ width: PageFlipButtonWidth, height: '100%' })
-        .backgroundColor('rgba(0, 0, 0, 0.02)')
         .onClick(() => this.gotoNextPage())
         .alignRules(TopRight)
         .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .backgroundColor(Color.Transparent)
+
+      Image('')
+        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .alignRules(TopLeft)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .hitTestBehavior(HitTestMode.None)
+        .linearGradient({
+          direction: GradientDirection.Left,
+          colors: [
+            [Color.Transparent, 0],
+            ['rgba(0, 0, 0, 0.2)', 1]
+          ],
+          repeating: false
+        })
+
+      Image('')
+        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .alignRules(TopRight)
+        .visibility(this.isSidePageTurn() ? Visibility.Visible : Visibility.None)
+        .hitTestBehavior(HitTestMode.None)
+        .linearGradient({
+          direction: GradientDirection.Right,
+          colors: [
+            [Color.Transparent, 0],
+            ['rgba(0, 0, 0, 0.2)', 1]
+          ],
+          repeating: false
+        })
+
 
       //#endregion
 
@@ -528,21 +714,21 @@ struct PDFView {
         .visibility(toVisibility((this.currentPageStatus.isDisplayingDualPage)))
 
       Canvas(this.dlctx)
-        .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
+        .hitTestBehavior(HitTestMode.Block)
         .alignRules(TopLeft)
         .offset(toPos(this.leftPageMetrics.position))
         .size(toSize(this.leftPageMetrics.size))
         .scale(toScale(this.leftPageMetrics.scale))
-        .visibility(toVisibility(this.enableAnnotation))
+        .visibility(toVisibility(this.currentDrawMode !== 'drag'))
         .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.currentPageStatus.leftPageIndex, event))
 
       Canvas(this.drctx)
-        .hitTestBehavior(this.enableAnnotation ? HitTestMode.Block : HitTestMode.None)
+        .hitTestBehavior(HitTestMode.Block)
         .alignRules(TopLeft)
         .offset(toPos(this.rightPageMetrics.position))
         .size(toSize(this.rightPageMetrics.size))
         .scale(toScale(this.rightPageMetrics.scale))
-        .visibility(toVisibility(this.enableAnnotation && this.currentPageStatus.isDisplayingDualPage))
+        .visibility(toVisibility(this.currentDrawMode !== 'drag' && this.currentPageStatus.isDisplayingDualPage))
         .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.currentPageStatus.rightPageIndex, event))
 
       Row({ space: StandardOffset }) {
@@ -553,7 +739,7 @@ struct PDFView {
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
           }
-          .visibility(this.showControls)
+          .visibility(toVisibility(this.showControls))
           .onChange(isOn => {
             this.isInDualPageMode = isOn;
             this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
@@ -562,95 +748,90 @@ struct PDFView {
             this.updateCurrentPageStatus(this.currentPageStatus.pageIndex);
           })
           .size(ButtonSize)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
           .backgroundColor(ButtonColor)
           .selectedColor(ButtonColorHighlight)
 
           Button("模式")
-            .visibility(this.showControls)
+            .visibility(toVisibility(this.showControls))
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
             .backgroundColor(ButtonColor)
             .bindMenu([
               {
                 value: "屏侧翻页",
                 action: () => this.applyOperationMode(OperationMode.SidePageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.SidePageTurn, false)
+                symbolIcon: this.getCheckIcon(OperationMode.SidePageTurn)
               },
               {
                 value: "按钮翻页",
                 action: () => this.applyOperationMode(OperationMode.ButtonPageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn, false)
+                symbolIcon: this.getCheckIcon(OperationMode.ButtonPageTurn)
               },
               {
                 value: "外设翻页",
                 action: () => this.applyOperationMode(OperationMode.ExternalPageTurn),
-                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn, false)
+                symbolIcon: this.getCheckIcon(OperationMode.ExternalPageTurn)
               }
             ], {
               backgroundColor: ButtonColor,
               outlineColor: Color.Transparent
             })
 
-          Toggle({ type: ToggleType.Button, isOn: this.enableAnnotation }) {
-            Text("标注")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-          }
-          .visibility(this.showControls)
-          .onChange(isOn => {
-            this.enableAnnotation = isOn;
-            this.preferences.putSync('enableAnnotation', this.isInDualPageMode);
-            this.preferences.flushSync();
-          })
-          .size(ButtonSize)
-          .backgroundColor(ButtonColor)
-          .selectedColor(ButtonColorHighlight)
-
           Blank();
 
           Button("视口")
-            .visibility(this.showControls)
+            .visibility(toVisibility(this.showControls))
             .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
             .backgroundColor(ButtonColor)
 
           Button("首页")
-            .visibility(this.showControls)
+            .visibility(toVisibility(this.showControls))
             .onClick(() => this.gotoFirstPage())
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
             .backgroundColor(ButtonColor)
 
           Button("尾页")
-            .visibility(this.showControls)
+            .visibility(toVisibility(this.showControls))
             .onClick(() => this.gotoLastPage())
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
             .backgroundColor(ButtonColor)
 
-          Button(this.showControls == Visibility.Visible ? "收起" : "展开")
+          Button(this.showControls ? "收起" : "展开")
             .onClick(() => {
-              if (this.showControls == Visibility.Visible) {
-                this.showControls = Visibility.None;
-              } else {
-                this.showControls = Visibility.Visible;
-              }
+              this.showControls = !this.showControls;
               this.preferences.putSync('showControls', this.showControls);
               this.preferences.flushSync();
             })
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .size(ButtonSize)
-            .backgroundColor(this.showControls == Visibility.Visible ? ButtonColor : ButtonColorSemiTransparent)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(this.showControls ? ButtonColor : ButtonColorSemiTransparent)
 
         }.height('100%')
 
         Column({ space: StandardOffset }) {
+
+          Blank()
 
           Flex({
             direction: FlexDirection.Row,
@@ -662,33 +843,102 @@ struct PDFView {
             }
           }) {
 
-            Button("绘制")
+            Button() {
+              Text() {
+                Span("拖动")
+                  .fontColor(Color.White)
+                SymbolSpan(this.currentDrawMode == 'drag' ? squareCheckedSymbol : squareSymbol)
+                  .fontColor([Color.White])
+              }
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .backgroundColor(ButtonColor)
+            }
+            .size(ButtonSizeWide)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(this.currentDrawMode == 'drag' ? ButtonColorHighlight : ButtonColor)
+            .onClick(() => {
+              this.currentDrawMode = 'drag';
+              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+              this.preferences.flushSync();
+            })
 
-            Button("擦除")
+            Button() {
+              Text() {
+                Span("绘制")
+                  .fontColor(Color.White)
+                SymbolSpan(this.currentDrawMode == 'add' ? squareCheckedSymbol : squareSymbol)
+                  .fontColor([Color.White])
+              }
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .backgroundColor(ButtonColor)
+            }
+            .size(ButtonSizeWide)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(this.currentDrawMode == 'add' ? ButtonColorHighlight : ButtonColor)
+            .onClick(() => {
+              this.currentDrawMode = 'add';
+              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+              this.preferences.flushSync();
+            })
 
-            Button("撤回")
+            Button() {
+              Text() {
+                Span("擦除")
+                  .fontColor(Color.White)
+                SymbolSpan(this.currentDrawMode == 'erase' ? squareCheckedSymbol : squareSymbol)
+                  .fontColor([Color.White])
+              }
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .backgroundColor(ButtonColor)
+            }
+            .size(ButtonSizeWide)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
+            .backgroundColor(this.currentDrawMode == 'erase' ? ButtonColorHighlight : ButtonColor)
+            .onClick(() => {
+              this.currentDrawMode = 'erase';
+              this.preferences.putSync('currentDrawMode', this.currentDrawMode);
+              this.preferences.flushSync();
+            })
 
-            Button("重做")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSize)
-              .backgroundColor(ButtonColor)
+            Badge({
+              count: this.undoHistoryCount,
+              maxCount: 2147483647,
+              position: BadgePosition.RightTop,
+              style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
+            }) {
+              Button(`撤回`)
+                .fontSize(ButtonFontSize)
+                .fontWeight(FontWeight.Bold)
+                .size(ButtonSizeWide)
+                .hitTestBehavior(HitTestMode.Block)
+                .monopolizeEvents(true)
+                .backgroundColor(ButtonColor)
+                .onClick(() => this.executeUndo())
+            }
+            .size(ButtonSizeWide)
+
+            Badge({
+              count: this.redoHistoryCount,
+              maxCount: 2147483647,
+              position: BadgePosition.RightTop,
+              style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
+            }) {
+              Button(`重做`)
+                .fontSize(ButtonFontSize)
+                .fontWeight(FontWeight.Bold)
+                .size(ButtonSizeWide)
+                .hitTestBehavior(HitTestMode.Block)
+                .monopolizeEvents(true)
+                .backgroundColor(ButtonColor)
+                .onClick(() => this.executeRedo())
+            }
+            .size(ButtonSizeWide)
 
           }
           .align(Alignment.Center)
-          .visibility(toVisibility(this.enableAnnotation))
 
         }.height('100%').layoutWeight(1)
 
@@ -699,7 +949,7 @@ struct PDFView {
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
           }
-          .visibility((deviceInfo.deviceType == "phone" || this.showControls) ? Visibility.Hidden : Visibility.Visible)
+          .visibility((deviceInfo.deviceType == "phone" || !this.showControls) ? Visibility.Hidden : Visibility.Visible)
           .onChange(isOn => {
             if (isOn) {
               this.mainWindow.maximize();
@@ -708,6 +958,8 @@ struct PDFView {
             }
           })
           .size(ButtonSize)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
           .backgroundColor(ButtonColor)
           .selectedColor(ButtonColorHighlight)
           .alignSelf(ItemAlign.End)
@@ -723,7 +975,7 @@ struct PDFView {
             reverse: true
           })
             .monopolizeEvents(true)
-            .visibility(this.showControls)
+            .visibility(toVisibility(this.showControls && this.pageCount > 0))
             .showSteps(true)
             .showTips(true)
             .trackThickness(ScrollBarWidth)
@@ -740,6 +992,8 @@ struct PDFView {
 
           Text(`${this.currentPageStatus.pageIndex + 1}/${this.pageCount}`)
             .size(ButtonSize)
+            .hitTestBehavior(HitTestMode.Block)
+            .monopolizeEvents(true)
             .fontSize(ButtonFontSize)
             .fontWeight(FontWeight.Bold)
             .textShadow({
@@ -756,6 +1010,8 @@ struct PDFView {
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
               .size(ButtonSize)
+              .hitTestBehavior(HitTestMode.Block)
+              .monopolizeEvents(true)
               .backgroundColor(ButtonColor)
               .onClick(() => this.gotoPreviousPage())
               .alignRules(TopLeft)
@@ -766,10 +1022,14 @@ struct PDFView {
               .fontSize(ButtonFontSize)
               .fontWeight(FontWeight.Bold)
               .size(ButtonSize)
+              .hitTestBehavior(HitTestMode.Block)
+              .monopolizeEvents(true)
               .backgroundColor(ButtonColor)
               .onClick(() => this.gotoNextPage())
           }
           .size(ButtonSize)
+          .hitTestBehavior(HitTestMode.Block)
+          .monopolizeEvents(true)
           .visibility(this.isButtonPageTurn() ? Visibility.Visible : Visibility.None)
 
         }.height('100%')
