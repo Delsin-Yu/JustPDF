@@ -24,7 +24,7 @@ struct Index {
 
   async loadAndViewFile(uri: string) {
     let uiContext = this.getUIContext();
-    let dir = uiContext.getHostContext()!.filesDir;
+    let dir = uiContext.getHostContext()!.tempDir;
     let file = dir + "/temp.pdf";
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
