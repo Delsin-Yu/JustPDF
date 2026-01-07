@@ -334,6 +334,7 @@ struct PDFView {
         app.terminate();
         return;
       }
+      this.controller.setPageContinuous(false);
       this.controller.goToPage(this.currentPageStatus.pageIndex);
       this.redraw();
       this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
