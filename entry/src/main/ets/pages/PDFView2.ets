@@ -750,7 +750,13 @@ struct PDFView2 {
     this.redrawStrokes();
   }
 
-  executeSave(): void {
+  async executeSave(): Promise<void> {
+    // Preserve current view state to restore after save
+    const savedViewScale = this.viewScale;
+    const savedViewPan = Vec2(this.viewPan.x, this.viewPan.y);
+    const savedPageIndex = this.currentPageIndex;
+    const savedRenderScale = this.currentRenderScale;
+
     for (const pageIndex of this.pageStrokes.keys()) {
       const strokes = this.pageStrokes.get(pageIndex);
       if (pageIndex >= this.pages.length) {
@@ -821,7 +827,17 @@ struct PDFView2 {
     this.startBackgroundCaching();
     
     // Reload current page
-    this.gotoPage(this.currentPageIndex);
+    await this.gotoPage(savedPageIndex);
+    
+    // Restore view state after page reload to minimize user interruption
+    this.viewScale = savedViewScale;
+    this.viewPan = savedViewPan;
+    this.currentRenderScale = savedRenderScale;
+    this.clampViewPan();
+    
+    // Check if we need higher resolution render at the restored scale
+    this.checkAndUpdateRenderScale();
+    
     this.redrawStrokes();
   }
 
