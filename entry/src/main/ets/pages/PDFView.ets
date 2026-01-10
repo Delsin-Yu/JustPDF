@@ -1,35 +1,43 @@
-import { deviceInfo } from '@kit.BasicServicesKit';
-import { pdfService, PdfView, pdfViewManager } from '@kit.PDFKit';
-import { KeyCode } from '@kit.InputKit';
-import { display, LengthMetricsUnit, LengthUnit, SymbolGlyphModifier, window } from '@kit.ArkUI';
-import { preferences } from '@kit.ArkData';
-import app from '@system.app';
+import {
+  ButtonColor,
+  ButtonColorSemiTransparent,
+  getCheckIcon,
+  getCheckIconName,
+  MakeSlider,
+  StyleButton,
+  StyleNumBadgeButton,
+  StyleStrBadgeButton,
+  StyleText,
+  StyleToggle,
+  toVisibility
+} from './UIComponents';
+import { App, LengthMetricsUnit, window } from '@kit.ArkUI';
+import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HashMap, Stack } from '@kit.ArkTS';
+import { HashMap, Stack, taskpool } from '@kit.ArkTS';
+import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
+import { preferences } from '@kit.ArkData';
 
+// Render scale levels - minimum is 4 for clearer display, max 2 levels
+const RENDER_SCALE_LEVELS: number[] = [4, 8];
+const MIN_RENDER_SCALE: number = 4;
+// Threshold for switching to higher render scale (based on viewScale)
+const SCALE_THRESHOLDS: number[] = [2.0]; // Switch to 8x at 2.0x view scale
 
-const BaseColor: ResourceColor = `rgba(50, 50, 50, 1)`;
-const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
-const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
-const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
-const TrackColor: ResourceColor = 'rgba(50, 50, 50, 0.4)';
-const StandardOffset: number = 8;
-const ButtonFontSize: Length = '20vp';
-const HalfButtonFontSize: Length = '10vp';
-const ButtonSizeH: number = 40;
-const ButtonSizeW: number = 80;
-const ButtonSize: SizeOptions = { height: ButtonSizeH, width: ButtonSizeW };
-const ButtonSizeWWide: number = 90;
-const ButtonSizeWide: SizeOptions = { height: ButtonSizeH, width: ButtonSizeWWide };
-const PageFlipButtonWidth: Length = '30%';
-const ScrollBarWidth: Length = '40vp';
-const CanvasOverSampling: number = 3;
-const PdfViewId = 'pdfview_control';
+const ContainerSpacing: number = 8;
+const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
+// Delay in ms to ignore draw/erase touches after dual-finger gesture ends
+const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
+const ContainerPadding: Padding = {
+  left: `${ContainerSpacing}px`,
+  right: `${ContainerSpacing}px`,
+  top: `${ContainerSpacing}px`,
+  bottom: `${ContainerSpacing}px`
+}
 const TopLeft: AlignRuleOption = {
   top: { anchor: '__container__', align: VerticalAlign.Top },
   left: { anchor: '__container__', align: HorizontalAlign.Start },
 };
-const DualPageSpacing: number = 5;
 const TopRight: AlignRuleOption = {
   top: { anchor: '__container__', align: VerticalAlign.Top },
   right: { anchor: '__container__', align: HorizontalAlign.End }
@@ -40,33 +48,13 @@ const FullRect: AlignRuleOption = {
   'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
   'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
 }
-
-interface Vector2 {
-  x: number;
-  y: number;
-}
-
-interface PdfPage {
-  size: Vector2;
-  page: pdfService.PdfPage;
-}
+const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
+const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
+const CanvasOverSampling: number = 3;
 
 interface PathWithPoints {
   path: Path2D;
   points: Array<Vector2>;
-}
-
-interface PDFViewDisplayStatus {
-  pageIndex: number;
-  leftPageIndex: number;
-  rightPageIndex: number;
-  isDisplayingDualPage: boolean;
-}
-
-interface PDFViewPageMetrics {
-  position: Vector2;
-  size: Vector2;
-  scale: Vector2;
 }
 
 interface History {
@@ -75,122 +63,612 @@ interface History {
   pageIndex: number;
 }
 
-function toPos(value: Vector2): Position {
-  return { x: `${value.x}px`, y: `${value.y}px` };
-}
-
-function toSize(value: Vector2): SizeOptions {
-  return { width: `${value.x}px`, height: `${value.y}px` };
-}
-
-function toScale(value: Vector2): ScaleOptions {
-  return {
-    x: value.x,
-    y: value.y,
-    centerX: 0,
-    centerY: 0
-  };
-}
-
-function toVisibility(value: boolean): Visibility {
-  return value ? Visibility.Visible : Visibility.None;
-}
-
-function Float2(x: number, y: number): Vector2 {
-  return { x: x, y: y };
-}
-
-function clear<T>(stack: Stack<T>): void {
+function clearStack<T>(stack: Stack<T>): void {
   while (!stack.isEmpty()) {
     stack.pop();
   }
 }
 
-const squareSymbol = $r('sys.symbol.square');
-const squareCheckedSymbol = $r('sys.symbol.checkmark_square_fill');
+@Concurrent
+function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
+  const document = new pdfService.PdfDocument();
+  const result = document.loadDocument(sandboxPath);
+  if (result != pdfService.ParseResult.PARSE_SUCCESS) {
+    throw new Error(`Failed to load document: ${result}`);
+  }
 
+  const page = document.getPage(pageIndex);
+  const baseSize = Vec2(page.getWidth(), page.getHeight());
+  const renderSize = mul(baseSize, renderScale);
+  const matrix = new pdfService.PdfMatrix();
+  matrix.x = 0;
+  matrix.y = 0;
+  matrix.width = renderSize.x;
+  matrix.height = renderSize.y;
+  matrix.rotate = 0;
+  const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
+
+  // Display size is always at MIN_RENDER_SCALE (2) for consistent UI sizing
+  const displaySize = mul(baseSize, 2);
+
+  return {
+    page: page,
+    pixelMap: pixelMap,
+    renderScale: renderScale,
+    baseSize: baseSize,
+    displaySize: displaySize
+  };
+}
+
+interface PageCache {
+  page: pdfService.PdfPage;
+  pixelMap: PixelMap;
+  renderScale: number;
+  baseSize: Vector2;    // Original page size without scaling
+  displaySize: Vector2; // Size for UI display (always at MIN_RENDER_SCALE)
+}
+
+// Helper to create cache key for multi-level caching
+function makeCacheKey(pageIndex: number, renderScale: number): string {
+  return `${pageIndex}_${renderScale}`;
+}
 
 @Entry
 @Component
 struct PDFView {
-  private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
-  private settings: RenderingContextSettings = new RenderingContextSettings(true);
-  private lctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private rctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private dlctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private drctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private pageStrokes = new HashMap<number, Array<PathWithPoints>>();
-  private pageRawSizes = new HashMap<number, Vector2>();
-  private document = new pdfService.PdfDocument();
-  private pages = new HashMap<number, PdfPage>();
-  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  private systemPath = '';
+  private sandBoxPath = '';
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
-  private boxUnchecked: SymbolGlyphModifier = new SymbolGlyphModifier(squareSymbol)
-    .fontColor([Color.White])
-    .fontSize(ButtonFontSize)
-    .fontWeight(FontWeight.Medium);
-  private boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier(squareCheckedSymbol)
-    .fontColor([Color.White])
-    .fontSize(ButtonFontSize)
-    .fontWeight(FontWeight.Medium);
+  private document = new pdfService.PdfDocument();
+  private pages: Array<pdfService.PdfPage> = [];
+  // Multi-level cache: key is "pageIndex_renderScale"
+  private pageCache: HashMap<string, PageCache> = new HashMap<string, PageCache>();
+  private pendingTasks: HashMap<string, Promise<Object>> = new HashMap<string, Promise<Object>>();
+  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  // Track current render scale level for visible pages
+  private currentRenderScale: number = MIN_RENDER_SCALE;
+  // Track which pages are currently displayed
+  private displayedPageIndices: number[] = [];
+  @State view1PixelMap: PixelMap | undefined = undefined;
+  @State view2PixelMap: PixelMap | undefined = undefined;
+  @State view3PixelMap: PixelMap | undefined = undefined;
+  @State view2Visible: boolean = false;
+  @State view3Visible: boolean = false;
+  @State view1ViewSize: Vector2 = Vec2(0, 0);
+  @State view2ViewSize: Vector2 = Vec2(0, 0);
+  @State view3ViewSize: Vector2 = Vec2(0, 0);
+  @State viewSize: Vector2 = Vec2(0, 0);
+  @State currentPageIndex: number = 0;
+  @State totalPageCount: number = 0;
+  @State pageDisplayMode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' = 'single';
+  @State pageFlipMode: 'side' | 'button' | 'extern' = 'side';
+  @State annotateMode: 'drag' | 'draw' | 'erase' = 'drag';
+  @State viewPan: Vector2 = Vec2(0, 0);
+  @State viewScale: number = 1.0;
+  @State viewportSize: Vector2 = Vec2(0, 0);
+  @State showControls: boolean = true;
+  private lastTouchPoint: Vector2 | undefined = undefined;
+  private lastPinchDistance: number | undefined = undefined;
+  private lastPinchCenter: Vector2 | undefined = undefined;
+  private lastDualFingerEndTime: number = 0; // Timestamp when dual-finger gesture ended
+  private readonly minScale: number = 0.5;
+  private readonly maxScale: number = 9.0;
+  private settings: RenderingContextSettings = new RenderingContextSettings(true);
+  // Drawing/annotation state
+  private view1Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view2Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view3Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private pageStrokes: HashMap<number, Array<PathWithPoints>> = new HashMap<number, Array<PathWithPoints>>();
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
   private pathsToErase: Set<PathWithPoints> = new Set();
   private undoHistory: Stack<History> = new Stack<History>();
   private redoHistory: Stack<History> = new Stack<History>();
-  private systemPath = '';
-  private sandBoxPath = '';
   @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
-  @State pageCount: number = 0;
-  @State showControls: boolean = true;
-  @State currentOperationMode: 'side' | 'button' | 'extern' = 'side';
-  @State currentDrawMode: 'add' | 'erase' | 'drag' = 'add';
-  @State isInDualPageMode: boolean = false;
-  @State isExclusiveFullScreen: boolean = false;
-  @State leftPageMetrics: PDFViewPageMetrics = {
-    position: Float2(0, 0),
-    size: Float2(0, 0),
-    scale: Float2(0, 0)
-  };
-  @State rightPageMetrics: PDFViewPageMetrics = {
-    position: Float2(0, 0),
-    size: Float2(0, 0),
-    scale: Float2(0, 0)
-  };
-  @State viewScale: number = 0;
-  @State currentPageStatus: PDFViewDisplayStatus = {
-    pageIndex: 0,
-    leftPageIndex: 0,
-    rightPageIndex: 0,
-    isDisplayingDualPage: false
-  };
 
-  setPageIndexAndGotoPage(newIndex: number) {
-    if (this.currentPageStatus.pageIndex == newIndex) {
+  aboutToAppear(): void {
+    const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
+    this.systemPath = args['systemPath'];
+    this.sandBoxPath = args['sandboxPath'];
+    const result = this.document.loadDocument(this.sandBoxPath);
+    if (result != pdfService.ParseResult.PARSE_SUCCESS) {
+      hilog.error(0, 'PDFView', `Err on loading pdf file: ${result}`)
+      App.terminate();
       return;
     }
-    this.currentPageStatus.pageIndex = newIndex;
-    this.controller.goToPage(this.currentPageStatus.pageIndex);
-  }
+    this.totalPageCount = this.document.getPageCount();
 
-  /**
-   * @throws
-   */
-  getPdfPage(pageIndex: number): Nullable<PdfPage> {
-    if (this.pages.hasKey(pageIndex)) {
-      return this.pages.get(pageIndex);
+    for (let i = 0; i < this.totalPageCount; i++) {
+      const page = this.document.getPage(i);
+      this.pages.push(page);
     }
-    return undefined;
+
+    // Load preferences
+    this.showControls = this.preferences.getSync('showControls', true) as boolean;
+    this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+    this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
+    this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
+
+    this.gotoPage(0);
+    // Start background caching using TaskPool
+    this.startBackgroundCaching();
   }
 
-  applyStrokeStyle(ctx: CanvasRenderingContext2D) {
+  startBackgroundCaching(): void {
+    // Cache pages in the background at minimum scale with lower priority
+    for (let i = 0; i < this.totalPageCount; i++) {
+      const cacheKey = makeCacheKey(i, MIN_RENDER_SCALE);
+      if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
+        const task = new taskpool.Task(cachePage, this.sandBoxPath, i, MIN_RENDER_SCALE);
+        const promise = taskpool.execute(task, taskpool.Priority.LOW)
+          .then(pageCache => {
+            this.pageCache.set(cacheKey, pageCache as PageCache);
+            this.pendingTasks.remove(cacheKey);
+            hilog.info(0, 'PDFView', `Page ${i} cached at scale ${MIN_RENDER_SCALE}`);
+            return pageCache;
+          })
+          .catch((error: Error) => {
+            this.pendingTasks.remove(cacheKey);
+            hilog.error(0, 'PDFView', `Failed to cache page ${i}: ${error.message}`);
+            throw error;
+          });
+        this.pendingTasks.set(cacheKey, promise);
+      }
+    }
+  }
+
+  // Determine the appropriate render scale based on current view scale
+  getRenderScaleForViewScale(viewScale: number): number {
+    if (viewScale > SCALE_THRESHOLDS[0]) {
+      return RENDER_SCALE_LEVELS[1]; // 8x
+    }
+    return RENDER_SCALE_LEVELS[0]; // 4x (minimum)
+  }
+
+  // Check if current displayed pages need re-rendering at a different scale
+  async checkAndUpdateRenderScale(): Promise<void> {
+    const requiredScale = this.getRenderScaleForViewScale(this.viewScale);
+    
+    if (requiredScale !== this.currentRenderScale) {
+      hilog.info(0, 'PDFView', `Scale change detected: ${this.currentRenderScale} -> ${requiredScale}`);
+      this.currentRenderScale = requiredScale;
+      // Re-render currently displayed pages at new scale
+      await this.updateDisplayedPagesAtScale(requiredScale);
+    }
+  }
+
+  // Update displayed pages at the specified render scale
+  async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
+    for (const pageIndex of this.displayedPageIndices) {
+      const cache = await this.getPageCache(pageIndex, renderScale);
+      // Update the corresponding view's pixelMap
+      const displayIndex = this.displayedPageIndices.indexOf(pageIndex);
+      if (displayIndex === 0) {
+        this.view1PixelMap = cache.pixelMap;
+        this.view1ViewSize = cache.displaySize;
+      } else if (displayIndex === 1) {
+        this.view2PixelMap = cache.pixelMap;
+        this.view2ViewSize = cache.displaySize;
+      } else if (displayIndex === 2) {
+        this.view3PixelMap = cache.pixelMap;
+        this.view3ViewSize = cache.displaySize;
+      }
+    }
+    // Recalculate viewSize based on updated displaySizes
+    this.updateViewSize();
+  }
+
+  // Update the total viewSize based on current display mode and view sizes
+  updateViewSize(): void {
+    if (this.pageDisplayMode === 'single') {
+      this.viewSize = this.view1ViewSize;
+    } else if (this.view3Visible) {
+      this.viewSize = Vec2(
+        this.view1ViewSize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + this.view3ViewSize.x,
+        Math.max(this.view1ViewSize.y, this.view2ViewSize.y, this.view3ViewSize.y)
+      );
+    } else if (this.view2Visible) {
+      this.viewSize = Vec2(
+        this.view1ViewSize.x + ContainerSpacing + this.view2ViewSize.x,
+        Math.max(this.view1ViewSize.y, this.view2ViewSize.y)
+      );
+    } else {
+      this.viewSize = this.view1ViewSize;
+    }
+  }
+
+  async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
+    const cacheKey = makeCacheKey(targetIndex, renderScale);
+    
+    // If already cached at requested scale, return immediately
+    if (this.pageCache.hasKey(cacheKey)) {
+      return this.pageCache.get(cacheKey);
+    }
+
+    // If a task is pending for this exact key, wait for it
+    if (this.pendingTasks.hasKey(cacheKey)) {
+      return await this.pendingTasks.get(cacheKey) as PageCache;
+    }
+
+    // Check if we have a lower resolution version to return temporarily
+    // while we render the higher resolution in background
+    let fallbackCache: PageCache | undefined = undefined;
+    for (const scale of RENDER_SCALE_LEVELS) {
+      if (scale < renderScale) {
+        const fallbackKey = makeCacheKey(targetIndex, scale);
+        if (this.pageCache.hasKey(fallbackKey)) {
+          fallbackCache = this.pageCache.get(fallbackKey);
+        }
+      }
+    }
+
+    // Create a task for the requested render scale
+    const priority = renderScale === MIN_RENDER_SCALE 
+      ? taskpool.Priority.HIGH 
+      : taskpool.Priority.MEDIUM;
+    
+    const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex, renderScale);
+    const promise = taskpool.execute(task, priority)
+      .then(pageCache => {
+        this.pageCache.set(cacheKey, pageCache as PageCache);
+        this.pendingTasks.remove(cacheKey);
+        hilog.info(0, 'PDFView', `Page ${targetIndex} cached at scale ${renderScale}`);
+        return pageCache;
+      })
+      .catch((error: Error) => {
+        this.pendingTasks.remove(cacheKey);
+        hilog.error(0, 'PDFView', `Failed to cache page ${targetIndex} at scale ${renderScale}: ${error.message}`);
+        throw error;
+      });
+
+    this.pendingTasks.set(cacheKey, promise);
+    
+    // If we have a fallback, return it immediately and let the higher-res load in background
+    if (fallbackCache !== undefined) {
+      // Schedule an update when the high-res version is ready
+      promise.then((highResCache) => {
+        // Update the displayed pixelMap if this page is still visible
+        if (this.displayedPageIndices.includes(targetIndex)) {
+          const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
+          const cache = highResCache as PageCache;
+          if (displayIndex === 0) {
+            this.view1PixelMap = cache.pixelMap;
+          } else if (displayIndex === 1) {
+            this.view2PixelMap = cache.pixelMap;
+          } else if (displayIndex === 2) {
+            this.view3PixelMap = cache.pixelMap;
+          }
+        }
+      });
+      return fallbackCache;
+    }
+    
+    return await promise as PageCache;
+  }
+
+  async gotoPage(targetIndex: number): Promise<void> {
+    if (targetIndex < 0 || targetIndex >= this.totalPageCount) {
+      return;
+    }
+
+    this.currentPageIndex = targetIndex;
+    // Reset render scale when navigating to new page
+    this.currentRenderScale = MIN_RENDER_SCALE;
+
+    if (this.pageDisplayMode === 'single') {
+      this.displayedPageIndices = [targetIndex];
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
+      this.view1PixelMap = view1Page.pixelMap;
+      this.view1ViewSize = view1Page.displaySize;
+      this.view2PixelMap = undefined;
+      this.view3PixelMap = undefined;
+      this.view2Visible = false;
+      this.view3Visible = false;
+      this.viewSize = view1Page.displaySize;
+    } else if (this.pageDisplayMode === 'dual') {
+      let index1: number;
+      let index2: number | undefined;
+
+      if (targetIndex % 2 === 0) {
+        index1 = targetIndex;
+        index2 = targetIndex + 1 < this.totalPageCount ? targetIndex + 1 : undefined;
+      } else {
+        index1 = targetIndex - 1;
+        index2 = targetIndex;
+      }
+
+      this.displayedPageIndices = index2 !== undefined ? [index1, index2] : [index1];
+      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
+      this.view1PixelMap = view1Page.pixelMap;
+      this.view1ViewSize = view1Page.displaySize;
+
+      if (index2 !== undefined) {
+        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
+        this.view2PixelMap = view2Page.pixelMap;
+        this.view2ViewSize = view2Page.displaySize;
+        this.view2Visible = true;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
+        );
+      } else {
+        this.view2PixelMap = undefined;
+        this.view2Visible = false;
+        this.viewSize = view1Page.displaySize;
+      }
+      this.view3PixelMap = undefined;
+      this.view3Visible = false;
+    } else if (this.pageDisplayMode === 'dualContinuous') {
+      this.displayedPageIndices = targetIndex + 1 < this.totalPageCount 
+        ? [targetIndex, targetIndex + 1] 
+        : [targetIndex];
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
+      this.view1PixelMap = view1Page.pixelMap;
+      this.view1ViewSize = view1Page.displaySize;
+
+      if (targetIndex + 1 < this.totalPageCount) {
+        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
+        this.view2PixelMap = view2Page.pixelMap;
+        this.view2ViewSize = view2Page.displaySize;
+        this.view2Visible = true;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
+        );
+      } else {
+        this.view2PixelMap = undefined;
+        this.view2Visible = false;
+        this.viewSize = view1Page.displaySize;
+      }
+      this.view3PixelMap = undefined;
+      this.view3Visible = false;
+    } else if (this.pageDisplayMode === 'tri') {
+      let index1: number;
+      let index2: number | undefined;
+      let index3: number | undefined;
+
+      const groupIndex = Math.floor(targetIndex / 3);
+      index1 = groupIndex * 3;
+      index2 = index1 + 1 < this.totalPageCount ? index1 + 1 : undefined;
+      index3 = index1 + 2 < this.totalPageCount ? index1 + 2 : undefined;
+
+      this.displayedPageIndices = [index1];
+      if (index2 !== undefined) this.displayedPageIndices.push(index2);
+      if (index3 !== undefined) this.displayedPageIndices.push(index3);
+
+      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
+      this.view1PixelMap = view1Page.pixelMap;
+      this.view1ViewSize = view1Page.displaySize;
+
+      if (index2 !== undefined) {
+        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
+        this.view2PixelMap = view2Page.pixelMap;
+        this.view2ViewSize = view2Page.displaySize;
+        this.view2Visible = true;
+      } else {
+        this.view2PixelMap = undefined;
+        this.view2Visible = false;
+      }
+
+      if (index3 !== undefined) {
+        const view3Page = await this.getPageCache(index3, this.currentRenderScale);
+        this.view3PixelMap = view3Page.pixelMap;
+        this.view3ViewSize = view3Page.displaySize;
+        this.view3Visible = true;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
+        );
+      } else {
+        this.view3PixelMap = undefined;
+        this.view3Visible = false;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + (index2 !== undefined ? ContainerSpacing + this.view2ViewSize.x : 0),
+          Math.max(view1Page.displaySize.y, index2 !== undefined ? this.view2ViewSize.y : 0)
+        );
+      }
+    } else if (this.pageDisplayMode === 'triContinuous') {
+      this.displayedPageIndices = [targetIndex];
+      if (targetIndex + 1 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 1);
+      if (targetIndex + 2 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 2);
+
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
+      this.view1PixelMap = view1Page.pixelMap;
+      this.view1ViewSize = view1Page.displaySize;
+
+      if (targetIndex + 1 < this.totalPageCount) {
+        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
+        this.view2PixelMap = view2Page.pixelMap;
+        this.view2ViewSize = view2Page.displaySize;
+        this.view2Visible = true;
+      } else {
+        this.view2PixelMap = undefined;
+        this.view2Visible = false;
+      }
+
+      if (targetIndex + 2 < this.totalPageCount) {
+        const view3Page = await this.getPageCache(targetIndex + 2, this.currentRenderScale);
+        this.view3PixelMap = view3Page.pixelMap;
+        this.view3ViewSize = view3Page.displaySize;
+        this.view3Visible = true;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
+        );
+      } else {
+        this.view3PixelMap = undefined;
+        this.view3Visible = false;
+        this.viewSize = Vec2(
+          view1Page.displaySize.x + (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
+          Math.max(view1Page.displaySize.y, targetIndex + 1 < this.totalPageCount ? this.view2ViewSize.y : 0)
+        );
+      }
+    }
+
+    // Reset view to fit content in viewport
+    this.resetViewToFit();
+    this.redrawStrokes();
+  }
+
+  resetViewToFit(): void {
+    // Calculate appropriate scale to fit content in viewport
+    this.viewScale = this.calculateFitScale();
+    // Reset pan and clamp to ensure content is properly positioned
+    this.viewPan = Vec2(0, 0);
+    this.clampViewPan();
+  }
+
+  calculateFitScale(): number {
+    // viewSize is in px units, viewportSize is in px units
+    // Calculate scale that fits content within viewport while maintaining aspect ratio
+    const uiContext = this.getUIContext();
+    const viewSizeVp = pxToVp(this.viewSize, uiContext);
+    const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
+
+    // Avoid division by zero
+    if (viewSizeVp.x <= 0 || viewSizeVp.y <= 0 || viewportSizeVp.x <= 0 || viewportSizeVp.y <= 0) {
+      return 1.0;
+    }
+
+    // Calculate scale factors for both dimensions
+    const scaleX = viewportSizeVp.x / viewSizeVp.x;
+    const scaleY = viewportSizeVp.y / viewSizeVp.y;
+
+    // Use the smaller scale to ensure content fits entirely within viewport
+    const fitScale = Math.min(scaleX, scaleY);
+
+    // Clamp to min/max scale limits
+    return Math.max(this.minScale, Math.min(this.maxScale, fitScale));
+  }
+
+  setPageDisplayMode(value: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous'): void {
+    this.pageDisplayMode = value;
+    this.gotoPage(this.currentPageIndex);
+    try {
+      this.preferences.putSync('pageDisplayMode', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving page display mode: ${error}.`);
+    }
+  }
+
+  setPageFlipMode(value: 'side' | 'button' | 'extern'): void {
+    this.pageFlipMode = value;
+    try {
+      this.preferences.putSync('pageFlipMode', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving page flip mode: ${error}.`);
+    }
+  }
+
+  setAnnotateMode(value: 'drag' | 'draw' | 'erase'): void {
+    this.annotateMode = value;
+    try {
+      this.preferences.putSync('annotateMode', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving annotation mode: ${error}.`);
+    }
+  }
+
+  setShowControls(value: boolean): void {
+    this.showControls = value;
+    try {
+      this.preferences.putSync('showControls', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving show controls: ${error}.`);
+    }
+  }
+
+  gotoPrevPage(): void {
+    if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
+      this.pageDisplayMode === 'triContinuous') {
+      // Navigate one page back
+      this.gotoPage(this.currentPageIndex - 1);
+    } else if (this.pageDisplayMode === 'dual') {
+      // Navigate to previous pair's left page
+      const currentPair = Math.floor(this.currentPageIndex / 2);
+      const prevPairLeftIndex = Math.max(0, (currentPair - 1) * 2);
+      this.gotoPage(prevPairLeftIndex);
+    } else if (this.pageDisplayMode === 'tri') {
+      // Navigate to previous group's first page
+      const currentGroup = Math.floor(this.currentPageIndex / 3);
+      const prevGroupFirstIndex = Math.max(0, (currentGroup - 1) * 3);
+      this.gotoPage(prevGroupFirstIndex);
+    }
+  }
+
+  gotoNextPage(): void {
+    if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
+      this.pageDisplayMode === 'triContinuous') {
+      // Navigate one page forward
+      this.gotoPage(this.currentPageIndex + 1);
+    } else if (this.pageDisplayMode === 'dual') {
+      // Navigate to next pair's left page
+      const currentPair = Math.floor(this.currentPageIndex / 2);
+      const nextPairLeftIndex = (currentPair + 1) * 2;
+      this.gotoPage(nextPairLeftIndex);
+    } else if (this.pageDisplayMode === 'tri') {
+      // Navigate to next group's first page
+      const currentGroup = Math.floor(this.currentPageIndex / 3);
+      const nextGroupFirstIndex = (currentGroup + 1) * 3;
+      this.gotoPage(nextGroupFirstIndex);
+    }
+  }
+
+  clampViewPan(): void {
+    // viewPan is in vp units (used by offset() and touch events)
+    // viewSize and viewportSize are in px units
+    // Convert px to vp for comparison using px2vp
+    const uiContext = this.getUIContext();
+    const viewSizeVp = pxToVp(this.viewSize, uiContext);
+    const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
+
+    // Account for scaling - the actual displayed size is viewSize * viewScale
+    const scaledViewSizeVp = mul(viewSizeVp, this.viewScale);
+
+    // If content is smaller than viewport, center it
+    // If content is larger than viewport, allow scrolling but clamp to boundaries
+    let clampedX = this.viewPan.x;
+    let clampedY = this.viewPan.y;
+
+    if (scaledViewSizeVp.x <= viewportSizeVp.x) {
+      // Content fits horizontally - center it
+      clampedX = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
+    } else {
+      // Content is larger - clamp to boundaries
+      const minX = -(scaledViewSizeVp.x - viewportSizeVp.x);
+      const maxX = 0;
+      clampedX = Math.max(minX, Math.min(maxX, this.viewPan.x));
+    }
+
+    if (scaledViewSizeVp.y <= viewportSizeVp.y) {
+      // Content fits vertically - center it
+      clampedY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
+    } else {
+      // Content is larger - clamp to boundaries
+      const minY = -(scaledViewSizeVp.y - viewportSizeVp.y);
+      const maxY = 0;
+      clampedY = Math.max(minY, Math.min(maxY, this.viewPan.y));
+    }
+
+    this.viewPan = Vec2(clampedX, clampedY);
+  }
+
+  // Drawing/annotation methods
+  applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
     ctx.strokeStyle = 'rgba(255, 132, 0, 1.00)';
     ctx.lineWidth = 1 * CanvasOverSampling;
     ctx.lineCap = 'round';
   }
 
-  updateUnsavedStrokesFlag() {
+  updateUnsavedStrokesFlag(): void {
     for (const pageIndex of this.pageStrokes.keys()) {
       const strokes = this.pageStrokes.get(pageIndex);
       if (strokes.length > 0) {
@@ -201,10 +679,7 @@ struct PDFView {
     this.hasUnsavedStrokes = false;
   }
 
-  /**
-   * @throws
-   */
-  loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number) {
+  loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
     if (!this.pageStrokes.hasKey(pageIndex)) {
       return;
     }
@@ -216,7 +691,7 @@ struct PDFView {
   appendUndoHistory(history: History): void {
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
-    clear(this.redoHistory);
+    clearStack(this.redoHistory);
     this.redoHistoryCount = 0;
   }
 
@@ -226,10 +701,14 @@ struct PDFView {
     }
     const history = this.undoHistory.pop();
     this.undoHistoryCount = this.undoHistory.length;
-    if(this.currentPageStatus.pageIndex != history.pageIndex) {
-      this.setPageIndexAndGotoPage(history.pageIndex);
+    
+    // Navigate to the page if needed
+    if (this.currentPageIndex !== history.pageIndex) {
+      this.gotoPage(history.pageIndex);
     }
-    if (history.mode == 'add') {
+    
+    if (history.mode === 'add') {
+      // Undo an add: remove the stroke
       if (this.pageStrokes.hasKey(history.pageIndex)) {
         const strokes = this.pageStrokes.get(history.pageIndex);
         const index = strokes.indexOf(history.path);
@@ -237,16 +716,18 @@ struct PDFView {
           strokes.splice(index, 1);
         }
       }
-    } else if (history.mode == 'erase') {
+    } else if (history.mode === 'erase') {
+      // Undo an erase: restore the stroke
       if (!this.pageStrokes.hasKey(history.pageIndex)) {
         this.pageStrokes.set(history.pageIndex, []);
       }
       this.pageStrokes.get(history.pageIndex).push(history.path);
     }
+    
     this.redoHistory.push(history);
     this.redoHistoryCount = this.redoHistory.length;
     this.updateUnsavedStrokesFlag();
-    this.redraw();
+    this.redrawStrokes();
   }
 
   executeRedo(): void {
@@ -255,15 +736,20 @@ struct PDFView {
     }
     const history = this.redoHistory.pop();
     this.redoHistoryCount = this.redoHistory.length;
-    if(this.currentPageStatus.pageIndex != history.pageIndex) {
-      this.setPageIndexAndGotoPage(history.pageIndex);
+    
+    // Navigate to the page if needed
+    if (this.currentPageIndex !== history.pageIndex) {
+      this.gotoPage(history.pageIndex);
     }
-    if (history.mode == 'add') {
+    
+    if (history.mode === 'add') {
+      // Redo an add: add the stroke back
       if (!this.pageStrokes.hasKey(history.pageIndex)) {
         this.pageStrokes.set(history.pageIndex, []);
       }
       this.pageStrokes.get(history.pageIndex).push(history.path);
-    } else if (history.mode == 'erase') {
+    } else if (history.mode === 'erase') {
+      // Redo an erase: remove the stroke again
       if (this.pageStrokes.hasKey(history.pageIndex)) {
         const strokes = this.pageStrokes.get(history.pageIndex);
         const index = strokes.indexOf(history.path);
@@ -272,113 +758,159 @@ struct PDFView {
         }
       }
     }
+    
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
     this.updateUnsavedStrokesFlag();
-    this.redraw();
+    this.redrawStrokes();
   }
 
-  executeSave(): void {
+  async executeSave(): Promise<void> {
+    // Preserve current view state to restore after save
+    const savedViewScale = this.viewScale;
+    const savedViewPan = Vec2(this.viewPan.x, this.viewPan.y);
+    const savedPageIndex = this.currentPageIndex;
+    const savedRenderScale = this.currentRenderScale;
+
     for (const pageIndex of this.pageStrokes.keys()) {
       const strokes = this.pageStrokes.get(pageIndex);
-      const pdfPage = this.getPdfPage(pageIndex);
-      if (pdfPage == null) {
+      if (pageIndex >= this.pages.length) {
         continue;
       }
-      const pdfPageSize = pdfPage.size;
-      const pdfRawPageSize = this.pageRawSizes.get(pageIndex);
-      if (pdfRawPageSize == undefined) {
-        continue;
-      }
+      const pdfPage = this.pages[pageIndex];
+      const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
+
+      // Touch events return coordinates in the canvas's native coordinate space (vp units)
+      // Canvas native size = pdfPageSize * CanvasOverSampling (in px), convert to vp
+      const uiContext = this.getUIContext();
+      const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
+      const canvasSizeVp = Vec2(
+        uiContext.px2vp(canvasSizePx.x),
+        uiContext.px2vp(canvasSizePx.y)
+      );
+
       for (const stroke of strokes) {
-        let annotationInfo = new pdfService.InkAnnotationInfo();
+        const annotationInfo = new pdfService.InkAnnotationInfo();
         annotationInfo.lineColor = 0xFFCA1A1A;
 
-        // Transform stroke points from canvas coordinates to PDF coordinates
+        // Transform stroke points from canvas native coordinates (vp) to PDF coordinates
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
-          let transformedPoint = Float2(
-            (point.x / pdfRawPageSize.x) * pdfPageSize.x,
-            (1 - point.y / pdfRawPageSize.y) * pdfPageSize.y
+          const transformedPoint = Vec2(
+            (point.x / canvasSizeVp.x) * pdfPageSize.x,
+            (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
           );
           transformedPoints.push(transformedPoint);
-        };
+        }
         annotationInfo.inkPoints = transformedPoints;
-        pdfPage.page.addAnnotation(annotationInfo);
-      };
-    };
+        pdfPage.addAnnotation(annotationInfo);
+      }
+    }
+    
+    // Clear strokes and history
     this.pageStrokes.clear();
-    clear(this.undoHistory);
-    clear(this.redoHistory);
+    clearStack(this.undoHistory);
+    clearStack(this.redoHistory);
     this.undoHistoryCount = 0;
     this.redoHistoryCount = 0;
     this.hasUnsavedStrokes = false;
 
-    let pageCount = this.document.getPageCount();
-    for (let index = 0; index < pageCount; index++) {
-      let page = this.document.getPage(index);
-      let annotations = page.getAnnotations();
-      annotations.forEach(annotation => {
-        hilog.info(0, 'PDFView', `Annotation on page ${index}: type=${annotation.type}`);
-      });
-    }
-
-    let success = this.document.saveDocument(this.sandBoxPath); //TODO: Error Handling
+    // Save the document
+    const success = this.document.saveDocument(this.sandBoxPath);
     if (!success) {
-      hilog.error(0, 'PDFView', `Err on saving pdf file`)
+      hilog.error(0, 'PDFView', 'Error saving PDF file');
+      return;
     }
-    this.controller.releaseDocument();
-    this.controller.loadDocument(this.sandBoxPath).then(result => {
-      if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-        hilog.error(0, 'PDFView', `Err on re-loading pdf file: ${result}`)
-        app.terminate();
-        return;
+    
+    // Clear page cache and reload
+    this.pageCache.clear();
+    this.pages = [];
+    
+    const result = this.document.loadDocument(this.sandBoxPath);
+    if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
+      hilog.error(0, 'PDFView', `Error re-loading PDF file: ${result}`);
+      App.terminate();
+      return;
+    }
+    
+    for (let i = 0; i < this.totalPageCount; i++) {
+      const page = this.document.getPage(i);
+      this.pages.push(page);
+    }
+    
+    // Start background caching again
+    this.startBackgroundCaching();
+    
+    // Reload current page
+    await this.gotoPage(savedPageIndex);
+    
+    // Restore view state after page reload to minimize user interruption
+    this.viewScale = savedViewScale;
+    this.viewPan = savedViewPan;
+    this.currentRenderScale = savedRenderScale;
+    this.clampViewPan();
+    
+    // Check if we need higher resolution render at the restored scale
+    this.checkAndUpdateRenderScale();
+    
+    this.redrawStrokes();
+  }
+
+  redrawStrokes(): void {
+    // Clear and redraw strokes for all visible canvases
+    this.view1Ctx.reset();
+    this.view2Ctx.reset();
+    this.view3Ctx.reset();
+    this.view1DrawCtx.reset();
+    this.view2DrawCtx.reset();
+    this.view3DrawCtx.reset();
+    
+    // Load strokes for displayed pages
+    for (let i = 0; i < this.displayedPageIndices.length; i++) {
+      const pageIndex = this.displayedPageIndices[i];
+      if (i === 0) {
+        this.loadPageStrokes(this.view1Ctx, pageIndex);
+      } else if (i === 1) {
+        this.loadPageStrokes(this.view2Ctx, pageIndex);
+      } else if (i === 2) {
+        this.loadPageStrokes(this.view3Ctx, pageIndex);
       }
-      this.controller.setPageContinuous(false);
-      this.controller.goToPage(this.currentPageStatus.pageIndex);
-      this.redraw();
-      this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
-    });
-  }
-
-  redraw(): void {
-    this.lctx.reset();
-    this.rctx.reset();
-    if (this.currentPageStatus.isDisplayingDualPage) {
-      this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
-      this.loadPageStrokes(this.rctx, this.currentPageStatus.rightPageIndex);
-    } else {
-      this.loadPageStrokes(this.lctx, this.currentPageStatus.leftPageIndex);
     }
   }
 
-  // addHalfDiagonalPath(): void {
-  //
-  //   let rawPageSize = this.pageRawSizes.get(this.currentPageStatus.leftPageIndex);
-  //   const leftPageCenterX = rawPageSize.x / 2;
-  //   const leftPageCenterY = rawPageSize.y / 2;
-  //   this.activeDrawPath.path.moveTo(0, 0);
-  //   this.activeDrawPath.path.lineTo(leftPageCenterX, leftPageCenterY);
-  //   this.activeDrawPath.points.push(Float2(0, 0));
-  //   this.activeDrawPath.points.push(Float2(leftPageCenterX, leftPageCenterY));
-  //   // Then add it to the current page's strokes and undo history
-  //   if (!this.pageStrokes.hasKey(this.currentPageStatus.leftPageIndex)) {
-  //     this.pageStrokes.set(this.currentPageStatus.leftPageIndex, []);
-  //   }
-  //   this.pageStrokes.get(this.currentPageStatus.leftPageIndex).push(this.activeDrawPath);
-  //   this.appendUndoHistory({
-  //     path: this.activeDrawPath,
-  //     mode: 'add',
-  //     pageIndex: this.currentPageStatus.leftPageIndex
-  //   });
-  //   this.activeDrawPath = { path: new Path2D(), points: [] };
-  //   this.updateUnsavedStrokesFlag();
-  //   this.redraw();
-  // }
+  getCanvasSize(pageIndex: number): Vector2 {
+    if (pageIndex >= this.pages.length) {
+      return Vec2(0, 0);
+    }
+    const page = this.pages[pageIndex];
+    return Vec2(page.getWidth() * CanvasOverSampling, page.getHeight() * CanvasOverSampling);
+  }
 
-  /**
-   * @throws
-   */
+  getCanvasScale(viewIndex: number): ScaleOptions {
+    // Get the view size (display size) and canvas size to calculate scale
+    let viewSize: Vector2;
+    if (viewIndex === 0) {
+      viewSize = this.view1ViewSize;
+    } else if (viewIndex === 1) {
+      viewSize = this.view2ViewSize;
+    } else {
+      viewSize = this.view3ViewSize;
+    }
+    
+    const pageIndex = this.displayedPageIndices[viewIndex] ?? 0;
+    const canvasSize = this.getCanvasSize(pageIndex);
+    
+    if (canvasSize.x === 0 || canvasSize.y === 0) {
+      return { x: 1, y: 1, centerX: 0, centerY: 0 };
+    }
+    
+    // Scale canvas down from CanvasOverSampling size to display size
+    const scaleX = viewSize.x / canvasSize.x;
+    const scaleY = viewSize.y / canvasSize.y;
+    
+    return { x: scaleX, y: scaleY, centerX: 0, centerY: 0 };
+  }
+
   handleDrawTouch(
     drawCtx: CanvasRenderingContext2D,
     targetCtx: CanvasRenderingContext2D,
@@ -389,19 +921,32 @@ struct PDFView {
     if (!isSingleTouch) {
       return;
     }
-    const touchPoint = Float2(event.touches[0].x, event.touches[0].y);
 
-    if (this.currentDrawMode == 'add') {
-      if (event.type == TouchType.Down) {
+    // Protection: ignore touch events shortly after dual-finger gesture ends
+    // This prevents accidental draw/erase when lifting one finger from pinch
+    const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
+    if (timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
+      // Reset active drawing state if we were in the middle of drawing
+      if (this.activeDrawPath.points.length > 0) {
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        drawCtx.reset();
+      }
+      return;
+    }
+
+    const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
+
+    if (this.annotateMode === 'draw') {
+      if (event.type === TouchType.Down) {
         this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
         this.activeDrawPath.points.push(touchPoint);
-      } else if (event.type == TouchType.Move) {
+      } else if (event.type === TouchType.Move) {
         this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
         drawCtx.reset();
         this.applyStrokeStyle(drawCtx);
         drawCtx.stroke(this.activeDrawPath.path);
         this.activeDrawPath.points.push(touchPoint);
-      } else if (event.type == TouchType.Up) {
+      } else if (event.type === TouchType.Up) {
         this.activeDrawPath.points.push(touchPoint);
         if (!this.pageStrokes.hasKey(pageIndex)) {
           this.pageStrokes.set(pageIndex, []);
@@ -417,7 +962,7 @@ struct PDFView {
         this.updateUnsavedStrokesFlag();
         this.loadPageStrokes(targetCtx, pageIndex);
       }
-    } else {
+    } else if (this.annotateMode === 'erase') {
       if (!this.pageStrokes.hasKey(pageIndex)) {
         return;
       }
@@ -425,11 +970,11 @@ struct PDFView {
       const eraseThreshold = 20 * CanvasOverSampling;
       const strokes = this.pageStrokes.get(pageIndex);
 
-      if (event.type == TouchType.Down) {
+      if (event.type === TouchType.Down) {
         this.pathsToErase.clear();
       }
 
-      if (event.type == TouchType.Down || event.type == TouchType.Move) {
+      if (event.type === TouchType.Down || event.type === TouchType.Move) {
         for (const stroke of strokes) {
           if (this.pathsToErase.has(stroke)) {
             continue;
@@ -452,7 +997,7 @@ struct PDFView {
             targetCtx.stroke(stroke.path);
           }
         }
-      } else if (event.type == TouchType.Up) {
+      } else if (event.type === TouchType.Up) {
         if (this.pathsToErase.size > 0) {
           const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
           this.pageStrokes.set(pageIndex, remainingStrokes);
@@ -474,324 +1019,180 @@ struct PDFView {
     }
   }
 
-  updateCurrentPageStatus(newPageIndex: number): void {
-    this.currentPageStatus.pageIndex = newPageIndex;
-    let isDualPageMode = this.isInDualPageMode;
-    const pageIndexIsLastPage = newPageIndex == this.pageCount - 1;
-    if (isDualPageMode && (pageIndexIsLastPage || newPageIndex == this.pageCount - 2)) {
-      isDualPageMode = this.pageCount % 2 == 0;
-    }
-    this.currentPageStatus.isDisplayingDualPage = isDualPageMode;
-    if (isDualPageMode) {
-      let leftPageIndex = 0;
-      let rightPageIndex = 0;
-      if (pageIndexIsLastPage) {
-        leftPageIndex = newPageIndex - 1;
-        rightPageIndex = newPageIndex;
-      } else {
-        if (newPageIndex % 2 == 0) {
-          leftPageIndex = newPageIndex;
-          rightPageIndex = newPageIndex + 1;
-        } else {
-          leftPageIndex = newPageIndex - 1;
-          rightPageIndex = newPageIndex;
-        }
+  handleViewAction(event: TouchEvent): void {
+    const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
+    const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
+
+    if (isSingleTouch) {
+      // Only handle single-touch panning in drag mode
+      if (this.annotateMode !== 'drag') {
+        return;
       }
-      this.currentPageStatus.leftPageIndex = leftPageIndex;
-      this.currentPageStatus.rightPageIndex = rightPageIndex;
-      this.controller.setPageSpacing(DualPageSpacing, 0);
+      const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
+      // Drag the view (this.viewPan)
+      if (event.type == TouchType.Down) {
+        this.lastTouchPoint = touchPoint;
+      } else if (event.type == TouchType.Move) {
+        if (this.lastTouchPoint !== undefined) {
+          const delta = Vec2(
+            touchPoint.x - this.lastTouchPoint.x,
+            touchPoint.y - this.lastTouchPoint.y
+          );
+          this.viewPan = Vec2(
+            this.viewPan.x + delta.x,
+            this.viewPan.y + delta.y
+          );
+          this.clampViewPan();
+          this.lastTouchPoint = touchPoint;
+        }
+      } else if (event.type == TouchType.Up) {
+        this.lastTouchPoint = undefined;
+      }
+    } else if (isDualTouch) {
+      // Pinch-to-zoom handling - always enabled regardless of annotate mode
+      const touch1 = Vec2(event.touches[0].x, event.touches[0].y);
+      const touch2 = Vec2(event.touches[1].x, event.touches[1].y);
+      const pinchCenter = Vec2((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2);
+      const pinchDistance = Math.sqrt(
+        Math.pow(touch2.x - touch1.x, 2) + Math.pow(touch2.y - touch1.y, 2)
+      );
+
+      if (event.type == TouchType.Down) {
+        // Start of pinch gesture
+        this.lastPinchDistance = pinchDistance;
+        this.lastPinchCenter = pinchCenter;
+      } else if (event.type == TouchType.Move) {
+        if (this.lastPinchDistance !== undefined && this.lastPinchCenter !== undefined) {
+          // Calculate scale change
+          const scaleRatio = pinchDistance / this.lastPinchDistance;
+          const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.viewScale * scaleRatio));
+          const actualScaleChange = newScale / this.viewScale;
+
+          // Calculate pinch center movement (drag component)
+          const centerDeltaX = pinchCenter.x - this.lastPinchCenter.x;
+          const centerDeltaY = pinchCenter.y - this.lastPinchCenter.y;
+
+          // To keep the pinch center point stationary on screen during scaling:
+          // The point under the pinch center before scaling should remain under it after scaling
+          // Formula: newPan = pinchCenter - (pinchCenter - oldPan) * scaleChange
+          // Then add the center movement delta for simultaneous dragging
+          const newPanX = pinchCenter.x - (pinchCenter.x - this.viewPan.x) * actualScaleChange + centerDeltaX;
+          const newPanY = pinchCenter.y - (pinchCenter.y - this.viewPan.y) * actualScaleChange + centerDeltaY;
+
+          this.viewScale = newScale;
+          this.viewPan = Vec2(newPanX, newPanY);
+          this.clampViewPan();
+
+          this.lastPinchDistance = pinchDistance;
+          this.lastPinchCenter = pinchCenter;
+        }
+      } else if (event.type == TouchType.Up) {
+        this.lastPinchDistance = undefined;
+        this.lastPinchCenter = undefined;
+        // Record when dual-finger gesture ended for accidental touch protection
+        this.lastDualFingerEndTime = Date.now();
+        // Check if we need to re-render at a different scale after pinch ends
+        this.checkAndUpdateRenderScale();
+      }
+      // Clear single touch tracking when in pinch mode
+      this.lastTouchPoint = undefined;
     } else {
-      this.currentPageStatus.leftPageIndex = newPageIndex;
-      this.currentPageStatus.rightPageIndex = -1;
-      this.controller.setPageSpacing(0, 0);
+      // Reset all touch tracking
+      this.lastTouchPoint = undefined;
+      this.lastPinchDistance = undefined;
+      this.lastPinchCenter = undefined;
     }
-  }
-
-  recordPageRawSize(pageIndex: number, size: Vector2): void {
-    if(this.pageRawSizes.hasKey(pageIndex)) return;
-    this.pageRawSizes.set(pageIndex, {
-      x: Math.round(size.x),
-      y: Math.round(size.y)
-    });
-  }
-
-  aboutToAppear() {
-    this.controller.registerPageChangedListener(newPageIndex => {
-      this.updateCurrentPageStatus(newPageIndex);
-      this.controller.setPageFit(pdfService.PageFit.FIT_WIDTH);
-      this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
-      this.redraw();
-    });
-    const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
-    this.systemPath = args['systemPath'];
-    this.sandBoxPath = args['sandboxPath'];
-    this.controller.registerScaleChangedListener(scale => this.viewScale = scale);
-    this.controller.registerScrollListener(scrollParam => {
-      const centerX = scrollParam.pdfWidth < scrollParam.viewWidth;
-      const centerY = scrollParam.pdfHeight < scrollParam.viewHeight;
-
-      const extraX = Math.max(scrollParam.pdfWidth - scrollParam.viewWidth, 0);
-      const extraY = Math.max(scrollParam.pdfHeight - scrollParam.viewHeight, 0);
-
-      let leftX = -scrollParam.offsetX * extraX;
-      let leftY = -scrollParam.offsetY * extraY;
-
-      const space = this.controller.getPageHorizontalSpacing() * this.viewScale;
-      if (this.currentPageStatus.isDisplayingDualPage) {
-
-        const rawLeftPageSize = this.getPdfPage(this.currentPageStatus.leftPageIndex)?.size;
-        const rawRightPageSize = this.getPdfPage(this.currentPageStatus.rightPageIndex)?.size;
-        if (rawLeftPageSize == null || rawRightPageSize == null) {
-          return;
-        }
-
-        const rawPdfWidth = rawLeftPageSize.x + rawRightPageSize.x;
-        const rawPdfHeight = Math.max(rawLeftPageSize.y, rawRightPageSize.y);
-
-        const scaledPdfWidth = scrollParam.pdfWidth - space;
-        const scaledPdfHeight = scrollParam.pdfHeight;
-
-        const leftPageWidth = scaledPdfWidth * (rawLeftPageSize.x / rawPdfWidth);
-        const rightPageWidth = scaledPdfWidth * (rawRightPageSize.x / rawPdfWidth);
-
-        const leftPageHeight = rawLeftPageSize.y * scaledPdfHeight / rawPdfHeight;
-        const rightPageHeight = rawRightPageSize.y * scaledPdfHeight / rawPdfHeight;
-
-        this.leftPageMetrics.size = Float2(
-          rawLeftPageSize.x * CanvasOverSampling,
-          rawLeftPageSize.y * CanvasOverSampling
-        );
-        this.rightPageMetrics.size = Float2(
-          rawRightPageSize.x * CanvasOverSampling,
-          rawRightPageSize.y * CanvasOverSampling
-        );
-        this.leftPageMetrics.scale = Float2(
-          leftPageWidth / rawLeftPageSize.x / CanvasOverSampling,
-          leftPageHeight / rawLeftPageSize.y / CanvasOverSampling
-        );
-        this.rightPageMetrics.scale = Float2(
-          rightPageWidth / rawRightPageSize.x / CanvasOverSampling,
-          rightPageHeight / rawRightPageSize.y / CanvasOverSampling
-        );
-
-        if (centerX) {
-          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
-        }
-        const rightX = leftX + leftPageWidth + space;
-        let rightY = leftY;
-        if (centerY) {
-          if (leftPageHeight > rightPageHeight) {
-            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-            rightY =
-              (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
-          } else {
-            leftY = (scrollParam.viewHeight - scrollParam.pdfHeight + Math.abs((leftPageHeight - rightPageHeight))) / 2;
-            rightY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-          }
-        } else {
-          if (leftPageHeight > rightPageHeight) {
-            rightY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
-          } else {
-            leftY += Math.abs((leftPageHeight - rightPageHeight)) / 2;
-          }
-        }
-
-        this.leftPageMetrics.position = Float2(leftX, leftY);
-        this.rightPageMetrics.position = Float2(rightX, rightY);
-
-        this.recordPageRawSize(this.currentPageStatus.leftPageIndex, {
-          x: leftPageWidth,
-          y: scaledPdfHeight
-        });
-        this.recordPageRawSize(this.currentPageStatus.rightPageIndex, {
-          x: rightPageWidth,
-          y: scaledPdfHeight
-        });
-
-
-        hilog.info(0, "PDFView", `Left Page Pos: (${this.leftPageMetrics.position.x.toFixed(2)}, ${this.leftPageMetrics.position.y.toFixed(2)}), Size: (${this.leftPageMetrics.size.x.toFixed(2)}, ${this.leftPageMetrics.size.y.toFixed(2)}), RawSize: (${rawLeftPageSize.x.toFixed(2)}, ${rawLeftPageSize.y.toFixed(2)}) Scale: (${this.leftPageMetrics.scale.x.toFixed(2)}, ${this.leftPageMetrics.scale.y.toFixed(2)})`);
-        hilog.info(0, "PDFView", `Right Page Pos: (${this.rightPageMetrics.position.x.toFixed(2)}, ${this.rightPageMetrics.position.y.toFixed(2)}), Size: (${this.rightPageMetrics.size.x.toFixed(2)}, ${this.rightPageMetrics.size.y.toFixed(2)}), RawSize: (${rawRightPageSize.x.toFixed(2)}, ${rawRightPageSize.y.toFixed(2)}) Scale: (${this.rightPageMetrics.scale.x.toFixed(2)}, ${this.rightPageMetrics.scale.y.toFixed(2)})`);
-
-        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height}), (${this.rightPageCanvasPosition.x},${this.rightPageCanvasPosition.y},${this.rightPageCanvasSize.width},${this.rightPageCanvasSize.height})`);
-
-      } else {
-        const leftPageSize = this.getPdfPage(this.currentPageStatus.pageIndex)?.size;
-        if (leftPageSize == null) {
-          return;
-        }
-
-        if (centerX) {
-          leftX = (scrollParam.viewWidth - scrollParam.pdfWidth) / 2;
-        }
-        if (centerY) {
-          leftY = (scrollParam.viewHeight - scrollParam.pdfHeight) / 2;
-        }
-        this.leftPageMetrics.position = Float2(leftX, leftY);
-        const rawLeftPageWidth = leftPageSize.x;
-        const rawLeftPageHeight = leftPageSize.y;
-        this.leftPageMetrics.size = Float2(
-          rawLeftPageWidth * CanvasOverSampling,
-          rawLeftPageHeight * CanvasOverSampling
-        );
-        this.leftPageMetrics.scale = Float2(
-          scrollParam.pdfWidth / rawLeftPageWidth / CanvasOverSampling,
-          scrollParam.pdfHeight / rawLeftPageHeight / CanvasOverSampling
-        );
-        this.recordPageRawSize(this.currentPageStatus.pageIndex, {
-          x: scrollParam.pdfWidth,
-          y: scrollParam.pdfHeight
-        });
-
-        hilog.info(0, "PDFView", `Left Page Pos: (${this.leftPageMetrics.position.x.toFixed(2)}, ${this.leftPageMetrics.position.y.toFixed(2)}), Size: (${this.leftPageMetrics.size.x.toFixed(2)}, ${this.leftPageMetrics.size.y.toFixed(2)}), RawSize: (${rawLeftPageWidth.toFixed(2)}, ${rawLeftPageHeight.toFixed(2)}) Scale: (${this.leftPageMetrics.scale.x.toFixed(2)}, ${this.leftPageMetrics.scale.y.toFixed(2)})`);
-
-        // hilog.info(0, "PDFView", `(${this.leftPageCanvasPosition.x},${this.leftPageCanvasPosition.y},${this.leftPageCanvasSize.width},${this.leftPageCanvasSize.height})`);
-      }
-    });
-
-    this.document = new pdfService.PdfDocument();
-    this.document.loadDocument(this.sandBoxPath);
-    const documentPages = this.document.getPageCount();
-    for (let i = 0; i < documentPages; i++) {
-      const page = this.document.getPage(i);
-      this.pages.set(i, { size: Float2(page.getWidth(), page.getHeight()), page: page });
-    }
-
-    this.controller.loadDocument(this.sandBoxPath)
-      .then(parseResult => {
-        if (parseResult != pdfService.ParseResult.PARSE_SUCCESS) {
-          hilog.error(0, 'PDFView', `Err on loading pdf file: ${parseResult}`)
-          app.terminate();
-          return;
-        }
-        this.pageCount = this.controller.getPageCount();
-        if (this.pageCount == 0) {
-          hilog.error(0, 'PDFView', `Err on loading pdf file: empty document`)
-          app.terminate();
-          return;
-        }
-        this.applyDualPageMode();
-        this.updateCurrentPageStatus(0);
-        this.redraw();
-      });
-    this.showControls = this.preferences.getSync('showControls', Visibility.Visible) as boolean;
-    this.currentOperationMode = this.preferences.getSync('currentOperationMode', 'side') as 'side' | 'button' | 'extern';
-    this.currentDrawMode = this.preferences.getSync('currentDrawMode', 'add') as 'add' | 'erase';
-    this.isInDualPageMode = this.preferences.getSync('isInDualPageMode', false) as boolean;
-    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
-      statusType == window.WindowStatusType.FULL_SCREEN);
-  }
-
-  onBackPress(): boolean | void {
-    app.terminate();
-  }
-
-  applyDualPageMode(): void {
-    this.controller.setPageLayout(this.isInDualPageMode ? pdfService.PageLayout.LAYOUT_DOUBLE :
-      pdfService.PageLayout.LAYOUT_SINGLE)
-    if (!this.isInDualPageMode) {
-      return;
-    }
-    const currentPageIndex = this.currentPageStatus.pageIndex;
-    if (currentPageIndex % 2 == 0) {
-      return;
-    }
-    this.setPageIndexAndGotoPage(currentPageIndex - 1);
-  }
-
-  aboutToDisappear(): void {
-    this.controller.releaseDocument();
-  }
-
-  gotoFirstPage() {
-    this.setPageIndexAndGotoPage(0);
-  }
-
-  gotoLastPage() {
-    this.setPageIndexAndGotoPage(this.pageCount - 1)
-  }
-
-  gotoPreviousPage() {
-    let newPageIndex = 0;
-    if (this.isInDualPageMode) {
-      newPageIndex = this.currentPageStatus.pageIndex - 2;
-      newPageIndex = Math.max(newPageIndex, 0);
-      if (newPageIndex == this.currentPageStatus.pageIndex) {
-        return;
-      }
-    } else {
-      newPageIndex = this.currentPageStatus.pageIndex - 1;
-      if (newPageIndex < 0) {
-        return;
-      }
-    }
-    this.setPageIndexAndGotoPage(newPageIndex);
-  }
-
-  gotoNextPage() {
-    let newPageIndex = 0;
-    if (this.isInDualPageMode) {
-      newPageIndex = this.currentPageStatus.pageIndex + 2;
-      newPageIndex = Math.min(newPageIndex, this.pageCount - 1);
-      if (newPageIndex == this.currentPageStatus.pageIndex) {
-        return;
-      }
-    } else {
-      newPageIndex = this.currentPageStatus.pageIndex + 1;
-      if (newPageIndex >= this.pageCount) {
-        return;
-      }
-    }
-    this.setPageIndexAndGotoPage(newPageIndex);
-  }
-
-  applyOperationMode(mode: 'side' | 'button' | 'extern') {
-    this.currentOperationMode = mode;
-    this.preferences.putSync('currentOperationMode', this.currentOperationMode);
-    this.preferences.flushSync();
-  }
-
-  getCheckIcon(mode: 'side' | 'button' | 'extern'): SymbolGlyphModifier {
-    if (mode == this.currentOperationMode) {
-      return this.boxChecked;
-    }
-    return this.boxUnchecked;
   }
 
   build() {
     RelativeContainer() {
 
-      PdfView({
-        controller: this.controller,
-        pageFit: pdfService.PageFit.FIT_PAGE,
-        isContinuous: false,
-        pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
+      Row(ContainerCfg) {
+
+        RelativeContainer() {
+          Image(this.view1PixelMap).alignRules(FullRect)
+          Canvas(this.view1Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .scale(this.getCanvasScale(0))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view1DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .scale(this.getCanvasScale(0))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0, event))
+        }
+        .size(toSize(this.view1ViewSize))
+        .visibility(toVisibility(true))
+
+        RelativeContainer() {
+          Image(this.view2PixelMap).alignRules(FullRect)
+          Canvas(this.view2Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .scale(this.getCanvasScale(1))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view2DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .scale(this.getCanvasScale(1))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0, event))
+        }
+        .size(toSize(this.view2ViewSize))
+        .visibility(toVisibility(this.view2Visible))
+
+        RelativeContainer() {
+          Image(this.view3PixelMap).alignRules(FullRect)
+          Canvas(this.view3Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .scale(this.getCanvasScale(2))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view3DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .scale(this.getCanvasScale(2))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0, event))
+        }
+        .size(toSize(this.view3ViewSize))
+        .visibility(toVisibility(this.view3Visible))
+      }
+      .alignRules(TopLeft)
+      .offset(this.viewPan)
+      .size(toSize(this.viewSize))
+      .scale({
+        x: this.viewScale,
+        y: this.viewScale,
+        centerX: 0,
+        centerY: 0
       })
+
+      Flex()
         .size({ width: '100%', height: '100%' })
-        .id(PdfViewId)
-
-      //#region SidePageTurn Button
-
-      Button({ type: ButtonType.Normal })
-        .size({ width: PageFlipButtonWidth, height: '100%' })
-        .onClick(() => this.gotoPreviousPage())
-        .alignRules(TopLeft)
-        .visibility(toVisibility(this.currentOperationMode == 'side'))
+        .onAreaChange((_, newVal) => {
+          this.viewportSize = fromArea(newVal, this.getUIContext());
+          this.resetViewToFit();
+        })
         .hitTestBehavior(HitTestMode.Transparent)
+        .onTouch(event => this.handleViewAction(event))
+
+      Button(PageFlipButtonOption)
+        .size(PageFlipButtonSize)
+        .onClick(() => this.gotoPrevPage())
+        .alignRules(TopLeft)
         .backgroundColor(Color.Transparent)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
 
-
-      Button({ type: ButtonType.Normal })
-        .size({ width: PageFlipButtonWidth, height: '100%' })
+      Button(PageFlipButtonOption)
+        .size(PageFlipButtonSize)
         .onClick(() => this.gotoNextPage())
         .alignRules(TopRight)
-        .visibility(toVisibility(this.currentOperationMode == 'side'))
-        .hitTestBehavior(HitTestMode.Transparent)
         .backgroundColor(Color.Transparent)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
 
       Image('')
-        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .size(PageFlipButtonSize)
         .alignRules(TopLeft)
-        .visibility(toVisibility(this.currentOperationMode == 'side'))
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
         .hitTestBehavior(HitTestMode.None)
         .linearGradient({
           direction: GradientDirection.Left,
@@ -803,9 +1204,9 @@ struct PDFView {
         })
 
       Image('')
-        .size({ width: PageFlipButtonWidth, height: '100%' })
+        .size(PageFlipButtonSize)
         .alignRules(TopRight)
-        .visibility(toVisibility(this.currentOperationMode == 'side'))
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
         .hitTestBehavior(HitTestMode.None)
         .linearGradient({
           direction: GradientDirection.Right,
@@ -816,402 +1217,158 @@ struct PDFView {
           repeating: false
         })
 
+      Row(ContainerCfg) {
+        Column(ContainerCfg) {
 
-      //#endregion
-
-      Canvas(this.lctx)
-        .hitTestBehavior(HitTestMode.None)
-        // .backgroundColor('rgba(255,0,0,0.1)')
-        .alignRules(TopLeft)
-        .offset(toPos(this.leftPageMetrics.position))
-        .size(toSize(this.leftPageMetrics.size))
-        .scale(toScale(this.leftPageMetrics.scale))
-
-      Canvas(this.rctx)
-        .hitTestBehavior(HitTestMode.None)
-        // .backgroundColor('rgba(0,255,0,0.1)')
-        .alignRules(TopLeft)
-        .offset(toPos(this.rightPageMetrics.position))
-        .size(toSize(this.rightPageMetrics.size))
-        .scale(toScale(this.rightPageMetrics.scale))
-        .visibility(toVisibility((this.currentPageStatus.isDisplayingDualPage)))
-
-      Canvas(this.dlctx)
-        .hitTestBehavior(HitTestMode.Block)
-        .alignRules(TopLeft)
-        .offset(toPos(this.leftPageMetrics.position))
-        .size(toSize(this.leftPageMetrics.size))
-        .scale(toScale(this.leftPageMetrics.scale))
-        .visibility(toVisibility(this.currentDrawMode !== 'drag'))
-        .onTouch(event => this.handleDrawTouch(this.dlctx, this.lctx, this.currentPageStatus.leftPageIndex, event))
-
-      Canvas(this.drctx)
-        .hitTestBehavior(HitTestMode.Block)
-        .alignRules(TopLeft)
-        .offset(toPos(this.rightPageMetrics.position))
-        .size(toSize(this.rightPageMetrics.size))
-        .scale(toScale(this.rightPageMetrics.scale))
-        .visibility(toVisibility(this.currentDrawMode !== 'drag' && this.currentPageStatus.isDisplayingDualPage))
-        .onTouch(event => this.handleDrawTouch(this.drctx, this.rctx, this.currentPageStatus.rightPageIndex, event))
-
-      Row({ space: StandardOffset }) {
-        Column({ space: StandardOffset }) {
-
-          Toggle({ type: ToggleType.Button, isOn: this.isInDualPageMode }) {
-            Text("双页")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-          }
-          .visibility(toVisibility(this.showControls))
-          .onChange(isOn => {
-            this.isInDualPageMode = isOn;
-            this.preferences.putSync('isInDualPageMode', this.isInDualPageMode);
-            this.preferences.flushSync();
-            this.applyDualPageMode();
-            this.updateCurrentPageStatus(this.currentPageStatus.pageIndex);
+          StyleButton({
+            text: '显示', menuElement: [
+              {
+                value: "单页",
+                action: () => this.setPageDisplayMode('single'),
+                symbolIcon: getCheckIcon(this.pageDisplayMode == 'single')
+              },
+              {
+                value: "双页",
+                action: () => this.setPageDisplayMode('dual'),
+                symbolIcon: getCheckIcon(this.pageDisplayMode == 'dual')
+              },
+              {
+                value: "双页连续",
+                action: () => this.setPageDisplayMode('dualContinuous'),
+                symbolIcon: getCheckIcon(this.pageDisplayMode == 'dualContinuous')
+              },
+              {
+                value: "三页",
+                action: () => this.setPageDisplayMode('tri'),
+                symbolIcon: getCheckIcon(this.pageDisplayMode == 'tri')
+              },
+              {
+                value: "三页连续",
+                action: () => this.setPageDisplayMode('triContinuous'),
+                symbolIcon: getCheckIcon(this.pageDisplayMode == 'triContinuous')
+              }]
           })
-          .size(ButtonSize)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .backgroundColor(ButtonColor)
-          .selectedColor(ButtonColorHighlight)
-
-          Button("模式")
             .visibility(toVisibility(this.showControls))
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
-            .bindMenu([
+          StyleButton({
+            text: '模式', menuElement: [
               {
                 value: "屏侧翻页",
-                action: () => this.applyOperationMode('side'),
-                symbolIcon: this.getCheckIcon('side')
+                action: () => this.setPageFlipMode('side'),
+                symbolIcon: getCheckIcon(this.pageFlipMode == 'side')
               },
               {
                 value: "按钮翻页",
-                action: () => this.applyOperationMode('button'),
-                symbolIcon: this.getCheckIcon('button')
+                action: () => this.setPageFlipMode('button'),
+                symbolIcon: getCheckIcon(this.pageFlipMode == 'button')
               },
               {
                 value: "外设翻页",
-                action: () => this.applyOperationMode('extern'),
-                symbolIcon: this.getCheckIcon('extern')
-              }
-            ], {
-              backgroundColor: ButtonColor,
-              outlineColor: Color.Transparent
-            })
-
-          Blank();
-
-          Button("视口")
+                action: () => this.setPageFlipMode('extern'),
+                symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
+              }]
+          })
             .visibility(toVisibility(this.showControls))
-            .onClick(() => this.controller.setPageFit(pdfService.PageFit.FIT_PAGE))
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
 
-          Button("首页")
+          Blank()
+
+          StyleButton({ text: '视口', onClickCallback: () => this.resetViewToFit() })
             .visibility(toVisibility(this.showControls))
-            .onClick(() => this.gotoFirstPage())
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
-
-          Button("尾页")
+          StyleButton({ text: '首页', onClickCallback: () => this.gotoPage(0) })
             .visibility(toVisibility(this.showControls))
-            .onClick(() => this.gotoLastPage())
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
-
-          Button(this.showControls ? "收起" : "展开")
-            .onClick(() => {
-              this.showControls = !this.showControls;
-              this.preferences.putSync('showControls', this.showControls);
-              this.preferences.flushSync();
-            })
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(this.showControls ? ButtonColor : ButtonColorSemiTransparent)
+          StyleButton({ text: '尾页', onClickCallback: () => this.gotoPage(this.totalPageCount - 1) })
+            .visibility(toVisibility(this.showControls))
+          StyleToggle({
+            text: this.showControls ? '收起' : '展开',
+            onChangeCallback: value => this.showControls = !value
+          })
 
         }.height('100%')
-        Column({ space: StandardOffset }) {
-          Blank()
-          Button() {
-            Text() {
-              Span("拖动")
-                .fontColor(Color.White)
-              SymbolSpan(this.currentDrawMode == 'drag' ? squareCheckedSymbol : squareSymbol)
-                .fontColor([Color.White])
-            }
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-          }
-          .size(ButtonSizeWide)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .backgroundColor(this.currentDrawMode == 'drag' ? ButtonColorHighlight : ButtonColor)
-          .onClick(() => {
-            this.currentDrawMode = 'drag';
-            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-            this.preferences.flushSync();
-          })
 
-          Button() {
-            Text() {
-              Span("绘制")
-                .fontColor(Color.White)
-              SymbolSpan(this.currentDrawMode == 'add' ? squareCheckedSymbol : squareSymbol)
-                .fontColor([Color.White])
-            }
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-          }
-          .size(ButtonSizeWide)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .backgroundColor(this.currentDrawMode == 'add' ? ButtonColorHighlight : ButtonColor)
-          .onClick(() => {
-            this.currentDrawMode = 'add';
-            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-            this.preferences.flushSync();
-          })
+        Column(ContainerCfg) {
 
-          Button() {
-            Text() {
-              Span("擦除")
-                .fontColor(Color.White)
-              SymbolSpan(this.currentDrawMode == 'erase' ? squareCheckedSymbol : squareSymbol)
-                .fontColor([Color.White])
-            }
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-          }
-          .size(ButtonSizeWide)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .backgroundColor(this.currentDrawMode == 'erase' ? ButtonColorHighlight : ButtonColor)
-          .onClick(() => {
-            this.currentDrawMode = 'erase';
-            this.preferences.putSync('currentDrawMode', this.currentDrawMode);
-            this.preferences.flushSync();
-          })
-        }.height('100%')
-        Blank()
-        Column({ space: StandardOffset }) {
           Blank()
-          Badge({
+
+          StyleButton({
+            text: '拖动',
+            symbol: getCheckIconName(this.annotateMode == 'drag'),
+            alternateColor: this.annotateMode == 'drag' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('drag')
+          }).visibility(toVisibility(this.showControls))
+
+          StyleButton({
+            text: '绘制',
+            symbol: getCheckIconName(this.annotateMode == 'draw'),
+            alternateColor: this.annotateMode == 'draw' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('draw')
+          }).visibility(toVisibility(this.showControls))
+
+          StyleButton({
+            text: '擦除',
+            symbol: getCheckIconName(this.annotateMode == 'erase'),
+            alternateColor: this.annotateMode == 'erase' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('erase')
+          }).visibility(toVisibility(this.showControls))
+
+        }.height('100%');
+
+        Blank();
+
+        Column(ContainerCfg) {
+
+          Blank()
+
+          StyleNumBadgeButton({
+            text: '撤回',
             count: this.undoHistoryCount,
-            maxCount: 2147483647,
-            position: BadgePosition.RightTop,
-            style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
-          }) {
-            Button(`撤回`)
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSizeWide)
-              .hitTestBehavior(HitTestMode.Block)
-              .monopolizeEvents(true)
-              .backgroundColor(ButtonColor)
-              .onClick(() => this.executeUndo())
-          }
-          .size(ButtonSizeWide)
-
-          Badge({
-            count: this.redoHistoryCount,
-            maxCount: 2147483647,
-            position: BadgePosition.RightTop,
-            style: { badgeColor: BaseColor, borderColor: Color.Transparent, fontSize: HalfButtonFontSize }
-          }) {
-            Button(`重做`)
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSizeWide)
-              .hitTestBehavior(HitTestMode.Block)
-              .monopolizeEvents(true)
-              .backgroundColor(ButtonColor)
-              .onClick(() => this.executeRedo())
-          }
-          .size(ButtonSizeWide)
-
-          Badge({
-            value: '!',
-            position: BadgePosition.RightTop,
-            style: {
-              badgeColor: BaseColor,
-              borderColor: Color.Transparent,
-              fontSize: HalfButtonFontSize,
-              fontWeight: FontWeight.Bold,
-              badgeSize: this.hasUnsavedStrokes ? null : 0
-            }
-          }) {
-            Button(`保存`)
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-              .size(ButtonSizeWide)
-              .hitTestBehavior(HitTestMode.Block)
-              .monopolizeEvents(true)
-              .backgroundColor(ButtonColor)
-              .onClick(() => this.executeSave())
-          }
-          .size(ButtonSizeWide)
-
-          Button("<")
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSizeWide)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
-            .onClick(() => this.gotoPreviousPage())
-            .visibility(toVisibility(this.currentOperationMode == 'button'))
-
-        }.height('100%')
-
-        Column({ space: StandardOffset }) {
-
-          Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
-            Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-          }
-          .visibility((deviceInfo.deviceType == "phone" || !this.showControls) ? Visibility.Hidden : Visibility.Visible)
-          .onChange(isOn => {
-            if (isOn) {
-              this.mainWindow.maximize();
-            } else {
-              this.mainWindow.recover();
-            }
+            onClickCallback: () => this.executeUndo()
           })
-          .size(ButtonSize)
-          .hitTestBehavior(HitTestMode.Block)
-          .monopolizeEvents(true)
-          .backgroundColor(ButtonColor)
-          .selectedColor(ButtonColorHighlight)
-          .alignSelf(ItemAlign.End)
+            .visibility(toVisibility(this.showControls))
+          StyleNumBadgeButton({
+            text: '重做',
+            count: this.redoHistoryCount,
+            onClickCallback: () => this.executeRedo()
+          })
+            .visibility(toVisibility(this.showControls))
+          StyleStrBadgeButton({
+            text: '保存',
+            badgeText: '!',
+            badgeVisibility: this.hasUnsavedStrokes,
+            onClickCallback: () => this.executeSave()
+          })
+            .visibility(toVisibility(this.showControls))
+          StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
+            .visibility(toVisibility(this.pageFlipMode == 'button'))
+
+        }.height('100%');
+
+        Column(ContainerCfg) {
+
+          StyleToggle({ text: '全屏' })
+            .visibility(toVisibility(this.showControls))
 
           Blank()
 
-          Slider({
-            value: this.currentPageStatus.pageIndex,
-            min: 0,
-            max: this.pageCount - 1,
-            style: SliderStyle.InSet,
-            direction: Axis.Vertical,
-            reverse: true
-          })
-            .monopolizeEvents(true)
-            .visibility(toVisibility(this.showControls && this.pageCount > 1))
-            .showSteps(true)
-            .showTips(true)
-            .trackThickness(ScrollBarWidth)
-            .height('50%')
-            .alignSelf(ItemAlign.End)
-            .trackColor(TrackColor)
-            .selectedColor(ButtonColor)
-            .onChange((value, _) => {
-              if ((value != this.pageCount - 1) && this.isInDualPageMode && (value % 2 != 0)) {
-                value -= 1;
-              }
-              this.setPageIndexAndGotoPage(value)
-            })
+          MakeSlider(
+            {
+              value: this.currentPageIndex,
+              min: 0,
+              max: this.totalPageCount - 1,
+              onChangeCallback: newValue => this.gotoPage(newValue)
+            }
+          )
+            .visibility(toVisibility(this.showControls))
+          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` })
+          StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
+            .visibility(toVisibility(this.pageFlipMode == 'button'))
 
-          Text(`${this.currentPageStatus.pageIndex + 1}/${this.pageCount}`)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .textShadow({
-              type: ShadowType.BLUR,
-              radius: 8,
-              offsetX: 2,
-              offsetY: 5
-            })
-            .textAlign(TextAlign.Center)
-            .alignSelf(ItemAlign.End)
-
-          Button(">")
-            .fontSize(ButtonFontSize)
-            .fontWeight(FontWeight.Bold)
-            .size(ButtonSize)
-            .hitTestBehavior(HitTestMode.Block)
-            .monopolizeEvents(true)
-            .backgroundColor(ButtonColor)
-            .onClick(() => this.gotoNextPage())
-            .visibility(toVisibility(this.currentOperationMode == 'button'))
-
-          // Button('Debug')
-          //   .onClick(() => this.addHalfDiagonalPath())
-
-
-        }.height('100%')
+        }.height('100%');
       }
-      .hitTestBehavior(HitTestMode.Transparent)
       .alignRules(FullRect)
-      .margin(
-        {
-          left: StandardOffset,
-          right: StandardOffset,
-          top: StandardOffset,
-          bottom: StandardOffset,
-        }
-      )
+      .margin(ContainerPadding)
+      .hitTestBehavior(HitTestMode.Transparent)
 
-    }
+    }.hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
     .backgroundColor($r('sys.color.white'))
-    .onKeyEvent(keyEvent => {
-      if (keyEvent.type != KeyType.Down) {
-        return;
-      }
-      if (this == null) {
-        return;
-      }
-
-      let isCtrlPressed = false;
-
-      if (keyEvent.getModifierKeyState != null) {
-        isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
-      }
-
-      switch (keyEvent.keyCode) {
-        case KeyCode.KEYCODE_DPAD_UP:
-        case KeyCode.KEYCODE_DPAD_LEFT:
-          keyEvent.stopPropagation();
-          if (isCtrlPressed) {
-            this.gotoFirstPage();
-          } else {
-            this.gotoPreviousPage();
-          }
-          break;
-        case KeyCode.KEYCODE_DPAD_DOWN:
-        case KeyCode.KEYCODE_DPAD_RIGHT:
-        case KeyCode.KEYCODE_SPACE:
-          keyEvent.stopPropagation();
-          if (isCtrlPressed) {
-            this.gotoLastPage();
-          } else {
-            this.gotoNextPage();
-          }
-          break;
-      }
-    })
   }
 }

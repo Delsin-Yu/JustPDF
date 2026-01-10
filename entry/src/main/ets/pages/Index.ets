@@ -34,7 +34,7 @@ struct Index {
       'systemPath': uri,
       'sandboxPath': file
     }
-    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView2', params: args });
+    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }
 
   build() {
