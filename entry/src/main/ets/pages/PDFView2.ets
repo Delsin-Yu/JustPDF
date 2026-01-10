@@ -18,11 +18,11 @@ import { HashMap, Stack, taskpool } from '@kit.ArkTS';
 import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 
-// Render scale levels - minimum is 2, max 3 levels
-const RENDER_SCALE_LEVELS: number[] = [2, 4, 8];
-const MIN_RENDER_SCALE: number = 2;
-// Thresholds for switching to higher render scale (based on viewScale)
-const SCALE_THRESHOLDS: number[] = [1.5, 3.0]; // Switch to level 2 at 1.5x, level 3 at 3.0x
+// Render scale levels - minimum is 4 for clearer display, max 2 levels
+const RENDER_SCALE_LEVELS: number[] = [4, 8];
+const MIN_RENDER_SCALE: number = 4;
+// Threshold for switching to higher render scale (based on viewScale)
+const SCALE_THRESHOLDS: number[] = [2.0]; // Switch to 8x at 2.0x view scale
 
 const ContainerSpacing: number = 8;
 const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
@@ -186,6 +186,13 @@ struct PDFView2 {
       const page = this.document.getPage(i);
       this.pages.push(page);
     }
+
+    // Load preferences
+    this.showControls = this.preferences.getSync('showControls', true) as boolean;
+    this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+    this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
+    this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
+
     this.gotoPage(0);
     // Start background caching using TaskPool
     this.startBackgroundCaching();
@@ -216,12 +223,10 @@ struct PDFView2 {
 
   // Determine the appropriate render scale based on current view scale
   getRenderScaleForViewScale(viewScale: number): number {
-    if (viewScale > SCALE_THRESHOLDS[1]) {
-      return RENDER_SCALE_LEVELS[2]; // 8x
-    } else if (viewScale > SCALE_THRESHOLDS[0]) {
-      return RENDER_SCALE_LEVELS[1]; // 4x
+    if (viewScale > SCALE_THRESHOLDS[0]) {
+      return RENDER_SCALE_LEVELS[1]; // 8x
     }
-    return RENDER_SCALE_LEVELS[0]; // 2x (minimum)
+    return RENDER_SCALE_LEVELS[0]; // 4x (minimum)
   }
 
   // Check if current displayed pages need re-rendering at a different scale
@@ -568,6 +573,16 @@ struct PDFView2 {
       this.preferences.flushSync();
     } catch (error) {
       hilog.error(0, 'PDFView', `Err on saving annotation mode: ${error}.`);
+    }
+  }
+
+  setShowControls(value: boolean): void {
+    this.showControls = value;
+    try {
+      this.preferences.putSync('showControls', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving show controls: ${error}.`);
     }
   }
 
