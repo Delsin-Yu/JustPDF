@@ -1354,22 +1354,6 @@ struct PDFView2 {
 
         Column(ContainerCfg) {
 
-          /*
-           *  Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
-            Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
-              .fontSize(ButtonFontSize)
-              .fontWeight(FontWeight.Bold)
-          }
-          .visibility((deviceInfo.deviceType == "phone" || !this.showControls) ? Visibility.Hidden : Visibility.Visible)
-          .onChange(isOn => {
-            if (isOn) {
-              this.mainWindow.maximize();
-            } else {
-              this.mainWindow.recover();
-            }
-          })
-          * */
-
           StyleButton({
             text: this.isExclusiveFullScreen ? '窗口' : '全屏',
             onClickCallback: () => {
