@@ -113,6 +113,7 @@ const squareCheckedSymbol = $r('sys.symbol.checkmark_square_fill');
 @Entry
 @Component
 struct PDFView {
+  private controller: pdfViewManager.PdfController = new pdfViewManager.PdfController();
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private lctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private rctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
@@ -138,8 +139,6 @@ struct PDFView {
   private redoHistory: Stack<History> = new Stack<History>();
   private systemPath = '';
   private sandBoxPath = '';
-  @State lPixMap: PixelMap | undefined = undefined;
-  @State rPixMap: PixelMap | undefined = undefined;
   @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
@@ -518,18 +517,6 @@ struct PDFView {
 
   aboutToAppear() {
     this.controller.registerPageChangedListener(newPageIndex => {
-      const pageInfo = this.getPdfPage(newPageIndex);
-      if (pageInfo != null) {
-        const pdfPage = pageInfo.page;
-        const scale = 4;
-        const pdfPageWidth = Math.ceil(pdfPage?.getWidth() * scale);
-        const pdfPageHeight = Math.ceil(pdfPage?.getHeight() * scale);
-        const pdfMatrix = new pdfService.PdfMatrix();
-        pdfMatrix.width = pdfPageWidth;
-        pdfMatrix.height = pdfPageHeight;
-        pdfMatrix.rotate = 0;
-        this.pixMap = pageInfo.page.getCustomPagePixelMap(pdfMatrix, false, true);
-      }
       this.updateCurrentPageStatus(newPageIndex);
       this.controller.setPageFit(pdfService.PageFit.FIT_WIDTH);
       this.controller.setPageFit(pdfService.PageFit.FIT_HEIGHT);
@@ -773,12 +760,14 @@ struct PDFView {
   build() {
     RelativeContainer() {
 
-      Row(){
-        Image(this.lPixMap)
-          .objectFit(ImageFit.Fill)
-        Image(this.rPixMap)
-          .objectFit(ImageFit.Fill)
-      }.alignSelf(ItemAlign.Center)
+      PdfView({
+        controller: this.controller,
+        pageFit: pdfService.PageFit.FIT_PAGE,
+        isContinuous: false,
+        pageLayout: pdfService.PageLayout.LAYOUT_SINGLE
+      })
+        .size({ width: '100%', height: '100%' })
+        .id(PdfViewId)
 
       //#region SidePageTurn Button
 
