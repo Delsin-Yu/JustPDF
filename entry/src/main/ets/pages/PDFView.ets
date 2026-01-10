@@ -18,6 +18,7 @@ import { HashMap, Stack, taskpool } from '@kit.ArkTS';
 import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
 
 // Render scale levels - minimum is 4 for clearer display, max 2 levels
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -170,6 +171,7 @@ struct PDFView2 {
   @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
+  @State isExclusiveFullScreen: boolean = false;
 
   aboutToAppear(): void {
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
@@ -193,7 +195,11 @@ struct PDFView2 {
     this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
     this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
     this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
-
+    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
+      statusType == window.WindowStatusType.FULL_SCREEN);
+    try {
+      this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
+    } catch (error) { }
     this.gotoPage(0);
     // Start background caching using TaskPool
     this.startBackgroundCaching();
@@ -1348,8 +1354,33 @@ struct PDFView2 {
 
         Column(ContainerCfg) {
 
-          StyleToggle({ text: '全屏' })
-            .visibility(toVisibility(this.showControls))
+          /*
+           *  Toggle({ type: ToggleType.Button, isOn: this.isExclusiveFullScreen }) {
+            Text(!this.isExclusiveFullScreen ? "全屏" : "窗口")
+              .fontSize(ButtonFontSize)
+              .fontWeight(FontWeight.Bold)
+          }
+          .visibility((deviceInfo.deviceType == "phone" || !this.showControls) ? Visibility.Hidden : Visibility.Visible)
+          .onChange(isOn => {
+            if (isOn) {
+              this.mainWindow.maximize();
+            } else {
+              this.mainWindow.recover();
+            }
+          })
+          * */
+
+          StyleButton({
+            text: this.isExclusiveFullScreen ? '窗口' : '全屏',
+            onClickCallback: () => {
+              this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
+              if (this.isExclusiveFullScreen) {
+                this.mainWindow.maximize().catch();
+              } else {
+                this.mainWindow.recover().catch();
+              }
+            }
+          }).visibility(toVisibility(this.showControls && deviceInfo.deviceType != "phone"))
 
           Blank()
 
