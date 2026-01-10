@@ -641,8 +641,13 @@ struct PDFView2 {
     // 计入缩放 - 实际显示大小为 viewSize * viewScale
     const scaledViewSizeVp = mul(viewSizeVp, this.viewScale);
 
+    // 允许滚动超出边界的距离（以视口百分比计算）
+    const boundaryRelaxation = 0.25; // 25% of viewport
+    const relaxX = viewportSizeVp.x * boundaryRelaxation;
+    const relaxY = viewportSizeVp.y * boundaryRelaxation;
+
     // 如果内容小于视口，居中显示
-    // 如果内容大于视口，允许滚动但固定到边界
+    // 如果内容大于视口，允许滚动但固定到边界（带有放松距离）
     let clampedX = this.viewPan.x;
     let clampedY = this.viewPan.y;
 
@@ -650,9 +655,9 @@ struct PDFView2 {
       // 内容水平适应 - 居中显示
       clampedX = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
     } else {
-      // 内容更大 - 固定到边界
-      const minX = -(scaledViewSizeVp.x - viewportSizeVp.x);
-      const maxX = 0;
+      // 内容更大 - 固定到边界（带有放松距离）
+      const minX = -(scaledViewSizeVp.x - viewportSizeVp.x) - relaxX;
+      const maxX = relaxX;
       clampedX = Math.max(minX, Math.min(maxX, this.viewPan.x));
     }
 
@@ -660,9 +665,9 @@ struct PDFView2 {
       // 内容垂直适应 - 居中显示
       clampedY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
     } else {
-      // 内容更大 - 固定到边界
-      const minY = -(scaledViewSizeVp.y - viewportSizeVp.y);
-      const maxY = 0;
+      // 内容更大 - 固定到边界（带有放松距离）
+      const minY = -(scaledViewSizeVp.y - viewportSizeVp.y) - relaxY;
+      const maxY = relaxY;
       clampedY = Math.max(minY, Math.min(maxY, this.viewPan.y));
     }
 
