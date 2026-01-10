@@ -1261,14 +1261,12 @@ struct PDFView2 {
           StyleNumBadgeButton({
             text: '撤回',
             count: this.undoHistoryCount,
-            maxCount: 10,
             onClickCallback: () => this.executeUndo()
           })
             .visibility(toVisibility(this.showControls))
           StyleNumBadgeButton({
             text: '重做',
             count: this.redoHistoryCount,
-            maxCount: 10,
             onClickCallback: () => this.executeRedo()
           })
             .visibility(toVisibility(this.showControls))
