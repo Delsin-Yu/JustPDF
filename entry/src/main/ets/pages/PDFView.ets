@@ -20,15 +20,15 @@ import { preferences } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 
-// Render scale levels - minimum is 4 for clearer display, max 2 levels
+// 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
 const MIN_RENDER_SCALE: number = 4;
-// Threshold for switching to higher render scale (based on viewScale)
-const SCALE_THRESHOLDS: number[] = [2.0]; // Switch to 8x at 2.0x view scale
+// 切换到更高渲染缩放的阈值（基于viewScale）
+const SCALE_THRESHOLDS: number[] = [2.0]; // 在2.0倍视图缩放时切换到8倍
 
 const ContainerSpacing: number = 8;
 const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
-// Delay in ms to ignore draw/erase touches after dual-finger gesture ends
+// 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
 const ContainerPadding: Padding = {
   left: `${ContainerSpacing}px`,
@@ -127,9 +127,9 @@ struct PDFView2 {
   private pageCache: HashMap<string, PageCache> = new HashMap<string, PageCache>();
   private pendingTasks: HashMap<string, Promise<Object>> = new HashMap<string, Promise<Object>>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
-  // Track current render scale level for visible pages
+  // 跟踪可见页面的当前渲染缩放级别
   private currentRenderScale: number = MIN_RENDER_SCALE;
-  // Track which pages are currently displayed
+  // 跟踪当前显示的页面
   private displayedPageIndices: number[] = [];
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
@@ -152,17 +152,18 @@ struct PDFView2 {
   private lastTouchPoint: Vector2 | undefined = undefined;
   private lastPinchDistance: number | undefined = undefined;
   private lastPinchCenter: Vector2 | undefined = undefined;
-  private lastDualFingerEndTime: number = 0; // Timestamp when dual-finger gesture ended
+  private lastDualFingerEndTime: number = 0; // 双指手势结束时的时间戳
   private readonly minScale: number = 0.5;
   private readonly maxScale: number = 9.0;
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
-  // Drawing/annotation state
+  // 绘制/注释状态
   private view1Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view2Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view3Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  // 多级缓存：键为 "pageIndex_renderScale"
   private pageStrokes: HashMap<number, Array<PathWithPoints>> = new HashMap<number, Array<PathWithPoints>>();
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
   private pathsToErase: Set<PathWithPoints> = new Set();
@@ -190,7 +191,7 @@ struct PDFView2 {
       this.pages.push(page);
     }
 
-    // Load preferences
+    // 加载首选项
     this.showControls = this.preferences.getSync('showControls', true) as boolean;
     this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
     this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
@@ -201,12 +202,12 @@ struct PDFView2 {
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
     } catch (error) { }
     this.gotoPage(0);
-    // Start background caching using TaskPool
+    // 使用TaskPool启动后台缓存
     this.startBackgroundCaching();
   }
 
   startBackgroundCaching(): void {
-    // Cache pages in the background at minimum scale with lower priority
+    // 以最小缩放尺度在后台缓存页面，优先级较低
     for (let i = 0; i < this.totalPageCount; i++) {
       const cacheKey = makeCacheKey(i, MIN_RENDER_SCALE);
       if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
@@ -228,7 +229,7 @@ struct PDFView2 {
     }
   }
 
-  // Determine the appropriate render scale based on current view scale
+  // 根据当前视图缩放确定适当的渲染缩放
   getRenderScaleForViewScale(viewScale: number): number {
     if (viewScale > SCALE_THRESHOLDS[0]) {
       return RENDER_SCALE_LEVELS[1]; // 8x
@@ -236,19 +237,19 @@ struct PDFView2 {
     return RENDER_SCALE_LEVELS[0]; // 4x (minimum)
   }
 
-  // Check if current displayed pages need re-rendering at a different scale
+  // 检查当前显示的页面是否需要以不同的缩放重新渲染
   async checkAndUpdateRenderScale(): Promise<void> {
     const requiredScale = this.getRenderScaleForViewScale(this.viewScale);
     
     if (requiredScale !== this.currentRenderScale) {
       hilog.info(0, 'PDFView', `Scale change detected: ${this.currentRenderScale} -> ${requiredScale}`);
       this.currentRenderScale = requiredScale;
-      // Re-render currently displayed pages at new scale
+      // 以新缩放重新渲染当前显示的页面
       await this.updateDisplayedPagesAtScale(requiredScale);
     }
   }
 
-  // Update displayed pages at the specified render scale
+  // 以指定的渲染缩放更新显示的页面
   async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
     for (const pageIndex of this.displayedPageIndices) {
       const cache = await this.getPageCache(pageIndex, renderScale);
@@ -269,7 +270,7 @@ struct PDFView2 {
     this.updateViewSize();
   }
 
-  // Update the total viewSize based on current display mode and view sizes
+  // 根据当前显示模式和视图大小更新总体viewSize
   updateViewSize(): void {
     if (this.pageDisplayMode === 'single') {
       this.viewSize = this.view1ViewSize;
@@ -291,18 +292,18 @@ struct PDFView2 {
   async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
     const cacheKey = makeCacheKey(targetIndex, renderScale);
     
-    // If already cached at requested scale, return immediately
+    // 如果已在请求的缩放尺度缓存，立即返回
     if (this.pageCache.hasKey(cacheKey)) {
       return this.pageCache.get(cacheKey);
     }
 
-    // If a task is pending for this exact key, wait for it
+    // 如果为此确切的键有待处理任务，等待它
     if (this.pendingTasks.hasKey(cacheKey)) {
       return await this.pendingTasks.get(cacheKey) as PageCache;
     }
 
-    // Check if we have a lower resolution version to return temporarily
-    // while we render the higher resolution in background
+    // 检查我们是否有低分辨率版本可以暂时返回
+    // 当我们在后台渲染高分辨率时
     let fallbackCache: PageCache | undefined = undefined;
     for (const scale of RENDER_SCALE_LEVELS) {
       if (scale < renderScale) {
@@ -313,7 +314,7 @@ struct PDFView2 {
       }
     }
 
-    // Create a task for the requested render scale
+    // 为请求的渲染缩放创建任务
     const priority = renderScale === MIN_RENDER_SCALE 
       ? taskpool.Priority.HIGH 
       : taskpool.Priority.MEDIUM;
@@ -334,11 +335,11 @@ struct PDFView2 {
 
     this.pendingTasks.set(cacheKey, promise);
     
-    // If we have a fallback, return it immediately and let the higher-res load in background
+    // 如果我们有备选方案，立即返回它并让高分辨率版本在后台加载
     if (fallbackCache !== undefined) {
-      // Schedule an update when the high-res version is ready
+      // 在高分辨率版本准备好时安排更新
       promise.then((highResCache) => {
-        // Update the displayed pixelMap if this page is still visible
+        // 如果此页面仍然可见，更新显示的pixelMap
         if (this.displayedPageIndices.includes(targetIndex)) {
           const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
           const cache = highResCache as PageCache;
@@ -363,7 +364,7 @@ struct PDFView2 {
     }
 
     this.currentPageIndex = targetIndex;
-    // Reset render scale when navigating to new page
+    // 导航到新页面时重置渲染缩放
     this.currentRenderScale = MIN_RENDER_SCALE;
 
     if (this.pageDisplayMode === 'single') {
@@ -522,33 +523,33 @@ struct PDFView2 {
   }
 
   resetViewToFit(): void {
-    // Calculate appropriate scale to fit content in viewport
+    // 计算适当的缩放以使内容适应视口
     this.viewScale = this.calculateFitScale();
-    // Reset pan and clamp to ensure content is properly positioned
+    // 重置平移并固定以确保内容正确定位
     this.viewPan = Vec2(0, 0);
     this.clampViewPan();
   }
 
   calculateFitScale(): number {
-    // viewSize is in px units, viewportSize is in px units
-    // Calculate scale that fits content within viewport while maintaining aspect ratio
+    // viewSize 以 px 单位，viewportSize 以 px 单位
+    // 计算使内容适应视口同时保持纵横比的缩放
     const uiContext = this.getUIContext();
     const viewSizeVp = pxToVp(this.viewSize, uiContext);
     const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
 
-    // Avoid division by zero
+    // 避免零除法
     if (viewSizeVp.x <= 0 || viewSizeVp.y <= 0 || viewportSizeVp.x <= 0 || viewportSizeVp.y <= 0) {
       return 1.0;
     }
 
-    // Calculate scale factors for both dimensions
+    // 计算两个维度的缩放因子
     const scaleX = viewportSizeVp.x / viewSizeVp.x;
     const scaleY = viewportSizeVp.y / viewSizeVp.y;
 
-    // Use the smaller scale to ensure content fits entirely within viewport
+    // 使用较小的缩放以确保内容完全适应视口
     const fitScale = Math.min(scaleX, scaleY);
 
-    // Clamp to min/max scale limits
+    // 固定到最小/最大缩放限制
     return Math.max(this.minScale, Math.min(this.maxScale, fitScale));
   }
 
@@ -596,15 +597,15 @@ struct PDFView2 {
   gotoPrevPage(): void {
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
       this.pageDisplayMode === 'triContinuous') {
-      // Navigate one page back
+      // 向后导航一页
       this.gotoPage(this.currentPageIndex - 1);
     } else if (this.pageDisplayMode === 'dual') {
-      // Navigate to previous pair's left page
+      // 导航到前一对的左页
       const currentPair = Math.floor(this.currentPageIndex / 2);
       const prevPairLeftIndex = Math.max(0, (currentPair - 1) * 2);
       this.gotoPage(prevPairLeftIndex);
     } else if (this.pageDisplayMode === 'tri') {
-      // Navigate to previous group's first page
+      // 导航到前一组的第一页
       const currentGroup = Math.floor(this.currentPageIndex / 3);
       const prevGroupFirstIndex = Math.max(0, (currentGroup - 1) * 3);
       this.gotoPage(prevGroupFirstIndex);
@@ -614,15 +615,15 @@ struct PDFView2 {
   gotoNextPage(): void {
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
       this.pageDisplayMode === 'triContinuous') {
-      // Navigate one page forward
+      // 向前导航一页
       this.gotoPage(this.currentPageIndex + 1);
     } else if (this.pageDisplayMode === 'dual') {
-      // Navigate to next pair's left page
+      // 导航到下一对的左页
       const currentPair = Math.floor(this.currentPageIndex / 2);
       const nextPairLeftIndex = (currentPair + 1) * 2;
       this.gotoPage(nextPairLeftIndex);
     } else if (this.pageDisplayMode === 'tri') {
-      // Navigate to next group's first page
+      // 导航到下一组的第一页
       const currentGroup = Math.floor(this.currentPageIndex / 3);
       const nextGroupFirstIndex = (currentGroup + 1) * 3;
       this.gotoPage(nextGroupFirstIndex);
@@ -630,36 +631,36 @@ struct PDFView2 {
   }
 
   clampViewPan(): void {
-    // viewPan is in vp units (used by offset() and touch events)
-    // viewSize and viewportSize are in px units
-    // Convert px to vp for comparison using px2vp
+    // viewPan 以 vp 单位（由 offset() 和触摸事件使用）
+    // viewSize 和 viewportSize 以 px 单位
+    // 使用 px2vp 转换 px 为 vp 进行比较
     const uiContext = this.getUIContext();
     const viewSizeVp = pxToVp(this.viewSize, uiContext);
     const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
 
-    // Account for scaling - the actual displayed size is viewSize * viewScale
+    // 计入缩放 - 实际显示大小为 viewSize * viewScale
     const scaledViewSizeVp = mul(viewSizeVp, this.viewScale);
 
-    // If content is smaller than viewport, center it
-    // If content is larger than viewport, allow scrolling but clamp to boundaries
+    // 如果内容小于视口，居中显示
+    // 如果内容大于视口，允许滚动但固定到边界
     let clampedX = this.viewPan.x;
     let clampedY = this.viewPan.y;
 
     if (scaledViewSizeVp.x <= viewportSizeVp.x) {
-      // Content fits horizontally - center it
+      // 内容水平适应 - 居中显示
       clampedX = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
     } else {
-      // Content is larger - clamp to boundaries
+      // 内容更大 - 固定到边界
       const minX = -(scaledViewSizeVp.x - viewportSizeVp.x);
       const maxX = 0;
       clampedX = Math.max(minX, Math.min(maxX, this.viewPan.x));
     }
 
     if (scaledViewSizeVp.y <= viewportSizeVp.y) {
-      // Content fits vertically - center it
+      // 内容垂直适应 - 居中显示
       clampedY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
     } else {
-      // Content is larger - clamp to boundaries
+      // 内容更大 - 固定到边界
       const minY = -(scaledViewSizeVp.y - viewportSizeVp.y);
       const maxY = 0;
       clampedY = Math.max(minY, Math.min(maxY, this.viewPan.y));
@@ -668,7 +669,7 @@ struct PDFView2 {
     this.viewPan = Vec2(clampedX, clampedY);
   }
 
-  // Drawing/annotation methods
+  // 绘制/注释方法
   applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
     ctx.strokeStyle = 'rgba(255, 132, 0, 1.00)';
     ctx.lineWidth = 1 * CanvasOverSampling;
@@ -773,7 +774,7 @@ struct PDFView2 {
   }
 
   async executeSave(): Promise<void> {
-    // Preserve current view state to restore after save
+    // 保留当前视图状态以在保存后恢复
     const savedViewScale = this.viewScale;
     const savedViewPan = Vec2(this.viewPan.x, this.viewPan.y);
     const savedPageIndex = this.currentPageIndex;
@@ -787,8 +788,8 @@ struct PDFView2 {
       const pdfPage = this.pages[pageIndex];
       const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
 
-      // Touch events return coordinates in the canvas's native coordinate space (vp units)
-      // Canvas native size = pdfPageSize * CanvasOverSampling (in px), convert to vp
+      // 触摸事件返回画布原生坐标空间中的坐标（vp 单位）
+      // 画布原生大小 = pdfPageSize * CanvasOverSampling（以 px），转换为 vp
       const uiContext = this.getUIContext();
       const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
       const canvasSizeVp = Vec2(
@@ -800,7 +801,7 @@ struct PDFView2 {
         const annotationInfo = new pdfService.InkAnnotationInfo();
         annotationInfo.lineColor = 0xFFCA1A1A;
 
-        // Transform stroke points from canvas native coordinates (vp) to PDF coordinates
+        // 将笔画点从画布原生坐标（vp）转换为 PDF 坐标
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
           const transformedPoint = Vec2(
@@ -814,7 +815,7 @@ struct PDFView2 {
       }
     }
     
-    // Clear strokes and history
+    // 清除笔画和历史记录
     this.pageStrokes.clear();
     clearStack(this.undoHistory);
     clearStack(this.redoHistory);
@@ -822,14 +823,14 @@ struct PDFView2 {
     this.redoHistoryCount = 0;
     this.hasUnsavedStrokes = false;
 
-    // Save the document
+    // 保存文档
     const success = this.document.saveDocument(this.sandBoxPath);
     if (!success) {
       hilog.error(0, 'PDFView', 'Error saving PDF file');
       return;
     }
     
-    // Clear page cache and reload
+    // 清除页面缓存并重新加载
     this.pageCache.clear();
     this.pages = [];
     
@@ -845,26 +846,26 @@ struct PDFView2 {
       this.pages.push(page);
     }
     
-    // Start background caching again
+    // 再次启动后台缓存
     this.startBackgroundCaching();
     
-    // Reload current page
+    // 重新加载当前页面
     await this.gotoPage(savedPageIndex);
     
-    // Restore view state after page reload to minimize user interruption
+    // 页面重新加载后恢复视图状态以最小化用户中断
     this.viewScale = savedViewScale;
     this.viewPan = savedViewPan;
     this.currentRenderScale = savedRenderScale;
     this.clampViewPan();
     
-    // Check if we need higher resolution render at the restored scale
+    // 检查是否需要在恢复的缩放处进行更高分辨率渲染
     this.checkAndUpdateRenderScale();
     
     this.redrawStrokes();
   }
 
   redrawStrokes(): void {
-    // Clear and redraw strokes for all visible canvases
+    // 清除并重新绘制所有可见画布的笔画
     this.view1Ctx.reset();
     this.view2Ctx.reset();
     this.view3Ctx.reset();
@@ -872,7 +873,7 @@ struct PDFView2 {
     this.view2DrawCtx.reset();
     this.view3DrawCtx.reset();
     
-    // Load strokes for displayed pages
+    // 加载显示页面的笔画
     for (let i = 0; i < this.displayedPageIndices.length; i++) {
       const pageIndex = this.displayedPageIndices[i];
       if (i === 0) {
@@ -894,7 +895,7 @@ struct PDFView2 {
   }
 
   getCanvasScale(viewIndex: number): ScaleOptions {
-    // Get the view size (display size) and canvas size to calculate scale
+    // 获取视图大小（显示大小）和画布大小以计算缩放
     let viewSize: Vector2;
     if (viewIndex === 0) {
       viewSize = this.view1ViewSize;
@@ -911,7 +912,7 @@ struct PDFView2 {
       return { x: 1, y: 1, centerX: 0, centerY: 0 };
     }
     
-    // Scale canvas down from CanvasOverSampling size to display size
+    // 从 CanvasOverSampling 大小缩放画布到显示大小
     const scaleX = viewSize.x / canvasSize.x;
     const scaleY = viewSize.y / canvasSize.y;
     
@@ -929,11 +930,11 @@ struct PDFView2 {
       return;
     }
 
-    // Protection: ignore touch events shortly after dual-finger gesture ends
-    // This prevents accidental draw/erase when lifting one finger from pinch
+    // 保护：忽略双指手势结束后不久的触摸事件
+    // 这防止了从捏合中抬起一根手指时的意外绘制/擦除
     const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
     if (timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
-      // Reset active drawing state if we were in the middle of drawing
+      // 如果我们在绘制中，重置活动绘制状态
       if (this.activeDrawPath.points.length > 0) {
         this.activeDrawPath = { path: new Path2D(), points: [] };
         drawCtx.reset();
@@ -955,8 +956,8 @@ struct PDFView2 {
         this.activeDrawPath.points.push(touchPoint);
       } else if (event.type === TouchType.Up) {
         this.activeDrawPath.points.push(touchPoint);
-        // Only add stroke if it has enough points (at least 3: Down + Move + Up)
-        // This avoids adding dots from accidental taps
+        // 仅当笔画有足够的点数时才添加笔画（至少3个：Down + Move + Up）
+        // 这避免了从意外点击添加点
         if (this.activeDrawPath.points.length >= 3) {
           if (!this.pageStrokes.hasKey(pageIndex)) {
             this.pageStrokes.set(pageIndex, []);
@@ -1035,12 +1036,12 @@ struct PDFView2 {
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
 
     if (isSingleTouch) {
-      // Only handle single-touch panning in drag mode
+      // 仅在拖动模式下处理单指平移
       if (this.annotateMode !== 'drag') {
         return;
       }
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
-      // Drag the view (this.viewPan)
+      // 拖动视图（this.viewPan）
       if (event.type == TouchType.Down) {
         this.lastTouchPoint = touchPoint;
       } else if (event.type == TouchType.Move) {
@@ -1060,7 +1061,7 @@ struct PDFView2 {
         this.lastTouchPoint = undefined;
       }
     } else if (isDualTouch) {
-      // Pinch-to-zoom handling - always enabled regardless of annotate mode
+      // 捏合放大处理 - 始终启用，不受注释模式影响
       const touch1 = Vec2(event.touches[0].x, event.touches[0].y);
       const touch2 = Vec2(event.touches[1].x, event.touches[1].y);
       const pinchCenter = Vec2((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2);
@@ -1069,24 +1070,24 @@ struct PDFView2 {
       );
 
       if (event.type == TouchType.Down) {
-        // Start of pinch gesture
+        // 捏合手势的开始
         this.lastPinchDistance = pinchDistance;
         this.lastPinchCenter = pinchCenter;
       } else if (event.type == TouchType.Move) {
         if (this.lastPinchDistance !== undefined && this.lastPinchCenter !== undefined) {
-          // Calculate scale change
+          // 计算缩放变化
           const scaleRatio = pinchDistance / this.lastPinchDistance;
           const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.viewScale * scaleRatio));
           const actualScaleChange = newScale / this.viewScale;
 
-          // Calculate pinch center movement (drag component)
+          // 计算捏合中心运动（拖动分量）
           const centerDeltaX = pinchCenter.x - this.lastPinchCenter.x;
           const centerDeltaY = pinchCenter.y - this.lastPinchCenter.y;
 
-          // To keep the pinch center point stationary on screen during scaling:
-          // The point under the pinch center before scaling should remain under it after scaling
-          // Formula: newPan = pinchCenter - (pinchCenter - oldPan) * scaleChange
-          // Then add the center movement delta for simultaneous dragging
+          // 为了在缩放期间保持捏合中心点在屏幕上静止：
+          // 缩放前捏合中心下的点应在缩放后保持在它下面
+          // 公式：newPan = pinchCenter - (pinchCenter - oldPan) * scaleChange
+          // 然后添加中心移动增量以进行同时拖动
           const newPanX = pinchCenter.x - (pinchCenter.x - this.viewPan.x) * actualScaleChange + centerDeltaX;
           const newPanY = pinchCenter.y - (pinchCenter.y - this.viewPan.y) * actualScaleChange + centerDeltaY;
 
@@ -1100,15 +1101,15 @@ struct PDFView2 {
       } else if (event.type == TouchType.Up) {
         this.lastPinchDistance = undefined;
         this.lastPinchCenter = undefined;
-        // Record when dual-finger gesture ended for accidental touch protection
+        // 记录双指手势结束的时间以进行意外触摸保护
         this.lastDualFingerEndTime = Date.now();
-        // Check if we need to re-render at a different scale after pinch ends
+        // 检查捏合结束后是否需要以不同的缩放重新渲染
         this.checkAndUpdateRenderScale();
       }
-      // Clear single touch tracking when in pinch mode
+      // 在捏合模式下清除单指触摸跟踪
       this.lastTouchPoint = undefined;
     } else {
-      // Reset all touch tracking
+      // 重置所有触摸跟踪
       this.lastTouchPoint = undefined;
       this.lastPinchDistance = undefined;
       this.lastPinchCenter = undefined;
