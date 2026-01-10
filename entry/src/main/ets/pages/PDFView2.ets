@@ -975,7 +975,12 @@ struct PDFView2 {
   handleViewAction(event: TouchEvent): void {
     const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
+
     if (isSingleTouch) {
+      // Only handle single-touch panning in drag mode
+      if (this.annotateMode !== 'drag') {
+        return;
+      }
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
       // Drag the view (this.viewPan)
       if (event.type == TouchType.Down) {
@@ -997,7 +1002,7 @@ struct PDFView2 {
         this.lastTouchPoint = undefined;
       }
     } else if (isDualTouch) {
-      // Pinch-to-zoom handling
+      // Pinch-to-zoom handling - always enabled regardless of annotate mode
       const touch1 = Vec2(event.touches[0].x, event.touches[0].y);
       const touch2 = Vec2(event.touches[1].x, event.touches[1].y);
       const pinchCenter = Vec2((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2);
@@ -1016,11 +1021,16 @@ struct PDFView2 {
           const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.viewScale * scaleRatio));
           const actualScaleChange = newScale / this.viewScale;
 
-          // To keep the pinch center point stationary on screen:
+          // Calculate pinch center movement (drag component)
+          const centerDeltaX = pinchCenter.x - this.lastPinchCenter.x;
+          const centerDeltaY = pinchCenter.y - this.lastPinchCenter.y;
+
+          // To keep the pinch center point stationary on screen during scaling:
           // The point under the pinch center before scaling should remain under it after scaling
           // Formula: newPan = pinchCenter - (pinchCenter - oldPan) * scaleChange
-          const newPanX = pinchCenter.x - (pinchCenter.x - this.viewPan.x) * actualScaleChange;
-          const newPanY = pinchCenter.y - (pinchCenter.y - this.viewPan.y) * actualScaleChange;
+          // Then add the center movement delta for simultaneous dragging
+          const newPanX = pinchCenter.x - (pinchCenter.x - this.viewPan.x) * actualScaleChange + centerDeltaX;
+          const newPanY = pinchCenter.y - (pinchCenter.y - this.viewPan.y) * actualScaleChange + centerDeltaY;
 
           this.viewScale = newScale;
           this.viewPan = Vec2(newPanX, newPanY);
@@ -1111,7 +1121,7 @@ struct PDFView2 {
           this.viewportSize = fromArea(newVal, this.getUIContext());
           this.resetViewToFit();
         })
-        .hitTestBehavior(this.annotateMode === 'drag' ? HitTestMode.Default : HitTestMode.None)
+        .hitTestBehavior(HitTestMode.Transparent)
         .onTouch(event => this.handleViewAction(event))
 
       Button(PageFlipButtonOption)
