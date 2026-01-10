@@ -17,6 +17,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
 import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
+import { KeyCode } from '@kit.InputKit';
 
 // Render scale levels - minimum is 4 for clearer display, max 2 levels
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -1374,5 +1375,40 @@ struct PDFView2 {
     }.hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
     .backgroundColor($r('sys.color.white'))
+    .onKeyEvent(keyEvent => {
+      if (keyEvent.type != KeyType.Down) {
+        return;
+      }
+      if (this == null) {
+        return;
+      }
+
+      let isCtrlPressed = false;
+
+      if (keyEvent.getModifierKeyState != null) {
+        isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+      }
+      switch (keyEvent.keyCode) {
+        case KeyCode.KEYCODE_DPAD_UP:
+        case KeyCode.KEYCODE_DPAD_LEFT:
+          keyEvent.stopPropagation();
+          if (isCtrlPressed) {
+            this.gotoPage(0);
+          } else {
+            this.gotoPrevPage();
+          }
+          break;
+        case KeyCode.KEYCODE_DPAD_DOWN:
+        case KeyCode.KEYCODE_DPAD_RIGHT:
+        case KeyCode.KEYCODE_SPACE:
+          keyEvent.stopPropagation();
+          if (isCtrlPressed) {
+            this.gotoPage(this.totalPageCount - 1);
+          } else {
+            this.gotoNextPage();
+          }
+          break;
+      }
+    })
   }
 }
