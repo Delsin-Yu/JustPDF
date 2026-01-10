@@ -11,6 +11,10 @@ export function mul(v: Vector2, scalar: number): Vector2 {
   return Vec2(v.x * scalar, v.y * scalar);
 }
 
+export function div(v: Vector2, scalar: number): Vector2 {
+  return Vec2(v.x / scalar, v.y / scalar);
+}
+
 export function toSize(value: Vector2): SizeOptions {
   return { width: `${value.x}px`, height: `${value.y}px` };
 }

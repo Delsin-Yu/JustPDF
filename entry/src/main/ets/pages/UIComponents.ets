@@ -179,9 +179,9 @@ export struct StyleStrBadgeButton {
         text: this.text,
         style: this.style,
         symbol: this.symbol,
-        menuElement: this.menuElement
+        menuElement: this.menuElement,
+        onClickCallback: this.onClickCallback
       })
-        .onClick(this.onClickCallback)
     }
     .size(this.style == 'normal' ? ButtonSize : ButtonSizeWide)
   }

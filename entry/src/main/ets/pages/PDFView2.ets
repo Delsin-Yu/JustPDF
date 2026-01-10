@@ -755,20 +755,26 @@ struct PDFView2 {
       }
       const pdfPage = this.pages[pageIndex];
       const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
-      
-      // Get the canvas size for coordinate transformation (displaySize uses MIN_RENDER_SCALE)
-      const canvasSize = mul(pdfPageSize, CanvasOverSampling);
-      
+
+      // Touch events return coordinates in the canvas's native coordinate space (vp units)
+      // Canvas native size = pdfPageSize * CanvasOverSampling (in px), convert to vp
+      const uiContext = this.getUIContext();
+      const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
+      const canvasSizeVp = Vec2(
+        uiContext.px2vp(canvasSizePx.x),
+        uiContext.px2vp(canvasSizePx.y)
+      );
+
       for (const stroke of strokes) {
         const annotationInfo = new pdfService.InkAnnotationInfo();
         annotationInfo.lineColor = 0xFFCA1A1A;
 
-        // Transform stroke points from canvas coordinates to PDF coordinates
+        // Transform stroke points from canvas native coordinates (vp) to PDF coordinates
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
           const transformedPoint = Vec2(
-            (point.x / canvasSize.x) * pdfPageSize.x,
-            (1 - point.y / canvasSize.y) * pdfPageSize.y
+            (point.x / canvasSizeVp.x) * pdfPageSize.x,
+            (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
           );
           transformedPoints.push(transformedPoint);
         }
@@ -1224,11 +1230,26 @@ struct PDFView2 {
 
           Blank()
 
-          StyleNumBadgeButton({ text: '撤回', count: this.undoHistoryCount, maxCount: 10, onClickCallback: () => this.executeUndo() })
+          StyleNumBadgeButton({
+            text: '撤回',
+            count: this.undoHistoryCount,
+            maxCount: 10,
+            onClickCallback: () => this.executeUndo()
+          })
             .visibility(toVisibility(this.showControls))
-          StyleNumBadgeButton({ text: '重做', count: this.redoHistoryCount, maxCount: 10, onClickCallback: () => this.executeRedo() })
+          StyleNumBadgeButton({
+            text: '重做',
+            count: this.redoHistoryCount,
+            maxCount: 10,
+            onClickCallback: () => this.executeRedo()
+          })
             .visibility(toVisibility(this.showControls))
-          StyleStrBadgeButton({ text: '保存', badgeText: this.hasUnsavedStrokes ? '!' : '', onClickCallback: () => this.executeSave() })
+          StyleStrBadgeButton({
+            text: '保存',
+            badgeText: '!',
+            badgeVisibility: this.hasUnsavedStrokes,
+            onClickCallback: () => this.executeSave()
+          })
             .visibility(toVisibility(this.showControls))
           StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
