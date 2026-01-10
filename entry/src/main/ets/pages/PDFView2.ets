@@ -1,5 +1,8 @@
 import {
+  ButtonColor,
+  ButtonColorSemiTransparent,
   getCheckIcon,
+  getCheckIconName,
   MakeSlider,
   StyleButton,
   StyleNumBadgeButton,
@@ -8,10 +11,10 @@ import {
   StyleToggle,
   toVisibility
 } from './UIComponents';
-import { App, window } from '@kit.ArkUI';
+import { App, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HashMap, taskpool } from '@kit.ArkTS';
+import { HashMap, Stack, taskpool } from '@kit.ArkTS';
 import { fromArea, mul, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 
@@ -45,6 +48,24 @@ const FullRect: AlignRuleOption = {
 }
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
+const CanvasOverSampling: number = 3;
+
+interface PathWithPoints {
+  path: Path2D;
+  points: Array<Vector2>;
+}
+
+interface History {
+  path: PathWithPoints;
+  mode: 'add' | 'erase';
+  pageIndex: number;
+}
+
+function clearStack<T>(stack: Stack<T>): void {
+  while (!stack.isEmpty()) {
+    stack.pop();
+  }
+}
 
 @Concurrent
 function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
@@ -119,6 +140,7 @@ struct PDFView2 {
   @State totalPageCount: number = 0;
   @State pageDisplayMode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' = 'single';
   @State pageFlipMode: 'side' | 'button' | 'extern' = 'side';
+  @State annotateMode: 'drag' | 'draw' | 'erase' = 'drag';
   @State viewPan: Vector2 = Vec2(0, 0);
   @State viewScale: number = 1.0;
   @State viewportSize: Vector2 = Vec2(0, 0);
@@ -128,6 +150,22 @@ struct PDFView2 {
   private lastPinchCenter: Vector2 | undefined = undefined;
   private readonly minScale: number = 0.5;
   private readonly maxScale: number = 9.0;
+  private settings: RenderingContextSettings = new RenderingContextSettings(true);
+  // Drawing/annotation state
+  private view1Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view2Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view3Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  private pageStrokes: HashMap<number, Array<PathWithPoints>> = new HashMap<number, Array<PathWithPoints>>();
+  private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
+  private pathsToErase: Set<PathWithPoints> = new Set();
+  private undoHistory: Stack<History> = new Stack<History>();
+  private redoHistory: Stack<History> = new Stack<History>();
+  @State hasUnsavedStrokes: boolean = false;
+  @State undoHistoryCount: number = 0;
+  @State redoHistoryCount: number = 0;
 
   aboutToAppear(): void {
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
@@ -465,6 +503,7 @@ struct PDFView2 {
 
     // Reset view to fit content in viewport
     this.resetViewToFit();
+    this.redrawStrokes();
   }
 
   resetViewToFit(): void {
@@ -498,7 +537,7 @@ struct PDFView2 {
     return Math.max(this.minScale, Math.min(this.maxScale, fitScale));
   }
 
-  setPageDisplayMode(value: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous') {
+  setPageDisplayMode(value: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous'): void {
     this.pageDisplayMode = value;
     this.gotoPage(this.currentPageIndex);
     try {
@@ -509,13 +548,23 @@ struct PDFView2 {
     }
   }
 
-  setPageFlipMode(value: 'side' | 'button' | 'extern') {
+  setPageFlipMode(value: 'side' | 'button' | 'extern'): void {
     this.pageFlipMode = value;
     try {
       this.preferences.putSync('pageFlipMode', value);
       this.preferences.flushSync();
     } catch (error) {
       hilog.error(0, 'PDFView', `Err on saving page flip mode: ${error}.`);
+    }
+  }
+
+  setAnnotateMode(value: 'drag' | 'draw' | 'erase'): void {
+    this.annotateMode = value;
+    try {
+      this.preferences.putSync('annotateMode', value);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Err on saving annotation mode: ${error}.`);
     }
   }
 
@@ -592,6 +641,329 @@ struct PDFView2 {
     }
 
     this.viewPan = Vec2(clampedX, clampedY);
+  }
+
+  // Drawing/annotation methods
+  applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
+    ctx.strokeStyle = 'rgba(255, 132, 0, 1.00)';
+    ctx.lineWidth = 1 * CanvasOverSampling;
+    ctx.lineCap = 'round';
+  }
+
+  updateUnsavedStrokesFlag(): void {
+    for (const pageIndex of this.pageStrokes.keys()) {
+      const strokes = this.pageStrokes.get(pageIndex);
+      if (strokes.length > 0) {
+        this.hasUnsavedStrokes = true;
+        return;
+      }
+    }
+    this.hasUnsavedStrokes = false;
+  }
+
+  loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
+    if (!this.pageStrokes.hasKey(pageIndex)) {
+      return;
+    }
+    const strokes = this.pageStrokes.get(pageIndex);
+    this.applyStrokeStyle(ctx);
+    strokes.forEach(stroke => ctx.stroke(stroke.path));
+  }
+
+  appendUndoHistory(history: History): void {
+    this.undoHistory.push(history);
+    this.undoHistoryCount = this.undoHistory.length;
+    clearStack(this.redoHistory);
+    this.redoHistoryCount = 0;
+  }
+
+  executeUndo(): void {
+    if (this.undoHistory.isEmpty()) {
+      return;
+    }
+    const history = this.undoHistory.pop();
+    this.undoHistoryCount = this.undoHistory.length;
+    
+    // Navigate to the page if needed
+    if (this.currentPageIndex !== history.pageIndex) {
+      this.gotoPage(history.pageIndex);
+    }
+    
+    if (history.mode === 'add') {
+      // Undo an add: remove the stroke
+      if (this.pageStrokes.hasKey(history.pageIndex)) {
+        const strokes = this.pageStrokes.get(history.pageIndex);
+        const index = strokes.indexOf(history.path);
+        if (index >= 0) {
+          strokes.splice(index, 1);
+        }
+      }
+    } else if (history.mode === 'erase') {
+      // Undo an erase: restore the stroke
+      if (!this.pageStrokes.hasKey(history.pageIndex)) {
+        this.pageStrokes.set(history.pageIndex, []);
+      }
+      this.pageStrokes.get(history.pageIndex).push(history.path);
+    }
+    
+    this.redoHistory.push(history);
+    this.redoHistoryCount = this.redoHistory.length;
+    this.updateUnsavedStrokesFlag();
+    this.redrawStrokes();
+  }
+
+  executeRedo(): void {
+    if (this.redoHistory.isEmpty()) {
+      return;
+    }
+    const history = this.redoHistory.pop();
+    this.redoHistoryCount = this.redoHistory.length;
+    
+    // Navigate to the page if needed
+    if (this.currentPageIndex !== history.pageIndex) {
+      this.gotoPage(history.pageIndex);
+    }
+    
+    if (history.mode === 'add') {
+      // Redo an add: add the stroke back
+      if (!this.pageStrokes.hasKey(history.pageIndex)) {
+        this.pageStrokes.set(history.pageIndex, []);
+      }
+      this.pageStrokes.get(history.pageIndex).push(history.path);
+    } else if (history.mode === 'erase') {
+      // Redo an erase: remove the stroke again
+      if (this.pageStrokes.hasKey(history.pageIndex)) {
+        const strokes = this.pageStrokes.get(history.pageIndex);
+        const index = strokes.indexOf(history.path);
+        if (index >= 0) {
+          strokes.splice(index, 1);
+        }
+      }
+    }
+    
+    this.undoHistory.push(history);
+    this.undoHistoryCount = this.undoHistory.length;
+    this.updateUnsavedStrokesFlag();
+    this.redrawStrokes();
+  }
+
+  executeSave(): void {
+    for (const pageIndex of this.pageStrokes.keys()) {
+      const strokes = this.pageStrokes.get(pageIndex);
+      if (pageIndex >= this.pages.length) {
+        continue;
+      }
+      const pdfPage = this.pages[pageIndex];
+      const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
+      
+      // Get the canvas size for coordinate transformation (displaySize uses MIN_RENDER_SCALE)
+      const canvasSize = mul(pdfPageSize, CanvasOverSampling);
+      
+      for (const stroke of strokes) {
+        const annotationInfo = new pdfService.InkAnnotationInfo();
+        annotationInfo.lineColor = 0xFFCA1A1A;
+
+        // Transform stroke points from canvas coordinates to PDF coordinates
+        const transformedPoints: Vector2[] = [];
+        for (const point of stroke.points) {
+          const transformedPoint = Vec2(
+            (point.x / canvasSize.x) * pdfPageSize.x,
+            (1 - point.y / canvasSize.y) * pdfPageSize.y
+          );
+          transformedPoints.push(transformedPoint);
+        }
+        annotationInfo.inkPoints = transformedPoints;
+        pdfPage.addAnnotation(annotationInfo);
+      }
+    }
+    
+    // Clear strokes and history
+    this.pageStrokes.clear();
+    clearStack(this.undoHistory);
+    clearStack(this.redoHistory);
+    this.undoHistoryCount = 0;
+    this.redoHistoryCount = 0;
+    this.hasUnsavedStrokes = false;
+
+    // Save the document
+    const success = this.document.saveDocument(this.sandBoxPath);
+    if (!success) {
+      hilog.error(0, 'PDFView', 'Error saving PDF file');
+      return;
+    }
+    
+    // Clear page cache and reload
+    this.pageCache.clear();
+    this.pages = [];
+    
+    const result = this.document.loadDocument(this.sandBoxPath);
+    if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
+      hilog.error(0, 'PDFView', `Error re-loading PDF file: ${result}`);
+      App.terminate();
+      return;
+    }
+    
+    for (let i = 0; i < this.totalPageCount; i++) {
+      const page = this.document.getPage(i);
+      this.pages.push(page);
+    }
+    
+    // Start background caching again
+    this.startBackgroundCaching();
+    
+    // Reload current page
+    this.gotoPage(this.currentPageIndex);
+    this.redrawStrokes();
+  }
+
+  redrawStrokes(): void {
+    // Clear and redraw strokes for all visible canvases
+    this.view1Ctx.reset();
+    this.view2Ctx.reset();
+    this.view3Ctx.reset();
+    this.view1DrawCtx.reset();
+    this.view2DrawCtx.reset();
+    this.view3DrawCtx.reset();
+    
+    // Load strokes for displayed pages
+    for (let i = 0; i < this.displayedPageIndices.length; i++) {
+      const pageIndex = this.displayedPageIndices[i];
+      if (i === 0) {
+        this.loadPageStrokes(this.view1Ctx, pageIndex);
+      } else if (i === 1) {
+        this.loadPageStrokes(this.view2Ctx, pageIndex);
+      } else if (i === 2) {
+        this.loadPageStrokes(this.view3Ctx, pageIndex);
+      }
+    }
+  }
+
+  getCanvasSize(pageIndex: number): Vector2 {
+    if (pageIndex >= this.pages.length) {
+      return Vec2(0, 0);
+    }
+    const page = this.pages[pageIndex];
+    return Vec2(page.getWidth() * CanvasOverSampling, page.getHeight() * CanvasOverSampling);
+  }
+
+  getCanvasScale(viewIndex: number): ScaleOptions {
+    // Get the view size (display size) and canvas size to calculate scale
+    let viewSize: Vector2;
+    if (viewIndex === 0) {
+      viewSize = this.view1ViewSize;
+    } else if (viewIndex === 1) {
+      viewSize = this.view2ViewSize;
+    } else {
+      viewSize = this.view3ViewSize;
+    }
+    
+    const pageIndex = this.displayedPageIndices[viewIndex] ?? 0;
+    const canvasSize = this.getCanvasSize(pageIndex);
+    
+    if (canvasSize.x === 0 || canvasSize.y === 0) {
+      return { x: 1, y: 1, centerX: 0, centerY: 0 };
+    }
+    
+    // Scale canvas down from CanvasOverSampling size to display size
+    const scaleX = viewSize.x / canvasSize.x;
+    const scaleY = viewSize.y / canvasSize.y;
+    
+    return { x: scaleX, y: scaleY, centerX: 0, centerY: 0 };
+  }
+
+  handleDrawTouch(
+    drawCtx: CanvasRenderingContext2D,
+    targetCtx: CanvasRenderingContext2D,
+    pageIndex: number,
+    event: TouchEvent
+  ): void {
+    const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
+    if (!isSingleTouch) {
+      return;
+    }
+    const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
+
+    if (this.annotateMode === 'draw') {
+      if (event.type === TouchType.Down) {
+        this.activeDrawPath.path.moveTo(touchPoint.x, touchPoint.y);
+        this.activeDrawPath.points.push(touchPoint);
+      } else if (event.type === TouchType.Move) {
+        this.activeDrawPath.path.lineTo(touchPoint.x, touchPoint.y);
+        drawCtx.reset();
+        this.applyStrokeStyle(drawCtx);
+        drawCtx.stroke(this.activeDrawPath.path);
+        this.activeDrawPath.points.push(touchPoint);
+      } else if (event.type === TouchType.Up) {
+        this.activeDrawPath.points.push(touchPoint);
+        if (!this.pageStrokes.hasKey(pageIndex)) {
+          this.pageStrokes.set(pageIndex, []);
+        }
+        this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+        this.appendUndoHistory({
+          path: this.activeDrawPath,
+          mode: 'add',
+          pageIndex: pageIndex
+        });
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        drawCtx.reset();
+        this.updateUnsavedStrokesFlag();
+        this.loadPageStrokes(targetCtx, pageIndex);
+      }
+    } else if (this.annotateMode === 'erase') {
+      if (!this.pageStrokes.hasKey(pageIndex)) {
+        return;
+      }
+
+      const eraseThreshold = 20 * CanvasOverSampling;
+      const strokes = this.pageStrokes.get(pageIndex);
+
+      if (event.type === TouchType.Down) {
+        this.pathsToErase.clear();
+      }
+
+      if (event.type === TouchType.Down || event.type === TouchType.Move) {
+        for (const stroke of strokes) {
+          if (this.pathsToErase.has(stroke)) {
+            continue;
+          }
+          for (const point of stroke.points) {
+            const dx = touchPoint.x - point.x;
+            const dy = touchPoint.y - point.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance < eraseThreshold) {
+              this.pathsToErase.add(stroke);
+              break;
+            }
+          }
+        }
+
+        targetCtx.reset();
+        this.applyStrokeStyle(targetCtx);
+        for (const stroke of strokes) {
+          if (!this.pathsToErase.has(stroke)) {
+            targetCtx.stroke(stroke.path);
+          }
+        }
+      } else if (event.type === TouchType.Up) {
+        if (this.pathsToErase.size > 0) {
+          const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
+          this.pageStrokes.set(pageIndex, remainingStrokes);
+
+          this.pathsToErase.forEach(erasedPath => {
+            this.appendUndoHistory({
+              path: erasedPath,
+              mode: 'erase',
+              pageIndex: pageIndex
+            });
+          });
+
+          this.pathsToErase.clear();
+          targetCtx.reset();
+          this.updateUnsavedStrokesFlag();
+          this.loadPageStrokes(targetCtx, pageIndex);
+        }
+      }
+    }
   }
 
   handleViewAction(event: TouchEvent): void {
@@ -671,15 +1043,51 @@ struct PDFView2 {
     RelativeContainer() {
 
       Row(ContainerCfg) {
-        Image(this.view1PixelMap)
-          .size(toSize(this.view1ViewSize))
-          .visibility(toVisibility(true))
-        Image(this.view2PixelMap)
-          .size(toSize(this.view2ViewSize))
-          .visibility(toVisibility(this.view2Visible))
-        Image(this.view3PixelMap)
-          .size(toSize(this.view3ViewSize))
-          .visibility(toVisibility(this.view3Visible))
+
+        RelativeContainer() {
+          Image(this.view1PixelMap).alignRules(FullRect)
+          Canvas(this.view1Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .scale(this.getCanvasScale(0))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view1DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .scale(this.getCanvasScale(0))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0, event))
+        }
+        .size(toSize(this.view1ViewSize))
+        .visibility(toVisibility(true))
+
+        RelativeContainer() {
+          Image(this.view2PixelMap).alignRules(FullRect)
+          Canvas(this.view2Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .scale(this.getCanvasScale(1))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view2DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .scale(this.getCanvasScale(1))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0, event))
+        }
+        .size(toSize(this.view2ViewSize))
+        .visibility(toVisibility(this.view2Visible))
+
+        RelativeContainer() {
+          Image(this.view3PixelMap).alignRules(FullRect)
+          Canvas(this.view3Ctx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .scale(this.getCanvasScale(2))
+            .hitTestBehavior(HitTestMode.None)
+          Canvas(this.view3DrawCtx)
+            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .scale(this.getCanvasScale(2))
+            .visibility(toVisibility(this.annotateMode !== 'drag'))
+            .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0, event))
+        }
+        .size(toSize(this.view3ViewSize))
+        .visibility(toVisibility(this.view3Visible))
       }
       .alignRules(TopLeft)
       .offset(this.viewPan)
@@ -697,6 +1105,7 @@ struct PDFView2 {
           this.viewportSize = fromArea(newVal, this.getUIContext());
           this.resetViewToFit();
         })
+        .hitTestBehavior(this.annotateMode === 'drag' ? HitTestMode.Default : HitTestMode.None)
         .onTouch(event => this.handleViewAction(event))
 
       Button(PageFlipButtonOption)
@@ -786,12 +1195,26 @@ struct PDFView2 {
 
           Blank()
 
-          StyleButton({ text: '拖动' })
-            .visibility(toVisibility(this.showControls))
-          StyleButton({ text: '绘制' })
-            .visibility(toVisibility(this.showControls))
-          StyleButton({ text: '擦除' })
-            .visibility(toVisibility(this.showControls))
+          StyleButton({
+            text: '拖动',
+            symbol: getCheckIconName(this.annotateMode == 'drag'),
+            alternateColor: this.annotateMode == 'drag' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('drag')
+          }).visibility(toVisibility(this.showControls))
+
+          StyleButton({
+            text: '绘制',
+            symbol: getCheckIconName(this.annotateMode == 'draw'),
+            alternateColor: this.annotateMode == 'draw' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('draw')
+          }).visibility(toVisibility(this.showControls))
+
+          StyleButton({
+            text: '擦除',
+            symbol: getCheckIconName(this.annotateMode == 'erase'),
+            alternateColor: this.annotateMode == 'erase' ? ButtonColorSemiTransparent : ButtonColor,
+            onClickCallback: () => this.setAnnotateMode('erase')
+          }).visibility(toVisibility(this.showControls))
 
         }.height('100%');
 
@@ -801,11 +1224,11 @@ struct PDFView2 {
 
           Blank()
 
-          StyleNumBadgeButton({ text: '撤回', count: 1, maxCount: 10 })
+          StyleNumBadgeButton({ text: '撤回', count: this.undoHistoryCount, maxCount: 10, onClickCallback: () => this.executeUndo() })
             .visibility(toVisibility(this.showControls))
-          StyleNumBadgeButton({ text: '重做', count: 2, maxCount: 10 })
+          StyleNumBadgeButton({ text: '重做', count: this.redoHistoryCount, maxCount: 10, onClickCallback: () => this.executeRedo() })
             .visibility(toVisibility(this.showControls))
-          StyleStrBadgeButton({ text: '保存', badgeText: '!' })
+          StyleStrBadgeButton({ text: '保存', badgeText: this.hasUnsavedStrokes ? '!' : '', onClickCallback: () => this.executeSave() })
             .visibility(toVisibility(this.showControls))
           StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
