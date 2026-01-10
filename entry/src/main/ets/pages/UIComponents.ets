@@ -4,8 +4,9 @@ const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
 const ButtonSize: SizeOptions = { height: 40, width: 80 };
 const ButtonSizeWide: SizeOptions = { height: 40, width: 90 };
-const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
+export const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
 const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
+export const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
 const BaseColor: ResourceColor = `rgba(50, 50, 50, 1)`;
 const TrackColor: ResourceColor = 'rgba(50, 50, 50, 0.4)';
 const ScrollBarWidth: Length = '40vp';
@@ -29,6 +30,13 @@ export function getCheckIcon(checked: boolean): SymbolGlyphModifier {
     return boxChecked;
   }
   return boxUnchecked;
+}
+
+export function getCheckIconName(checked: boolean): string {
+  if (checked) {
+    return 'sys.symbol.checkmark_square_fill';
+  }
+  return 'sys.symbol.square';
 }
 
 @ComponentV2
@@ -84,6 +92,7 @@ export struct StyleButton {
   @Param menuElement: MenuElement[] | undefined = undefined;
   @Param onClickCallback: () => void = () => {
   };
+  @Param alternateColor: ResourceColor | undefined = undefined;
   build() {
     Button() {
       Text() {
@@ -98,7 +107,7 @@ export struct StyleButton {
     .size(this.style == 'normal' ? ButtonSize : ButtonSizeWide)
     .hitTestBehavior(HitTestMode.Block)
     .monopolizeEvents(true)
-    .backgroundColor(ButtonColor)
+    .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
     .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
       backgroundColor: ButtonColor,
       outlineColor: Color.Transparent
