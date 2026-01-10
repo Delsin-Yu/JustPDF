@@ -15,7 +15,12 @@ import { HashMap, taskpool } from '@kit.ArkTS';
 import { fromArea, mul, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 
-const OverSampling: number = 2;
+// Render scale levels - minimum is 2, max 3 levels
+const RENDER_SCALE_LEVELS: number[] = [2, 4, 8];
+const MIN_RENDER_SCALE: number = 2;
+// Thresholds for switching to higher render scale (based on viewScale)
+const SCALE_THRESHOLDS: number[] = [1.5, 3.0]; // Switch to level 2 at 1.5x, level 3 at 3.0x
+
 const ContainerSpacing: number = 8;
 const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
 const ContainerPadding: Padding = {
@@ -42,7 +47,7 @@ const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 
 @Concurrent
-function cachePage(sandboxPath: string, pageIndex: number): PageCache {
+function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
   const document = new pdfService.PdfDocument();
   const result = document.loadDocument(sandboxPath);
   if (result != pdfService.ParseResult.PARSE_SUCCESS) {
@@ -50,9 +55,8 @@ function cachePage(sandboxPath: string, pageIndex: number): PageCache {
   }
 
   const page = document.getPage(pageIndex);
-  const pageSize = Vec2(page.getWidth(), page.getHeight());
-  const overSampling = 2;
-  const renderSize = mul(pageSize, overSampling);
+  const baseSize = Vec2(page.getWidth(), page.getHeight());
+  const renderSize = mul(baseSize, renderScale);
   const matrix = new pdfService.PdfMatrix();
   matrix.x = 0;
   matrix.y = 0;
@@ -61,17 +65,29 @@ function cachePage(sandboxPath: string, pageIndex: number): PageCache {
   matrix.rotate = 0;
   const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
 
+  // Display size is always at MIN_RENDER_SCALE (2) for consistent UI sizing
+  const displaySize = mul(baseSize, 2);
+
   return {
     page: page,
     pixelMap: pixelMap,
-    size: renderSize
+    renderScale: renderScale,
+    baseSize: baseSize,
+    displaySize: displaySize
   };
 }
 
 interface PageCache {
   page: pdfService.PdfPage;
   pixelMap: PixelMap;
-  size: Vector2;
+  renderScale: number;
+  baseSize: Vector2;    // Original page size without scaling
+  displaySize: Vector2; // Size for UI display (always at MIN_RENDER_SCALE)
+}
+
+// Helper to create cache key for multi-level caching
+function makeCacheKey(pageIndex: number, renderScale: number): string {
+  return `${pageIndex}_${renderScale}`;
 }
 
 @Entry
@@ -82,9 +98,14 @@ struct PDFView2 {
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   private document = new pdfService.PdfDocument();
   private pages: Array<pdfService.PdfPage> = [];
-  private pageCache: HashMap<number, PageCache> = new HashMap<number, PageCache>();
-  private pendingTasks: HashMap<number, Promise<Object>> = new HashMap<number, Promise<Object>>();
+  // Multi-level cache: key is "pageIndex_renderScale"
+  private pageCache: HashMap<string, PageCache> = new HashMap<string, PageCache>();
+  private pendingTasks: HashMap<string, Promise<Object>> = new HashMap<string, Promise<Object>>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  // Track current render scale level for visible pages
+  private currentRenderScale: number = MIN_RENDER_SCALE;
+  // Track which pages are currently displayed
+  private displayedPageIndices: number[] = [];
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
   @State view3PixelMap: PixelMap | undefined = undefined;
@@ -130,53 +151,156 @@ struct PDFView2 {
   }
 
   startBackgroundCaching(): void {
-    // Cache pages in the background with lower priority to avoid blocking UI
+    // Cache pages in the background at minimum scale with lower priority
     for (let i = 0; i < this.totalPageCount; i++) {
-      if (!this.pageCache.hasKey(i) && !this.pendingTasks.hasKey(i)) {
-        const task = new taskpool.Task(cachePage, this.sandBoxPath, i);
+      const cacheKey = makeCacheKey(i, MIN_RENDER_SCALE);
+      if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
+        const task = new taskpool.Task(cachePage, this.sandBoxPath, i, MIN_RENDER_SCALE);
         const promise = taskpool.execute(task, taskpool.Priority.LOW)
           .then(pageCache => {
-            this.pageCache.set(i, pageCache as PageCache);
-            this.pendingTasks.remove(i);
-            hilog.info(0, 'PDFView', `Page ${i} cached successfully`);
+            this.pageCache.set(cacheKey, pageCache as PageCache);
+            this.pendingTasks.remove(cacheKey);
+            hilog.info(0, 'PDFView', `Page ${i} cached at scale ${MIN_RENDER_SCALE}`);
             return pageCache;
           })
           .catch((error: Error) => {
-            this.pendingTasks.remove(i);
+            this.pendingTasks.remove(cacheKey);
             hilog.error(0, 'PDFView', `Failed to cache page ${i}: ${error.message}`);
             throw error;
           });
-        this.pendingTasks.set(i, promise);
+        this.pendingTasks.set(cacheKey, promise);
       }
     }
   }
 
-  async getPageCache(targetIndex: number): Promise<PageCache> {
-    // If already cached, return immediately
-    if (this.pageCache.hasKey(targetIndex)) {
-      return this.pageCache.get(targetIndex);
+  // Determine the appropriate render scale based on current view scale
+  getRenderScaleForViewScale(viewScale: number): number {
+    if (viewScale > SCALE_THRESHOLDS[1]) {
+      return RENDER_SCALE_LEVELS[2]; // 8x
+    } else if (viewScale > SCALE_THRESHOLDS[0]) {
+      return RENDER_SCALE_LEVELS[1]; // 4x
+    }
+    return RENDER_SCALE_LEVELS[0]; // 2x (minimum)
+  }
+
+  // Check if current displayed pages need re-rendering at a different scale
+  async checkAndUpdateRenderScale(): Promise<void> {
+    const requiredScale = this.getRenderScaleForViewScale(this.viewScale);
+    
+    if (requiredScale !== this.currentRenderScale) {
+      hilog.info(0, 'PDFView', `Scale change detected: ${this.currentRenderScale} -> ${requiredScale}`);
+      this.currentRenderScale = requiredScale;
+      // Re-render currently displayed pages at new scale
+      await this.updateDisplayedPagesAtScale(requiredScale);
+    }
+  }
+
+  // Update displayed pages at the specified render scale
+  async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
+    for (const pageIndex of this.displayedPageIndices) {
+      const cache = await this.getPageCache(pageIndex, renderScale);
+      // Update the corresponding view's pixelMap
+      const displayIndex = this.displayedPageIndices.indexOf(pageIndex);
+      if (displayIndex === 0) {
+        this.view1PixelMap = cache.pixelMap;
+        this.view1ViewSize = cache.displaySize;
+      } else if (displayIndex === 1) {
+        this.view2PixelMap = cache.pixelMap;
+        this.view2ViewSize = cache.displaySize;
+      } else if (displayIndex === 2) {
+        this.view3PixelMap = cache.pixelMap;
+        this.view3ViewSize = cache.displaySize;
+      }
+    }
+    // Recalculate viewSize based on updated displaySizes
+    this.updateViewSize();
+  }
+
+  // Update the total viewSize based on current display mode and view sizes
+  updateViewSize(): void {
+    if (this.pageDisplayMode === 'single') {
+      this.viewSize = this.view1ViewSize;
+    } else if (this.view3Visible) {
+      this.viewSize = Vec2(
+        this.view1ViewSize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + this.view3ViewSize.x,
+        Math.max(this.view1ViewSize.y, this.view2ViewSize.y, this.view3ViewSize.y)
+      );
+    } else if (this.view2Visible) {
+      this.viewSize = Vec2(
+        this.view1ViewSize.x + ContainerSpacing + this.view2ViewSize.x,
+        Math.max(this.view1ViewSize.y, this.view2ViewSize.y)
+      );
+    } else {
+      this.viewSize = this.view1ViewSize;
+    }
+  }
+
+  async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
+    const cacheKey = makeCacheKey(targetIndex, renderScale);
+    
+    // If already cached at requested scale, return immediately
+    if (this.pageCache.hasKey(cacheKey)) {
+      return this.pageCache.get(cacheKey);
     }
 
-    // If a background task is pending, wait for it
-    if (this.pendingTasks.hasKey(targetIndex)) {
-      return await this.pendingTasks.get(targetIndex) as PageCache;
+    // If a task is pending for this exact key, wait for it
+    if (this.pendingTasks.hasKey(cacheKey)) {
+      return await this.pendingTasks.get(cacheKey) as PageCache;
     }
 
-    // Otherwise, create a high-priority task for immediate caching
-    const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex);
-    const promise = taskpool.execute(task, taskpool.Priority.HIGH)
+    // Check if we have a lower resolution version to return temporarily
+    // while we render the higher resolution in background
+    let fallbackCache: PageCache | undefined = undefined;
+    for (const scale of RENDER_SCALE_LEVELS) {
+      if (scale < renderScale) {
+        const fallbackKey = makeCacheKey(targetIndex, scale);
+        if (this.pageCache.hasKey(fallbackKey)) {
+          fallbackCache = this.pageCache.get(fallbackKey);
+        }
+      }
+    }
+
+    // Create a task for the requested render scale
+    const priority = renderScale === MIN_RENDER_SCALE 
+      ? taskpool.Priority.HIGH 
+      : taskpool.Priority.MEDIUM;
+    
+    const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex, renderScale);
+    const promise = taskpool.execute(task, priority)
       .then(pageCache => {
-        this.pageCache.set(targetIndex, pageCache as PageCache);
-        this.pendingTasks.remove(targetIndex);
+        this.pageCache.set(cacheKey, pageCache as PageCache);
+        this.pendingTasks.remove(cacheKey);
+        hilog.info(0, 'PDFView', `Page ${targetIndex} cached at scale ${renderScale}`);
         return pageCache;
       })
       .catch((error: Error) => {
-        this.pendingTasks.remove(targetIndex);
-        hilog.error(0, 'PDFView', `Failed to cache page ${targetIndex}: ${error.message}`);
+        this.pendingTasks.remove(cacheKey);
+        hilog.error(0, 'PDFView', `Failed to cache page ${targetIndex} at scale ${renderScale}: ${error.message}`);
         throw error;
       });
 
-    this.pendingTasks.set(targetIndex, promise);
+    this.pendingTasks.set(cacheKey, promise);
+    
+    // If we have a fallback, return it immediately and let the higher-res load in background
+    if (fallbackCache !== undefined) {
+      // Schedule an update when the high-res version is ready
+      promise.then((highResCache) => {
+        // Update the displayed pixelMap if this page is still visible
+        if (this.displayedPageIndices.includes(targetIndex)) {
+          const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
+          const cache = highResCache as PageCache;
+          if (displayIndex === 0) {
+            this.view1PixelMap = cache.pixelMap;
+          } else if (displayIndex === 1) {
+            this.view2PixelMap = cache.pixelMap;
+          } else if (displayIndex === 2) {
+            this.view3PixelMap = cache.pixelMap;
+          }
+        }
+      });
+      return fallbackCache;
+    }
+    
     return await promise as PageCache;
   }
 
@@ -186,16 +310,19 @@ struct PDFView2 {
     }
 
     this.currentPageIndex = targetIndex;
+    // Reset render scale when navigating to new page
+    this.currentRenderScale = MIN_RENDER_SCALE;
 
     if (this.pageDisplayMode === 'single') {
-      const view1Page = await this.getPageCache(targetIndex);
+      this.displayedPageIndices = [targetIndex];
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.size;
+      this.view1ViewSize = view1Page.displaySize;
       this.view2PixelMap = undefined;
       this.view3PixelMap = undefined;
       this.view2Visible = false;
       this.view3Visible = false;
-      this.viewSize = view1Page.size;
+      this.viewSize = view1Page.displaySize;
     } else if (this.pageDisplayMode === 'dual') {
       let index1: number;
       let index2: number | undefined;
@@ -208,44 +335,48 @@ struct PDFView2 {
         index2 = targetIndex;
       }
 
-      const view1Page = await this.getPageCache(index1);
+      this.displayedPageIndices = index2 !== undefined ? [index1, index2] : [index1];
+      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.size;
+      this.view1ViewSize = view1Page.displaySize;
 
       if (index2 !== undefined) {
-        const view2Page = await this.getPageCache(index2);
+        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
         this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.size;
+        this.view2ViewSize = view2Page.displaySize;
         this.view2Visible = true;
         this.viewSize = Vec2(
-          view1Page.size.x + 8 + view2Page.size.x,
-          Math.max(view1Page.size.y, view2Page.size.y)
+          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
         );
       } else {
         this.view2PixelMap = undefined;
         this.view2Visible = false;
-        this.viewSize = view1Page.size;
+        this.viewSize = view1Page.displaySize;
       }
       this.view3PixelMap = undefined;
       this.view3Visible = false;
     } else if (this.pageDisplayMode === 'dualContinuous') {
-      const view1Page = await this.getPageCache(targetIndex);
+      this.displayedPageIndices = targetIndex + 1 < this.totalPageCount 
+        ? [targetIndex, targetIndex + 1] 
+        : [targetIndex];
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.size;
+      this.view1ViewSize = view1Page.displaySize;
 
       if (targetIndex + 1 < this.totalPageCount) {
-        const view2Page = await this.getPageCache(targetIndex + 1);
+        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
         this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.size;
+        this.view2ViewSize = view2Page.displaySize;
         this.view2Visible = true;
         this.viewSize = Vec2(
-          view1Page.size.x + ContainerSpacing + view2Page.size.x,
-          Math.max(view1Page.size.y, view2Page.size.y)
+          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
         );
       } else {
         this.view2PixelMap = undefined;
         this.view2Visible = false;
-        this.viewSize = view1Page.size;
+        this.viewSize = view1Page.displaySize;
       }
       this.view3PixelMap = undefined;
       this.view3Visible = false;
@@ -259,14 +390,18 @@ struct PDFView2 {
       index2 = index1 + 1 < this.totalPageCount ? index1 + 1 : undefined;
       index3 = index1 + 2 < this.totalPageCount ? index1 + 2 : undefined;
 
-      const view1Page = await this.getPageCache(index1);
+      this.displayedPageIndices = [index1];
+      if (index2 !== undefined) this.displayedPageIndices.push(index2);
+      if (index3 !== undefined) this.displayedPageIndices.push(index3);
+
+      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.size;
+      this.view1ViewSize = view1Page.displaySize;
 
       if (index2 !== undefined) {
-        const view2Page = await this.getPageCache(index2);
+        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
         this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.size;
+        this.view2ViewSize = view2Page.displaySize;
         this.view2Visible = true;
       } else {
         this.view2PixelMap = undefined;
@@ -274,31 +409,35 @@ struct PDFView2 {
       }
 
       if (index3 !== undefined) {
-        const view3Page = await this.getPageCache(index3);
+        const view3Page = await this.getPageCache(index3, this.currentRenderScale);
         this.view3PixelMap = view3Page.pixelMap;
-        this.view3ViewSize = view3Page.size;
+        this.view3ViewSize = view3Page.displaySize;
         this.view3Visible = true;
         this.viewSize = Vec2(
-          view1Page.size.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.size.x,
-          Math.max(view1Page.size.y, this.view2ViewSize.y, view3Page.size.y)
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
         );
       } else {
         this.view3PixelMap = undefined;
         this.view3Visible = false;
         this.viewSize = Vec2(
-          view1Page.size.x + (index2 !== undefined ? ContainerSpacing + this.view2ViewSize.x : 0),
-          Math.max(view1Page.size.y, index2 !== undefined ? this.view2ViewSize.y : 0)
+          view1Page.displaySize.x + (index2 !== undefined ? ContainerSpacing + this.view2ViewSize.x : 0),
+          Math.max(view1Page.displaySize.y, index2 !== undefined ? this.view2ViewSize.y : 0)
         );
       }
     } else if (this.pageDisplayMode === 'triContinuous') {
-      const view1Page = await this.getPageCache(targetIndex);
+      this.displayedPageIndices = [targetIndex];
+      if (targetIndex + 1 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 1);
+      if (targetIndex + 2 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 2);
+
+      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.size;
+      this.view1ViewSize = view1Page.displaySize;
 
       if (targetIndex + 1 < this.totalPageCount) {
-        const view2Page = await this.getPageCache(targetIndex + 1);
+        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
         this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.size;
+        this.view2ViewSize = view2Page.displaySize;
         this.view2Visible = true;
       } else {
         this.view2PixelMap = undefined;
@@ -306,20 +445,20 @@ struct PDFView2 {
       }
 
       if (targetIndex + 2 < this.totalPageCount) {
-        const view3Page = await this.getPageCache(targetIndex + 2);
+        const view3Page = await this.getPageCache(targetIndex + 2, this.currentRenderScale);
         this.view3PixelMap = view3Page.pixelMap;
-        this.view3ViewSize = view3Page.size;
+        this.view3ViewSize = view3Page.displaySize;
         this.view3Visible = true;
         this.viewSize = Vec2(
-          view1Page.size.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.size.x,
-          Math.max(view1Page.size.y, this.view2ViewSize.y, view3Page.size.y)
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
         );
       } else {
         this.view3PixelMap = undefined;
         this.view3Visible = false;
         this.viewSize = Vec2(
-          view1Page.size.x + (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
-          Math.max(view1Page.size.y, targetIndex + 1 < this.totalPageCount ? this.view2ViewSize.y : 0)
+          view1Page.displaySize.x + (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
+          Math.max(view1Page.displaySize.y, targetIndex + 1 < this.totalPageCount ? this.view2ViewSize.y : 0)
         );
       }
     }
@@ -515,6 +654,8 @@ struct PDFView2 {
       } else if (event.type == TouchType.Up) {
         this.lastPinchDistance = undefined;
         this.lastPinchCenter = undefined;
+        // Check if we need to re-render at a different scale after pinch ends
+        this.checkAndUpdateRenderScale();
       }
       // Clear single touch tracking when in pinch mode
       this.lastTouchPoint = undefined;
@@ -686,6 +827,7 @@ struct PDFView2 {
               onChangeCallback: newValue => this.gotoPage(newValue)
             }
           )
+            .visibility(toVisibility(this.showControls))
           StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` })
           StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
