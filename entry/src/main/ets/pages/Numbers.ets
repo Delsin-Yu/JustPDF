@@ -22,3 +22,13 @@ export function toSize(value: Vector2): SizeOptions {
 export function fromArea(area: Area, uiContext: UIContext): Vector2 {
   return Vec2(uiContext.vp2px(area.width as number), uiContext.vp2px(area.height as number));
 }
+
+// Convert Vector2 from pixels to viewport units
+export function pxToVp(v: Vector2, uiContext: UIContext): Vector2 {
+  return Vec2(uiContext.px2vp(v.x), uiContext.px2vp(v.y));
+}
+
+// Convert Vector2 from viewport units to pixels
+export function vpToPx(v: Vector2, uiContext: UIContext): Vector2 {
+  return Vec2(uiContext.vp2px(v.x), uiContext.vp2px(v.y));
+}

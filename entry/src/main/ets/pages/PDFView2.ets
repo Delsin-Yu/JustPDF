@@ -15,7 +15,7 @@ import { App, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
-import { fromArea, mul, toSize, Vec2, Vector2 } from './Numbers';
+import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 
 // Render scale levels - minimum is 2, max 3 levels
@@ -518,8 +518,8 @@ struct PDFView2 {
     // viewSize is in px units, viewportSize is in px units
     // Calculate scale that fits content within viewport while maintaining aspect ratio
     const uiContext = this.getUIContext();
-    const viewSizeVp = Vec2(uiContext.px2vp(this.viewSize.x), uiContext.px2vp(this.viewSize.y));
-    const viewportSizeVp = Vec2(uiContext.px2vp(this.viewportSize.x), uiContext.px2vp(this.viewportSize.y));
+    const viewSizeVp = pxToVp(this.viewSize, uiContext);
+    const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
 
     // Avoid division by zero
     if (viewSizeVp.x <= 0 || viewSizeVp.y <= 0 || viewportSizeVp.x <= 0 || viewportSizeVp.y <= 0) {
@@ -609,11 +609,11 @@ struct PDFView2 {
     // viewSize and viewportSize are in px units
     // Convert px to vp for comparison using px2vp
     const uiContext = this.getUIContext();
-    const viewSizeVp = Vec2(uiContext.px2vp(this.viewSize.x), uiContext.px2vp(this.viewSize.y));
-    const viewportSizeVp = Vec2(uiContext.px2vp(this.viewportSize.x), uiContext.px2vp(this.viewportSize.y));
+    const viewSizeVp = pxToVp(this.viewSize, uiContext);
+    const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
 
     // Account for scaling - the actual displayed size is viewSize * viewScale
-    const scaledViewSizeVp = Vec2(viewSizeVp.x * this.viewScale, viewSizeVp.y * this.viewScale);
+    const scaledViewSizeVp = mul(viewSizeVp, this.viewScale);
 
     // If content is smaller than viewport, center it
     // If content is larger than viewport, allow scrolling but clamp to boundaries
