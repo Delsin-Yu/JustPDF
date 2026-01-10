@@ -26,6 +26,8 @@ const SCALE_THRESHOLDS: number[] = [1.5, 3.0]; // Switch to level 2 at 1.5x, lev
 
 const ContainerSpacing: number = 8;
 const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
+// Delay in ms to ignore draw/erase touches after dual-finger gesture ends
+const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
 const ContainerPadding: Padding = {
   left: `${ContainerSpacing}px`,
   right: `${ContainerSpacing}px`,
@@ -148,6 +150,7 @@ struct PDFView2 {
   private lastTouchPoint: Vector2 | undefined = undefined;
   private lastPinchDistance: number | undefined = undefined;
   private lastPinchCenter: Vector2 | undefined = undefined;
+  private lastDualFingerEndTime: number = 0; // Timestamp when dual-finger gesture ended
   private readonly minScale: number = 0.5;
   private readonly maxScale: number = 9.0;
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -887,6 +890,19 @@ struct PDFView2 {
     if (!isSingleTouch) {
       return;
     }
+
+    // Protection: ignore touch events shortly after dual-finger gesture ends
+    // This prevents accidental draw/erase when lifting one finger from pinch
+    const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
+    if (timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
+      // Reset active drawing state if we were in the middle of drawing
+      if (this.activeDrawPath.points.length > 0) {
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        drawCtx.reset();
+      }
+      return;
+    }
+
     const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
 
     if (this.annotateMode === 'draw') {
@@ -1042,6 +1058,8 @@ struct PDFView2 {
       } else if (event.type == TouchType.Up) {
         this.lastPinchDistance = undefined;
         this.lastPinchCenter = undefined;
+        // Record when dual-finger gesture ended for accidental touch protection
+        this.lastDualFingerEndTime = Date.now();
         // Check if we need to re-render at a different scale after pinch ends
         this.checkAndUpdateRenderScale();
       }
