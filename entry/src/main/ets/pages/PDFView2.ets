@@ -1158,6 +1158,34 @@ struct PDFView2 {
         .hitTestBehavior(HitTestMode.Transparent)
         .visibility(toVisibility(this.pageFlipMode == 'side'))
 
+      Image('')
+        .size(PageFlipButtonSize)
+        .alignRules(TopLeft)
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
+        .hitTestBehavior(HitTestMode.None)
+        .linearGradient({
+          direction: GradientDirection.Left,
+          colors: [
+            [Color.Transparent, 0],
+            ['rgba(0, 0, 0, 0.2)', 1]
+          ],
+          repeating: false
+        })
+
+      Image('')
+        .size(PageFlipButtonSize)
+        .alignRules(TopRight)
+        .visibility(toVisibility(this.pageFlipMode == 'side'))
+        .hitTestBehavior(HitTestMode.None)
+        .linearGradient({
+          direction: GradientDirection.Right,
+          colors: [
+            [Color.Transparent, 0],
+            ['rgba(0, 0, 0, 0.2)', 1]
+          ],
+          repeating: false
+        })
+
       Row(ContainerCfg) {
         Column(ContainerCfg) {
 
