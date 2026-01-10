@@ -115,7 +115,7 @@ function makeCacheKey(pageIndex: number, renderScale: number): string {
 
 @Entry
 @Component
-struct PDFView {
+struct PDFView2 {
   private systemPath = '';
   private sandBoxPath = '';
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
@@ -948,19 +948,23 @@ struct PDFView {
         this.activeDrawPath.points.push(touchPoint);
       } else if (event.type === TouchType.Up) {
         this.activeDrawPath.points.push(touchPoint);
-        if (!this.pageStrokes.hasKey(pageIndex)) {
-          this.pageStrokes.set(pageIndex, []);
+        // Only add stroke if it has enough points (at least 3: Down + Move + Up)
+        // This avoids adding dots from accidental taps
+        if (this.activeDrawPath.points.length >= 3) {
+          if (!this.pageStrokes.hasKey(pageIndex)) {
+            this.pageStrokes.set(pageIndex, []);
+          }
+          this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+          this.appendUndoHistory({
+            path: this.activeDrawPath,
+            mode: 'add',
+            pageIndex: pageIndex
+          });
+          this.updateUnsavedStrokesFlag();
+          this.loadPageStrokes(targetCtx, pageIndex);
         }
-        this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
-        this.appendUndoHistory({
-          path: this.activeDrawPath,
-          mode: 'add',
-          pageIndex: pageIndex
-        });
         this.activeDrawPath = { path: new Path2D(), points: [] };
         drawCtx.reset();
-        this.updateUnsavedStrokesFlag();
-        this.loadPageStrokes(targetCtx, pageIndex);
       }
     } else if (this.annotateMode === 'erase') {
       if (!this.pageStrokes.hasKey(pageIndex)) {
