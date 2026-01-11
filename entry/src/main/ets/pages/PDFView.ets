@@ -832,10 +832,7 @@ struct PDFView2 {
 
       const uiContext = this.getUIContext();
       const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
-      const canvasSizeVp = Vec2(
-        uiContext.px2vp(canvasSizePx.x),
-        uiContext.px2vp(canvasSizePx.y)
-      );
+      const canvasSizeVp = pxToVp(canvasSizePx, uiContext);
 
       for (const stroke of strokes) {
         const transformedPoints: Vector2[] = [];
@@ -848,6 +845,9 @@ struct PDFView2 {
           transformedPoints.push(transformedPoint);
         }
         const annotationInfo = new pdfService.PolylineAnnotationInfo();
+        annotationInfo.title = '由 Just PDF 创建的注释';
+        annotationInfo.creationDate = new Date(Date.now());
+        annotationInfo.modifiedTime = new Date(Date.now());
         annotationInfo.vertexes = transformedPoints;
         annotationInfo.lineColor = 0xff0000ff;
         const annotation = pdfPage.addAnnotation(annotationInfo);
