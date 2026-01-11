@@ -817,7 +817,6 @@ struct PDFView2 {
       return;
     }
 
-    const affectedPageIndices: number[] = [];
     const affectedPage = new HashMap<number, pdfService.PdfAnnotation[]>();
     for (const pageIndex of this.pageStrokes.keys()) {
       if (pageIndex >= this.pages.length) {
@@ -825,7 +824,7 @@ struct PDFView2 {
       }
       const strokes = this.pageStrokes.get(pageIndex);
       if (strokes.length > 0) {
-        affectedPageIndices.push(pageIndex);
+        affectedPage.set(pageIndex, []);
       }
       const pdfPage = this.pages[pageIndex];
       const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
@@ -851,9 +850,6 @@ struct PDFView2 {
         annotationInfo.vertexes = transformedPoints;
         annotationInfo.lineColor = 0xff0000ff;
         const annotation = pdfPage.addAnnotation(annotationInfo);
-        if (!affectedPage.hasKey(pageIndex)) {
-          affectedPage.set(pageIndex, []);
-        }
         affectedPage.get(pageIndex).push(annotation);
       }
     }
@@ -906,7 +902,7 @@ struct PDFView2 {
     this.redoHistoryCount = 0;
     this.hasUnsavedStrokes = false;
 
-    this.invalidateAffectedPages(affectedPageIndices);
+    this.invalidateAffectedPages(Array.from(affectedPage.keys()));
   }
 
   revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): void {
