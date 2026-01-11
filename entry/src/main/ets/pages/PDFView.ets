@@ -153,6 +153,7 @@ struct PDFView2 {
   private lastPinchDistance: number | undefined = undefined;
   private lastPinchCenter: Vector2 | undefined = undefined;
   private lastDualFingerEndTime: number = 0; // 双指手势结束时的时间戳
+  private isDualFingerActive: boolean = false; // 当前是否有双指手势激活
   private readonly minScale: number = 0.5;
   private readonly maxScale: number = 9.0;
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -935,14 +936,19 @@ struct PDFView2 {
       return;
     }
 
-    // 保护：忽略双指手势结束后不久的触摸事件
-    // 这防止了从捏合中抬起一根手指时的意外绘制/擦除
+    // 保护：忽略双指手势激活期间或结束后不久的触摸事件
+    // 这防止了在捏合开始时（第二根手指触碰前）和结束时（抬起一根手指后）的意外绘制/擦除
     const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
-    if (timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
+    if (this.isDualFingerActive || timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
       // 如果我们在绘制中，重置活动绘制状态
       if (this.activeDrawPath.points.length > 0) {
         this.activeDrawPath = { path: new Path2D(), points: [] };
         drawCtx.reset();
+      }
+      // 如果在擦除模式中，清除待擦除的路径
+      if (this.pathsToErase.size > 0) {
+        this.pathsToErase.clear();
+        this.redrawStrokes();
       }
       return;
     }
@@ -1067,6 +1073,21 @@ struct PDFView2 {
       }
     } else if (isDualTouch) {
       // 捏合放大处理 - 始终启用，不受注释模式影响
+      // 标记双指手势激活，防止在绘制/擦除模式下意外创建笔画
+      this.isDualFingerActive = true;
+      
+      // 立即中断并清除任何进行中的绘制/擦除操作
+      if (this.activeDrawPath.points.length > 0) {
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        this.view1DrawCtx.reset();
+        this.view2DrawCtx.reset();
+        this.view3DrawCtx.reset();
+      }
+      if (this.pathsToErase.size > 0) {
+        this.pathsToErase.clear();
+        this.redrawStrokes();
+      }
+      
       const touch1 = Vec2(event.touches[0].x, event.touches[0].y);
       const touch2 = Vec2(event.touches[1].x, event.touches[1].y);
       const pinchCenter = Vec2((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2);
@@ -1108,6 +1129,8 @@ struct PDFView2 {
         this.lastPinchCenter = undefined;
         // 记录双指手势结束的时间以进行意外触摸保护
         this.lastDualFingerEndTime = Date.now();
+        // 标记双指手势结束
+        this.isDualFingerActive = false;
         // 检查捏合结束后是否需要以不同的缩放重新渲染
         this.checkAndUpdateRenderScale();
       }
@@ -1118,6 +1141,11 @@ struct PDFView2 {
       this.lastTouchPoint = undefined;
       this.lastPinchDistance = undefined;
       this.lastPinchCenter = undefined;
+      // 如果双指手势之前处于激活状态，记录结束时间
+      if (this.isDualFingerActive) {
+        this.lastDualFingerEndTime = Date.now();
+        this.isDualFingerActive = false;
+      }
     }
   }
 
