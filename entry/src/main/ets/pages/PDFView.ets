@@ -1552,7 +1552,10 @@ struct PDFView2 {
       let isCtrlPressed = false;
 
       if (keyEvent.getModifierKeyState != null) {
-        isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+        try {
+          isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+        } catch (error) {
+        }
       }
       switch (keyEvent.keyCode) {
         case KeyCode.KEYCODE_DPAD_UP:
