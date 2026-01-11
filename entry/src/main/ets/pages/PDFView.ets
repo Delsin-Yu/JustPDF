@@ -117,6 +117,12 @@ function makeCacheKey(pageIndex: number, renderScale: number): string {
   return `${pageIndex}_${renderScale}`;
 }
 
+interface KeystrokeEvent {
+  keyCode: KeyCode;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+}
+
 @Entry
 @Component
 struct PDFView2 {
@@ -133,6 +139,8 @@ struct PDFView2 {
   private currentRenderScale: number = MIN_RENDER_SCALE;
   // 跟踪当前显示的页面
   private displayedPageIndices: number[] = [];
+  private hotKeyRegistration: HashMap<KeystrokeEvent, () => void> = new HashMap<KeystrokeEvent, () => void>();
+
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
   @State view3PixelMap: PixelMap | undefined = undefined;
@@ -204,6 +212,9 @@ struct PDFView2 {
     try {
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
     } catch (error) { }
+
+    //TODO: this.hotKeyRegistration.set()
+
     this.gotoPage(0);
     // 使用TaskPool启动后台缓存
     this.startBackgroundCaching();
@@ -1550,10 +1561,12 @@ struct PDFView2 {
       }
 
       let isCtrlPressed = false;
+      let isShiftPressed = false;
 
       if (keyEvent.getModifierKeyState != null) {
         try {
           isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+          isShiftPressed = keyEvent.getModifierKeyState(['shift']);
         } catch (error) {
         }
       }
@@ -1577,6 +1590,27 @@ struct PDFView2 {
             this.gotoNextPage();
           }
           break;
+        case KeyCode.KEYCODE_Z:
+          if (isCtrlPressed) {
+            keyEvent.stopPropagation();
+            if (isShiftPressed) {
+              this.executeRedo();
+            } else {
+              this.executeUndo();
+            }
+          }
+          break;
+        case KeyCode.KEYCODE_Y:
+          if (isCtrlPressed) {
+            keyEvent.stopPropagation();
+            this.executeRedo();
+          }
+          break;
+        case KeyCode.KEYCODE_S:
+          if (isCtrlPressed) {
+            keyEvent.stopPropagation();
+            this.executeSave();
+          }
       }
     })
   }
