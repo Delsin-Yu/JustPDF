@@ -19,6 +19,8 @@ import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
+import { picker } from '@kit.CoreFileKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -780,22 +782,43 @@ struct PDFView2 {
   }
 
   async executeSave(): Promise<void> {
-    // 保留当前视图状态以在保存后恢复
-    const savedViewScale = this.viewScale;
-    const savedViewPan = Vec2(this.viewPan.x, this.viewPan.y);
-    const savedPageIndex = this.currentPageIndex;
-    const savedRenderScale = this.currentRenderScale;
+    const documentPicker = new picker.DocumentViewPicker();
+    const saveOptions = new picker.DocumentSaveOptions();
+    saveOptions.defaultFilePathUri = this.systemPath;
+    saveOptions.fileSuffixChoices = ['PDF 文档|.pdf'];
 
+    let saveUri: string = '';
+    try {
+      const result = await documentPicker.save(saveOptions);
+      if (result && result.length > 0) {
+        saveUri = result[0];
+      } else {
+        hilog.info(0, 'PDFView', '用户取消保存操作');
+        return;
+      }
+    } catch (error) {
+      hilog.error(0, 'PDFView', `保存对话框错误: ${JSON.stringify(error)}`);
+      return;
+    }
+
+    if (!saveUri || saveUri.length === 0) {
+      hilog.error(0, 'PDFView', '未选择有效的保存位置');
+      return;
+    }
+
+    const affectedPageIndices: number[] = [];
+    const affectedPage = new HashMap<number, pdfService.PdfAnnotation[]>();
     for (const pageIndex of this.pageStrokes.keys()) {
-      const strokes = this.pageStrokes.get(pageIndex);
       if (pageIndex >= this.pages.length) {
         continue;
+      }
+      const strokes = this.pageStrokes.get(pageIndex);
+      if (strokes.length > 0) {
+        affectedPageIndices.push(pageIndex);
       }
       const pdfPage = this.pages[pageIndex];
       const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
 
-      // 触摸事件返回画布原生坐标空间中的坐标（vp 单位）
-      // 画布原生大小 = pdfPageSize * CanvasOverSampling（以 px），转换为 vp
       const uiContext = this.getUIContext();
       const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
       const canvasSizeVp = Vec2(
@@ -804,7 +827,6 @@ struct PDFView2 {
       );
 
       for (const stroke of strokes) {
-        // 将笔画点从画布原生坐标（vp）转换为 PDF 坐标
         const transformedPoints: Vector2[] = [];
         const pdfPoints: Vector2[] = stroke.points;
         for (const point of pdfPoints) {
@@ -817,11 +839,68 @@ struct PDFView2 {
         const annotationInfo = new pdfService.PolylineAnnotationInfo();
         annotationInfo.vertexes = transformedPoints;
         annotationInfo.lineColor = 0xff0000ff;
-        pdfPage.addAnnotation(annotationInfo);
+        const annotation = pdfPage.addAnnotation(annotationInfo);
+        if (!affectedPage.hasKey(pageIndex)) {
+          affectedPage.set(pageIndex, []);
+        }
+        affectedPage.get(pageIndex).push(annotation);
       }
     }
-    
-    // 清除笔画和历史记录
+
+    const success = this.document.saveDocument(this.sandBoxPath);
+    if (!success) {
+      hilog.error(0, 'PDFView', `保存 PDF 文件到沙箱时出错`);
+      for (const pageIndex of affectedPage.keys()) {
+        const pdfPage = this.pages[pageIndex];
+        const annotations = affectedPage.get(pageIndex);
+        for (const annotation of annotations) {
+          pdfPage.removeAnnotation(annotation);
+        }
+      }
+      return;
+    }
+
+    let srcFile: fs.File | undefined;
+    let dstFile: fs.File | undefined;
+
+    try {
+      srcFile = await fs.open(this.sandBoxPath, fs.OpenMode.READ_ONLY);
+      dstFile = await fs.open(saveUri, fs.OpenMode.WRITE_ONLY);
+    } catch (error) {
+      if (srcFile) {
+        await fs.close(srcFile);
+      }
+      if (dstFile) {
+        await fs.close(dstFile);
+      }
+      hilog.error(0, 'PDFView', `打开文件时出错: ${error}`);
+      this.revertChanges(affectedPage);
+      return;
+    }
+
+    try {
+
+      let arrayBuffer = new ArrayBuffer(1024 * 1024);
+      let readLength = 0;
+      let totalLength = 0;
+      let stat = await fs.stat(this.sandBoxPath);
+      let fileSize = stat.size;
+      while (fileSize > 0) {
+        let len = fileSize > arrayBuffer.byteLength ? arrayBuffer.byteLength : fileSize;
+        readLength = await fs.read(srcFile.fd, arrayBuffer, { offset: totalLength, length: len });
+        if (readLength <= 0) break;
+        await fs.write(dstFile.fd, arrayBuffer, { length: readLength });
+        totalLength += readLength;
+        fileSize -= readLength;
+      }
+      await fs.close(srcFile);
+      await fs.close(dstFile);
+    } catch (err) {
+      hilog.error(0, 'PDFView', `保存 PDF 文件到选定位置 ${saveUri} 时出错: ${err}`);
+      this.revertChanges(affectedPage);
+      return;
+    }
+
     this.pageStrokes.clear();
     clearStack(this.undoHistory);
     clearStack(this.redoHistory);
@@ -829,44 +908,82 @@ struct PDFView2 {
     this.redoHistoryCount = 0;
     this.hasUnsavedStrokes = false;
 
-    // 保存文档
-    const success = this.document.saveDocument(this.sandBoxPath);
-    if (!success) {
-      hilog.error(0, 'PDFView', '保存 PDF 文件时出错');
+    this.invalidateAffectedPages(affectedPageIndices);
+  }
+
+  revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): void {
+    for (const pageIndex of affectedPage.keys()) {
+      const pdfPage = this.pages[pageIndex];
+      const annotations = affectedPage.get(pageIndex);
+      for (const annotation of annotations) {
+        pdfPage.removeAnnotation(annotation);
+      }
+    }
+    this.document.saveDocument(this.sandBoxPath);
+  }
+
+  invalidateAffectedPages(affectedPageIndices: number[]): void {
+    if (affectedPageIndices.length === 0) {
       return;
     }
-    
-    // 清除页面缓存并重新加载
-    this.pageCache.clear();
-    this.pages = [];
-    
-    const result = this.document.loadDocument(this.sandBoxPath);
-    if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
-      hilog.error(0, 'PDFView', `重新加载 PDF 文件出错: ${result}`);
-      App.terminate();
-      return;
+
+    for (const pageIndex of affectedPageIndices) {
+      for (const scale of RENDER_SCALE_LEVELS) {
+        const cacheKey = makeCacheKey(pageIndex, scale);
+        if (this.pageCache.hasKey(cacheKey)) {
+          this.pageCache.remove(cacheKey);
+        }
+        if (this.pendingTasks.hasKey(cacheKey)) {
+          this.pendingTasks.remove(cacheKey);
+        }
+      }
     }
-    
-    for (let i = 0; i < this.totalPageCount; i++) {
-      const page = this.document.getPage(i);
-      this.pages.push(page);
+
+    const currentPageAffected = this.displayedPageIndices.some(idx =>
+      affectedPageIndices.includes(idx)
+    );
+
+    for (const pageIndex of affectedPageIndices) {
+      const cacheKey = makeCacheKey(pageIndex, MIN_RENDER_SCALE);
+      if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
+        const task = new taskpool.Task(cachePage, this.sandBoxPath, pageIndex, MIN_RENDER_SCALE);
+        const promise = taskpool.execute(task, taskpool.Priority.HIGH)
+          .then(pageCache => {
+            this.pageCache.set(cacheKey, pageCache as PageCache);
+            this.pendingTasks.remove(cacheKey);
+            hilog.info(0, 'PDFView', `页面 ${pageIndex} 已在缩放 ${MIN_RENDER_SCALE} 下重新缓存`);
+            return pageCache;
+          })
+          .catch((error: Error) => {
+            this.pendingTasks.remove(cacheKey);
+            hilog.error(0, 'PDFView', `重新缓存页面 ${pageIndex} 失败: ${error.message}`);
+            throw error;
+          });
+        this.pendingTasks.set(cacheKey, promise);
+      }
     }
-    
-    // 再次启动后台缓存
-    this.startBackgroundCaching();
-    
-    // 重新加载当前页面
-    await this.gotoPage(savedPageIndex);
-    
-    // 页面重新加载后恢复视图状态以最小化用户中断
-    this.viewScale = savedViewScale;
-    this.viewPan = savedViewPan;
-    this.currentRenderScale = savedRenderScale;
-    this.clampViewPan();
-    
-    // 检查是否需要在恢复的缩放处进行更高分辨率渲染
-    this.checkAndUpdateRenderScale();
-    
+
+    if (currentPageAffected) {
+      this.refreshDisplayedPages();
+    }
+  }
+
+  async refreshDisplayedPages(): Promise<void> {
+    for (let i = 0; i < this.displayedPageIndices.length; i++) {
+      const pageIndex = this.displayedPageIndices[i];
+      const cache = await this.getPageCache(pageIndex, this.currentRenderScale);
+      if (i === 0) {
+        this.view1PixelMap = cache.pixelMap;
+        this.view1ViewSize = cache.displaySize;
+      } else if (i === 1) {
+        this.view2PixelMap = cache.pixelMap;
+        this.view2ViewSize = cache.displaySize;
+      } else if (i === 2) {
+        this.view3PixelMap = cache.pixelMap;
+        this.view3ViewSize = cache.displaySize;
+      }
+    }
+    this.updateViewSize();
     this.redrawStrokes();
   }
 
