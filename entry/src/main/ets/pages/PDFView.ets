@@ -76,7 +76,7 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
   const document = new pdfService.PdfDocument();
   const result = document.loadDocument(sandboxPath);
   if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-    throw new Error(`Failed to load document: ${result}`);
+    throw new Error(`加载文档失败: ${result}`);
   }
 
   const page = document.getPage(pageIndex);
@@ -90,7 +90,7 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
   matrix.rotate = 0;
   const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
 
-  // Display size is always at MIN_RENDER_SCALE (2) for consistent UI sizing
+  // 显示大小始终为 MIN_RENDER_SCALE (2)，以保持一致的 UI 缩放
   const displaySize = mul(baseSize, 2);
 
   return {
@@ -106,11 +106,11 @@ interface PageCache {
   page: pdfService.PdfPage;
   pixelMap: PixelMap;
   renderScale: number;
-  baseSize: Vector2;    // Original page size without scaling
-  displaySize: Vector2; // Size for UI display (always at MIN_RENDER_SCALE)
+  baseSize: Vector2;    // 原始页面大小（无缩放）
+  displaySize: Vector2; // UI 显示大小（始终为 MIN_RENDER_SCALE）
 }
 
-// Helper to create cache key for multi-level caching
+// 创建多级缓存键的辅助函数
 function makeCacheKey(pageIndex: number, renderScale: number): string {
   return `${pageIndex}_${renderScale}`;
 }
@@ -123,7 +123,7 @@ struct PDFView2 {
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   private document = new pdfService.PdfDocument();
   private pages: Array<pdfService.PdfPage> = [];
-  // Multi-level cache: key is "pageIndex_renderScale"
+  // 多级缓存：键为 "pageIndex_renderScale"
   private pageCache: HashMap<string, PageCache> = new HashMap<string, PageCache>();
   private pendingTasks: HashMap<string, Promise<Object>> = new HashMap<string, Promise<Object>>();
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
@@ -180,7 +180,7 @@ struct PDFView2 {
     this.sandBoxPath = args['sandboxPath'];
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-      hilog.error(0, 'PDFView', `Err on loading pdf file: ${result}`)
+      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${result}`)
       App.terminate();
       return;
     }
@@ -216,12 +216,12 @@ struct PDFView2 {
           .then(pageCache => {
             this.pageCache.set(cacheKey, pageCache as PageCache);
             this.pendingTasks.remove(cacheKey);
-            hilog.info(0, 'PDFView', `Page ${i} cached at scale ${MIN_RENDER_SCALE}`);
+            hilog.info(0, 'PDFView', `页面 ${i} 已在缩放 ${MIN_RENDER_SCALE} 下缓存`);
             return pageCache;
           })
           .catch((error: Error) => {
             this.pendingTasks.remove(cacheKey);
-            hilog.error(0, 'PDFView', `Failed to cache page ${i}: ${error.message}`);
+            hilog.error(0, 'PDFView', `缓存页面 ${i} 失败: ${error.message}`);
             throw error;
           });
         this.pendingTasks.set(cacheKey, promise);
@@ -242,7 +242,7 @@ struct PDFView2 {
     const requiredScale = this.getRenderScaleForViewScale(this.viewScale);
     
     if (requiredScale !== this.currentRenderScale) {
-      hilog.info(0, 'PDFView', `Scale change detected: ${this.currentRenderScale} -> ${requiredScale}`);
+      hilog.info(0, 'PDFView', `检测到缩放变化: ${this.currentRenderScale} -> ${requiredScale}`);
       this.currentRenderScale = requiredScale;
       // 以新缩放重新渲染当前显示的页面
       await this.updateDisplayedPagesAtScale(requiredScale);
@@ -253,7 +253,7 @@ struct PDFView2 {
   async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
     for (const pageIndex of this.displayedPageIndices) {
       const cache = await this.getPageCache(pageIndex, renderScale);
-      // Update the corresponding view's pixelMap
+      // 更新相应视图的 pixelMap
       const displayIndex = this.displayedPageIndices.indexOf(pageIndex);
       if (displayIndex === 0) {
         this.view1PixelMap = cache.pixelMap;
@@ -266,7 +266,7 @@ struct PDFView2 {
         this.view3ViewSize = cache.displaySize;
       }
     }
-    // Recalculate viewSize based on updated displaySizes
+    // 根据更新的 displaySizes 重新计算 viewSize
     this.updateViewSize();
   }
 
@@ -324,12 +324,12 @@ struct PDFView2 {
       .then(pageCache => {
         this.pageCache.set(cacheKey, pageCache as PageCache);
         this.pendingTasks.remove(cacheKey);
-        hilog.info(0, 'PDFView', `Page ${targetIndex} cached at scale ${renderScale}`);
+        hilog.info(0, 'PDFView', `页面 ${targetIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache;
       })
       .catch((error: Error) => {
         this.pendingTasks.remove(cacheKey);
-        hilog.error(0, 'PDFView', `Failed to cache page ${targetIndex} at scale ${renderScale}: ${error.message}`);
+        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${targetIndex} 失败: ${error.message}`);
         throw error;
       });
 
@@ -339,7 +339,7 @@ struct PDFView2 {
     if (fallbackCache !== undefined) {
       // 在高分辨率版本准备好时安排更新
       promise.then((highResCache) => {
-        // 如果此页面仍然可见，更新显示的pixelMap
+        // 如果此页面仍然可见，更新显示的 pixelMap
         if (this.displayedPageIndices.includes(targetIndex)) {
           const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
           const cache = highResCache as PageCache;
@@ -517,7 +517,7 @@ struct PDFView2 {
       }
     }
 
-    // Reset view to fit content in viewport
+    // 重置视图以适应视口中的内容
     this.resetViewToFit();
     this.redrawStrokes();
   }
@@ -560,7 +560,7 @@ struct PDFView2 {
       this.preferences.putSync('pageDisplayMode', value);
       this.preferences.flushSync();
     } catch (error) {
-      hilog.error(0, 'PDFView', `Err on saving page display mode: ${error}.`);
+      hilog.error(0, 'PDFView', `保存页面显示模式出错: ${error}.`);
     }
   }
 
@@ -570,7 +570,7 @@ struct PDFView2 {
       this.preferences.putSync('pageFlipMode', value);
       this.preferences.flushSync();
     } catch (error) {
-      hilog.error(0, 'PDFView', `Err on saving page flip mode: ${error}.`);
+      hilog.error(0, 'PDFView', `保存翻页模式出错: ${error}.`);
     }
   }
 
@@ -580,7 +580,7 @@ struct PDFView2 {
       this.preferences.putSync('annotateMode', value);
       this.preferences.flushSync();
     } catch (error) {
-      hilog.error(0, 'PDFView', `Err on saving annotation mode: ${error}.`);
+      hilog.error(0, 'PDFView', `保存注释模式出错: ${error}.`);
     }
   }
 
@@ -590,7 +590,7 @@ struct PDFView2 {
       this.preferences.putSync('showControls', value);
       this.preferences.flushSync();
     } catch (error) {
-      hilog.error(0, 'PDFView', `Err on saving show controls: ${error}.`);
+      hilog.error(0, 'PDFView', `保存显示控件出错: ${error}.`);
     }
   }
 
@@ -715,13 +715,13 @@ struct PDFView2 {
     const history = this.undoHistory.pop();
     this.undoHistoryCount = this.undoHistory.length;
     
-    // Navigate to the page if needed
+    // 如果需要，导航到该页面
     if (this.currentPageIndex !== history.pageIndex) {
       this.gotoPage(history.pageIndex);
     }
     
     if (history.mode === 'add') {
-      // Undo an add: remove the stroke
+      // 撤销添加：移除笔画
       if (this.pageStrokes.hasKey(history.pageIndex)) {
         const strokes = this.pageStrokes.get(history.pageIndex);
         const index = strokes.indexOf(history.path);
@@ -730,7 +730,7 @@ struct PDFView2 {
         }
       }
     } else if (history.mode === 'erase') {
-      // Undo an erase: restore the stroke
+      // 撤销擦除：恢复笔画
       if (!this.pageStrokes.hasKey(history.pageIndex)) {
         this.pageStrokes.set(history.pageIndex, []);
       }
@@ -750,19 +750,19 @@ struct PDFView2 {
     const history = this.redoHistory.pop();
     this.redoHistoryCount = this.redoHistory.length;
     
-    // Navigate to the page if needed
+    // 如果需要，导航到该页面
     if (this.currentPageIndex !== history.pageIndex) {
       this.gotoPage(history.pageIndex);
     }
     
     if (history.mode === 'add') {
-      // Redo an add: add the stroke back
+      // 重做添加：重新添加笔画
       if (!this.pageStrokes.hasKey(history.pageIndex)) {
         this.pageStrokes.set(history.pageIndex, []);
       }
       this.pageStrokes.get(history.pageIndex).push(history.path);
     } else if (history.mode === 'erase') {
-      // Redo an erase: remove the stroke again
+      // 重做擦除：再次移除笔画
       if (this.pageStrokes.hasKey(history.pageIndex)) {
         const strokes = this.pageStrokes.get(history.pageIndex);
         const index = strokes.indexOf(history.path);
@@ -776,6 +776,130 @@ struct PDFView2 {
     this.undoHistoryCount = this.undoHistory.length;
     this.updateUnsavedStrokesFlag();
     this.redrawStrokes();
+  }
+
+  strokeToPdfStrokes(stroke: PathWithPoints): Vector2[] {
+    // 将折线笔画转换为具有厚度的多边形轮廓
+    // 输入 stroke.points 是连续点的折线
+    // 输出是表示笔画轮廓的闭合多边形
+    
+    const points = stroke.points;
+    if (points.length < 2) {
+      return points; // 无法从少于 2 个点创建轮廓
+    }
+    
+    // 笔画厚度，与点使用相同的单位（通常为画布像素）
+    const strokeWidth = 1 * CanvasOverSampling; // 过采样比例下的 1 像素
+    const halfWidth = strokeWidth / 2;
+    
+    // 辅助函数：计算垂直向量（逆时针旋转 90 度）
+    const getPerpendicular = (dx: number, dy: number): Vector2 => {
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 0.0001) return Vec2(0, 0); // 退化情况
+      return Vec2(-dy / len, dx / len);
+    };
+    
+    // 辅助函数：将偏移向量添加到点
+    const offsetPoint = (point: Vector2, perp: Vector2, distance: number): Vector2 => {
+      return Vec2(point.x + perp.x * distance, point.y + perp.y * distance);
+    };
+    
+    // 辅助函数：计算斜接处的直线交点
+    const getLineIntersection = (
+      p1: Vector2, dir1: Vector2,
+      p2: Vector2, dir2: Vector2
+    ): Vector2 | undefined => {
+      // 直线 1: p1 + t * dir1
+      // 直线 2: p2 + s * dir2
+      // 求解: p1 + t * dir1 = p2 + s * dir2
+      
+      const det = dir1.x * dir2.y - dir1.y * dir2.x;
+      if (Math.abs(det) < 0.0001) {
+        return undefined; // 直线平行
+      }
+      
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const t = (dx * dir2.y - dy * dir2.x) / det;
+      
+      return Vec2(p1.x + t * dir1.x, p1.y + t * dir1.y);
+    };
+    
+    const outerPath: Vector2[] = [];
+    const innerPath: Vector2[] = [];
+    
+    // 处理每个点并创建偏移点
+    for (let i = 0; i < points.length; i++) {
+      const current = points[i];
+      const prev = i > 0 ? points[i - 1] : undefined;
+      const next = i < points.length - 1 ? points[i + 1] : undefined;
+      
+      let perpendicular: Vector2 | undefined;
+      
+      if (prev && next) {
+        // 内部点：对相邻线段的垂直向量取平均
+        const dx1 = current.x - prev.x;
+        const dy1 = current.y - prev.y;
+        const perp1 = getPerpendicular(dx1, dy1);
+        
+        const dx2 = next.x - current.x;
+        const dy2 = next.y - current.y;
+        const perp2 = getPerpendicular(dx2, dy2);
+        
+        // 平均并归一化以获得斜接式连接
+        const avgPerp = Vec2(perp1.x + perp2.x, perp1.y + perp2.y);
+        const len = Math.sqrt(avgPerp.x * avgPerp.x + avgPerp.y * avgPerp.y);
+        
+        if (len > 0.0001) {
+          perpendicular = Vec2(avgPerp.x / len, avgPerp.y / len);
+          
+          // 调整尖角以防止斜接过长
+          const crossProduct = perp1.x * perp2.y - perp1.y * perp2.x;
+          const dotProduct = perp1.x * perp2.x + perp1.y * perp2.y;
+          const angle = Math.acos(Math.max(-1, Math.min(1, dotProduct)));
+          
+          // 如果角度非常尖锐，使用斜切而不是完整斜接
+          if (Math.abs(crossProduct) > 0.1 && angle > Math.PI * 0.9) {
+            // 限制斜接长度以防止极端点
+            const len_p = Math.sqrt(perpendicular.x * perpendicular.x + perpendicular.y * perpendicular.y);
+            const maxMiter = 2.0; // 最大斜接乘数
+            const distance = halfWidth / (Math.abs(crossProduct) + 0.1);
+            const limitedDistance = Math.min(halfWidth * maxMiter, Math.max(halfWidth, distance));
+            
+            outerPath.push(offsetPoint(current, perpendicular, limitedDistance));
+            innerPath.push(offsetPoint(current, perpendicular, -limitedDistance));
+          } else {
+            outerPath.push(offsetPoint(current, perpendicular, halfWidth));
+            innerPath.push(offsetPoint(current, perpendicular, -halfWidth));
+          }
+        } else {
+          // 零长度平均值的回退情况（不应经常发生）
+          outerPath.push(offsetPoint(current, perp1, halfWidth));
+          innerPath.push(offsetPoint(current, perp1, -halfWidth));
+        }
+      } else if (prev && !next) {
+        // 端点：使用最后一段的垂直向量
+        const dx = current.x - prev.x;
+        const dy = current.y - prev.y;
+        perpendicular = getPerpendicular(dx, dy);
+        
+        outerPath.push(offsetPoint(current, perpendicular, halfWidth));
+        innerPath.push(offsetPoint(current, perpendicular, -halfWidth));
+      } else if (!prev && next) {
+        // 起始点：使用到下一段的垂直向量
+        const dx = next.x - current.x;
+        const dy = next.y - current.y;
+        perpendicular = getPerpendicular(dx, dy);
+        
+        outerPath.push(offsetPoint(current, perpendicular, halfWidth));
+        innerPath.push(offsetPoint(current, perpendicular, -halfWidth));
+      }
+    }
+    
+    // 通过组合外部路径和反向的内部路径创建闭合多边形
+    const polygon: Vector2[] = [...outerPath, ...innerPath.reverse()];
+    
+    return polygon;
   }
 
   async executeSave(): Promise<void> {
@@ -803,19 +927,19 @@ struct PDFView2 {
       );
 
       for (const stroke of strokes) {
-        const annotationInfo = new pdfService.InkAnnotationInfo();
-        annotationInfo.lineColor = 0xFFCA1A1A;
-
         // 将笔画点从画布原生坐标（vp）转换为 PDF 坐标
         const transformedPoints: Vector2[] = [];
-        for (const point of stroke.points) {
+        const pdfPoints: Vector2[] = stroke.points;
+        for (const point of pdfPoints) {
           const transformedPoint = Vec2(
             (point.x / canvasSizeVp.x) * pdfPageSize.x,
             (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
           );
           transformedPoints.push(transformedPoint);
         }
-        annotationInfo.inkPoints = transformedPoints;
+        const annotationInfo = new pdfService.PolylineAnnotationInfo();
+        annotationInfo.vertexes = transformedPoints;
+        annotationInfo.lineColor = 0xff0000ff;
         pdfPage.addAnnotation(annotationInfo);
       }
     }
@@ -831,7 +955,7 @@ struct PDFView2 {
     // 保存文档
     const success = this.document.saveDocument(this.sandBoxPath);
     if (!success) {
-      hilog.error(0, 'PDFView', 'Error saving PDF file');
+      hilog.error(0, 'PDFView', '保存 PDF 文件时出错');
       return;
     }
     
@@ -841,7 +965,7 @@ struct PDFView2 {
     
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
-      hilog.error(0, 'PDFView', `Error re-loading PDF file: ${result}`);
+      hilog.error(0, 'PDFView', `重新加载 PDF 文件出错: ${result}`);
       App.terminate();
       return;
     }
