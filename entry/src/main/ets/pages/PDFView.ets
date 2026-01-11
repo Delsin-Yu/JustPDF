@@ -890,20 +890,7 @@ struct PDFView2 {
     }
 
     try {
-
-      let arrayBuffer = new ArrayBuffer(1024 * 1024);
-      let readLength = 0;
-      let totalLength = 0;
-      let stat = await fs.stat(this.sandBoxPath);
-      let fileSize = stat.size;
-      while (fileSize > 0) {
-        let len = fileSize > arrayBuffer.byteLength ? arrayBuffer.byteLength : fileSize;
-        readLength = await fs.read(srcFile.fd, arrayBuffer, { offset: totalLength, length: len });
-        if (readLength <= 0) break;
-        await fs.write(dstFile.fd, arrayBuffer, { length: readLength });
-        totalLength += readLength;
-        fileSize -= readLength;
-      }
+      await fs.copyFile(srcFile.fd, dstFile.fd);
       await fs.close(srcFile);
       await fs.close(dstFile);
     } catch (err) {
