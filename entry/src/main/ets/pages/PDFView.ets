@@ -145,7 +145,6 @@ struct PDFView {
   private currentRenderScale: number = MIN_RENDER_SCALE;
   // 跟踪当前显示的页面
   private displayedPageIndices: number[] = [];
-  private hotKeyRegistration: HashMap<KeystrokeEvent, () => void> = new HashMap<KeystrokeEvent, () => void>();
 
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
@@ -1175,9 +1174,18 @@ struct PDFView {
         this.activeDrawPath.points.push(touchPoint);
       } else if (event.type === TouchType.Up) {
         this.activeDrawPath.points.push(touchPoint);
-        // 仅当笔画有足够的点数时才添加笔画（至少3个：Down + Move + Up）
-        // 这避免了从意外点击添加点
-        if (this.activeDrawPath.points.length >= 3) {
+        
+        let pathLength = 0;
+        for (let i = 1; i < this.activeDrawPath.points.length; i++) {
+          const p1 = this.activeDrawPath.points[i - 1];
+          const p2 = this.activeDrawPath.points[i];
+          const dx = p2.x - p1.x;
+          const dy = p2.y - p1.y;
+          pathLength += Math.sqrt(dx * dx + dy * dy);
+        }
+        
+        const minPathLength = 2 * CanvasOverSampling;
+        if (pathLength >= minPathLength) {
           if (!this.pageStrokes.hasKey(pageIndex)) {
             this.pageStrokes.set(pageIndex, []);
           }
