@@ -792,8 +792,8 @@ struct PDFView {
     const history = this.undoHistory.pop();
     this.undoHistoryCount = this.undoHistory.length;
 
-    // 如果需要，导航到该页面
-    if (this.currentPageIndex !== history.pageIndex) {
+    const needsPageNavigation = !this.displayedPageIndices.includes(history.pageIndex);
+    if (needsPageNavigation) {
       this.gotoPage(history.pageIndex);
     }
 
@@ -827,8 +827,8 @@ struct PDFView {
     const history = this.redoHistory.pop();
     this.redoHistoryCount = this.redoHistory.length;
 
-    // 如果需要，导航到该页面
-    if (this.currentPageIndex !== history.pageIndex) {
+    const needsPageNavigation = !this.displayedPageIndices.includes(history.pageIndex);
+    if (needsPageNavigation) {
       this.gotoPage(history.pageIndex);
     }
 
