@@ -25,14 +25,13 @@ struct Index {
   async loadAndViewFile(uri: string) {
     let uiContext = this.getUIContext();
     let dir = uiContext.getHostContext()!.tempDir;
-    let file = dir + "/sandboxed.pdf";
-    let tempFile = dir + "/saveTemp.pdf";
-    hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
+    let fileName = sourceFile.name;
+    let file = dir + "/" + fileName;
+    let tempFile = dir + "/saveTemp_" + fileName;
+    hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
-    
-    let fileName = sourceFile.name;
 
     let args: Record<string, string> = {
       'systemPath': uri,
