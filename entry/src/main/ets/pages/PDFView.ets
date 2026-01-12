@@ -844,18 +844,14 @@ struct PDFView {
           );
           transformedPoints.push(transformedPoint);
         }
-        const annotationInfo = new pdfService.InkAnnotationInfo();
+        const annotationInfo = new pdfService.PolylineAnnotationInfo();
         annotationInfo.subject = '由 Just PDF 创建的注释';
         annotationInfo.creationDate = new Date(Date.now());
         annotationInfo.modifiedTime = new Date(Date.now());
-        annotationInfo.inkPoints = transformedPoints;
+        annotationInfo.vertexes = transformedPoints;
         annotationInfo.lineColor = 3547621;
-        const border = new pdfService.PdfBorder()
-        border.borderColor = -1;
-        border.borderStyle = pdfService.BorderStyle.NONE;
-        border.borderWidth = -1;
-        annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
         annotationInfo.uniqueId = generateGUID();
+        annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
         const annotation = pdfPage.addAnnotation(annotationInfo);
         affectedPage.get(pageIndex).push(annotation);
       }
