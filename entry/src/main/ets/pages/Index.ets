@@ -31,10 +31,14 @@ struct Index {
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
+    
+    let fileName = sourceFile.name;
+
     let args: Record<string, string> = {
       'systemPath': uri,
       'sandboxPath': file,
-      'saveTempPath': tempFile
+      'saveTempPath': tempFile,
+      'fileName': fileName
     }
     uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }

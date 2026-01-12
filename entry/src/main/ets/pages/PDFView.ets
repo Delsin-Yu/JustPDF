@@ -20,7 +20,9 @@ import { preferences } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { picker } from '@kit.CoreFileKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
+import { uniformTypeDescriptor as utd } from '@kit.ArkData';
+import { harmonyShare, systemShare } from '@kit.ShareKit';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -129,6 +131,7 @@ struct PDFView {
   private systemPath = '';
   private sandBoxPath = '';
   private saveTempPath = '';
+  private fileName = '';
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   private document = new pdfService.PdfDocument();
   private pages: Array<pdfService.PdfPage> = [];
@@ -191,6 +194,7 @@ struct PDFView {
     this.systemPath = args['systemPath'];
     this.sandBoxPath = args['sandboxPath'];
     this.saveTempPath = args['saveTempPath'];
+    this.fileName = args['fileName'];
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
       hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${result}`)
@@ -217,9 +221,46 @@ struct PDFView {
 
     //TODO: this.hotKeyRegistration.set()
 
+    this.immersiveListening();
+    const context = this.getUIContext().getHostContext() as Context;
+    context.eventHub.on('onBackGround', this.onBackGround);
+
     this.gotoPage(0);
     // 使用TaskPool启动后台缓存
     this.startBackgroundCaching();
+  }
+
+  aboutToDisappear(): void {
+    this.immersiveDisablingListening();
+    const context = this.getUIContext().getHostContext() as Context;
+    context.eventHub.off('onBackGround', this.onBackGround);
+  }
+
+  onPageHide(): void {
+    const context = this.getUIContext().getHostContext() as Context;
+    context.eventHub.emit('onBackGround');
+  }
+
+  private onBackGround = () => {
+    this.immersiveDisablingListening();
+  }
+
+  private immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
+    const shareData: systemShare.SharedData = new systemShare.SharedData({
+      utd: utd.UniformDataType.PDF,
+      uri: fileUri.getUriFromPath(this.sandBoxPath),
+      title: this.fileName,
+      description: `共 ${this.totalPageCount} 页`
+    });
+    sharableTarget.share(shareData);
+  }
+
+  private immersiveListening() {
+    harmonyShare.on('knockShare', this.immersiveCallback);
+  }
+
+  private immersiveDisablingListening() {
+    harmonyShare.off('knockShare', this.immersiveCallback);
   }
 
   startBackgroundCaching(): void {
