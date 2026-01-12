@@ -62,28 +62,6 @@ export struct StyleText {
 }
 
 @ComponentV2
-export struct StyleToggle {
-  @Param text: string = '';
-  @Param style: 'normal' | 'wide' = 'normal';
-  @Param onChangeCallback: (checked: boolean) => void = () => {
-  };
-
-  build() {
-    Toggle({ type: ToggleType.Button }) {
-      Text(this.text)
-        .fontSize(ButtonFontSize)
-        .fontWeight(FontWeight.Bold)
-    }
-    .size(this.style == 'normal' ? ButtonSize : ButtonSizeWide)
-    .hitTestBehavior(HitTestMode.Block)
-    .monopolizeEvents(true)
-    .backgroundColor(ButtonColor)
-    .selectedColor(ButtonColorSemiTransparent)
-    .onChange(value => this.onChangeCallback(value))
-  }
-}
-
-@ComponentV2
 export struct StyleButton {
 
   @Param text: string = '';
