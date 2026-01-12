@@ -16,12 +16,10 @@ import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
 import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
-import { preferences } from '@kit.ArkData';
+import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { picker } from '@kit.CoreFileKit';
-import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
-import { uniformTypeDescriptor as utd } from '@kit.ArkData';
+import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 
@@ -112,7 +110,7 @@ interface PageCache {
   page: pdfService.PdfPage;
   pixelMap: PixelMap;
   renderScale: number;
-  baseSize: Vector2;    // 原始页面大小（无缩放）
+  baseSize: Vector2; // 原始页面大小（无缩放）
   displaySize: Vector2; // UI 显示大小（始终为 MIN_RENDER_SCALE）
 }
 
@@ -145,7 +143,6 @@ struct PDFView {
   private currentRenderScale: number = MIN_RENDER_SCALE;
   // 跟踪当前显示的页面
   private displayedPageIndices: number[] = [];
-
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
   @State view3PixelMap: PixelMap | undefined = undefined;
@@ -211,14 +208,16 @@ struct PDFView {
 
     // 加载首选项
     this.showControls = this.preferences.getSync('showControls', true) as boolean;
-    this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+    this.pageDisplayMode = this.preferences.getSync('pageDisplayMode',
+      'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
     this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
     this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
     this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
       statusType == window.WindowStatusType.FULL_SCREEN);
     try {
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
-    } catch (error) { }
+    } catch (error) {
+    }
 
     //TODO: this.hotKeyRegistration.set()
 
@@ -304,7 +303,7 @@ struct PDFView {
   // 检查当前显示的页面是否需要以不同的缩放重新渲染
   async checkAndUpdateRenderScale(): Promise<void> {
     const requiredScale = this.getRenderScaleForViewScale(this.viewScale);
-    
+
     if (requiredScale !== this.currentRenderScale) {
       hilog.info(0, 'PDFView', `检测到缩放变化: ${this.currentRenderScale} -> ${requiredScale}`);
       this.currentRenderScale = requiredScale;
@@ -355,7 +354,7 @@ struct PDFView {
 
   async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
     const cacheKey = makeCacheKey(targetIndex, renderScale);
-    
+
     // 如果已在请求的缩放尺度缓存，立即返回
     if (this.pageCache.hasKey(cacheKey)) {
       return this.pageCache.get(cacheKey);
@@ -379,10 +378,10 @@ struct PDFView {
     }
 
     // 为请求的渲染缩放创建任务
-    const priority = renderScale === MIN_RENDER_SCALE 
-      ? taskpool.Priority.HIGH 
+    const priority = renderScale === MIN_RENDER_SCALE
+      ? taskpool.Priority.HIGH
       : taskpool.Priority.MEDIUM;
-    
+
     const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex, renderScale);
     const promise = taskpool.execute(task, priority)
       .then(pageCache => {
@@ -398,7 +397,7 @@ struct PDFView {
       });
 
     this.pendingTasks.set(cacheKey, promise);
-    
+
     // 如果我们有备选方案，立即返回它并让高分辨率版本在后台加载
     if (fallbackCache !== undefined) {
       // 在高分辨率版本准备好时安排更新
@@ -418,7 +417,7 @@ struct PDFView {
       });
       return fallbackCache;
     }
-    
+
     return await promise as PageCache;
   }
 
@@ -475,8 +474,8 @@ struct PDFView {
       this.view3PixelMap = undefined;
       this.view3Visible = false;
     } else if (this.pageDisplayMode === 'dualContinuous') {
-      this.displayedPageIndices = targetIndex + 1 < this.totalPageCount 
-        ? [targetIndex, targetIndex + 1] 
+      this.displayedPageIndices = targetIndex + 1 < this.totalPageCount
+        ? [targetIndex, targetIndex + 1]
         : [targetIndex];
       const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
@@ -509,8 +508,12 @@ struct PDFView {
       index3 = index1 + 2 < this.totalPageCount ? index1 + 2 : undefined;
 
       this.displayedPageIndices = [index1];
-      if (index2 !== undefined) this.displayedPageIndices.push(index2);
-      if (index3 !== undefined) this.displayedPageIndices.push(index3);
+      if (index2 !== undefined) {
+        this.displayedPageIndices.push(index2);
+      }
+      if (index3 !== undefined) {
+        this.displayedPageIndices.push(index3);
+      }
 
       const view1Page = await this.getPageCache(index1, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
@@ -532,7 +535,8 @@ struct PDFView {
         this.view3ViewSize = view3Page.displaySize;
         this.view3Visible = true;
         this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing +
+          view3Page.displaySize.x,
           Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
         );
       } else {
@@ -545,8 +549,12 @@ struct PDFView {
       }
     } else if (this.pageDisplayMode === 'triContinuous') {
       this.displayedPageIndices = [targetIndex];
-      if (targetIndex + 1 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 1);
-      if (targetIndex + 2 < this.totalPageCount) this.displayedPageIndices.push(targetIndex + 2);
+      if (targetIndex + 1 < this.totalPageCount) {
+        this.displayedPageIndices.push(targetIndex + 1);
+      }
+      if (targetIndex + 2 < this.totalPageCount) {
+        this.displayedPageIndices.push(targetIndex + 2);
+      }
 
       const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
       this.view1PixelMap = view1Page.pixelMap;
@@ -568,14 +576,16 @@ struct PDFView {
         this.view3ViewSize = view3Page.displaySize;
         this.view3Visible = true;
         this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing + view3Page.displaySize.x,
+          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing +
+          view3Page.displaySize.x,
           Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
         );
       } else {
         this.view3PixelMap = undefined;
         this.view3Visible = false;
         this.viewSize = Vec2(
-          view1Page.displaySize.x + (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
+          view1Page.displaySize.x +
+            (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
           Math.max(view1Page.displaySize.y, targetIndex + 1 < this.totalPageCount ? this.view2ViewSize.y : 0)
         );
       }
@@ -778,12 +788,12 @@ struct PDFView {
     }
     const history = this.undoHistory.pop();
     this.undoHistoryCount = this.undoHistory.length;
-    
+
     // 如果需要，导航到该页面
     if (this.currentPageIndex !== history.pageIndex) {
       this.gotoPage(history.pageIndex);
     }
-    
+
     if (history.mode === 'add') {
       // 撤销添加：移除笔画
       if (this.pageStrokes.hasKey(history.pageIndex)) {
@@ -800,7 +810,7 @@ struct PDFView {
       }
       this.pageStrokes.get(history.pageIndex).push(history.path);
     }
-    
+
     this.redoHistory.push(history);
     this.redoHistoryCount = this.redoHistory.length;
     this.updateUnsavedStrokesFlag();
@@ -813,12 +823,12 @@ struct PDFView {
     }
     const history = this.redoHistory.pop();
     this.redoHistoryCount = this.redoHistory.length;
-    
+
     // 如果需要，导航到该页面
     if (this.currentPageIndex !== history.pageIndex) {
       this.gotoPage(history.pageIndex);
     }
-    
+
     if (history.mode === 'add') {
       // 重做添加：重新添加笔画
       if (!this.pageStrokes.hasKey(history.pageIndex)) {
@@ -835,7 +845,7 @@ struct PDFView {
         }
       }
     }
-    
+
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
     this.updateUnsavedStrokesFlag();
@@ -1022,7 +1032,7 @@ struct PDFView {
     }
 
     const currentPageAffected = this.displayedPageIndices.some(idx =>
-      affectedPageIndices.includes(idx)
+    affectedPageIndices.includes(idx)
     );
 
     for (const pageIndex of affectedPageIndices) {
@@ -1077,7 +1087,7 @@ struct PDFView {
     this.view1DrawCtx.reset();
     this.view2DrawCtx.reset();
     this.view3DrawCtx.reset();
-    
+
     // 加载显示页面的笔画
     for (let i = 0; i < this.displayedPageIndices.length; i++) {
       const pageIndex = this.displayedPageIndices[i];
@@ -1117,19 +1127,29 @@ struct PDFView {
     } else {
       viewSize = this.view3ViewSize;
     }
-    
+
     const pageIndex = this.displayedPageIndices[viewIndex] ?? 0;
     const canvasSize = this.getCanvasSize(pageIndex);
-    
+
     if (canvasSize.x === 0 || canvasSize.y === 0) {
-      return { x: 1, y: 1, centerX: 0, centerY: 0 };
+      return {
+        x: 1,
+        y: 1,
+        centerX: 0,
+        centerY: 0
+      };
     }
-    
+
     // 从 CanvasOverSampling 大小缩放画布到显示大小
     const scaleX = viewSize.x / canvasSize.x;
     const scaleY = viewSize.y / canvasSize.y;
-    
-    return { x: scaleX, y: scaleY, centerX: 0, centerY: 0 };
+
+    return {
+      x: scaleX,
+      y: scaleY,
+      centerX: 0,
+      centerY: 0
+    };
   }
 
   handleDrawTouch(
@@ -1174,7 +1194,7 @@ struct PDFView {
         this.activeDrawPath.points.push(touchPoint);
       } else if (event.type === TouchType.Up) {
         this.activeDrawPath.points.push(touchPoint);
-        
+
         let pathLength = 0;
         for (let i = 1; i < this.activeDrawPath.points.length; i++) {
           const p1 = this.activeDrawPath.points[i - 1];
@@ -1183,7 +1203,7 @@ struct PDFView {
           const dy = p2.y - p1.y;
           pathLength += Math.sqrt(dx * dx + dy * dy);
         }
-        
+
         const minPathLength = 2 * CanvasOverSampling;
         if (pathLength >= minPathLength) {
           if (!this.pageStrokes.hasKey(pageIndex)) {
@@ -1291,7 +1311,7 @@ struct PDFView {
       // 捏合放大处理 - 始终启用，不受注释模式影响
       // 标记双指手势激活，防止在绘制/擦除模式下意外创建笔画
       this.isDualFingerActive = true;
-      
+
       // 立即中断并清除任何进行中的绘制/擦除操作
       if (this.activeDrawPath.points.length > 0) {
         this.activeDrawPath = { path: new Path2D(), points: [] };
@@ -1303,7 +1323,7 @@ struct PDFView {
         this.pathsToErase.clear();
         this.redrawStrokes();
       }
-      
+
       const touch1 = Vec2(event.touches[0].x, event.touches[0].y);
       const touch2 = Vec2(event.touches[1].x, event.touches[1].y);
       const pinchCenter = Vec2((touch1.x + touch2.x) / 2, (touch1.y + touch2.y) / 2);
@@ -1380,7 +1400,8 @@ struct PDFView {
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
             .scale(this.getCanvasScale(0))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0, event))
+            .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
+              event))
         }
         .size(toSize(this.view1ViewSize))
         .visibility(toVisibility(true))
@@ -1395,7 +1416,8 @@ struct PDFView {
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
             .scale(this.getCanvasScale(1))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0, event))
+            .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
+              event))
         }
         .size(toSize(this.view2ViewSize))
         .visibility(toVisibility(this.view2Visible))
@@ -1410,7 +1432,8 @@ struct PDFView {
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
             .scale(this.getCanvasScale(2))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0, event))
+            .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
+              event))
         }
         .size(toSize(this.view3ViewSize))
         .visibility(toVisibility(this.view3Visible))
@@ -1546,9 +1569,7 @@ struct PDFView {
         }.height('100%')
 
         Column(ContainerCfg) {
-
           Blank()
-
           StyleButton({
             text: '拖动',
             symbol: getCheckIconName(this.annotateMode == 'drag'),
@@ -1569,38 +1590,35 @@ struct PDFView {
             alternateColor: this.annotateMode == 'erase' ? ButtonColorSemiTransparent : ButtonColor,
             onClickCallback: () => this.setAnnotateMode('erase')
           }).visibility(toVisibility(this.showControls))
-
-        }.height('100%');
+        }.height('100%')
 
         Blank();
 
         Column(ContainerCfg) {
-
           Blank()
 
           StyleNumBadgeButton({
             text: '撤回',
             count: this.undoHistoryCount,
             onClickCallback: () => this.executeUndo()
-          })
-            .visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls))
+
           StyleNumBadgeButton({
             text: '重做',
             count: this.redoHistoryCount,
             onClickCallback: () => this.executeRedo()
-          })
-            .visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls))
+
           StyleStrBadgeButton({
             text: '保存',
             badgeText: '!',
             badgeVisibility: this.hasUnsavedStrokes,
             onClickCallback: () => this.executeSave()
-          })
-            .visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls))
+
           StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
-
-        }.height('100%');
+        }.height('100%')
 
         Column(ContainerCfg) {
 
