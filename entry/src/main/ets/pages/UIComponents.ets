@@ -4,11 +4,11 @@ const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
 const ButtonSize: SizeOptions = { height: 40, width: 80 };
 const ButtonSizeWide: SizeOptions = { height: 40, width: 90 };
-export const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.5)`;
+export const ButtonColor: ResourceColor = `rgba(0, 0, 0, 0.4)`;
 const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
 export const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
-const BaseColor: ResourceColor = `rgba(50, 50, 50, 1)`;
-const TrackColor: ResourceColor = 'rgba(50, 50, 50, 0.4)';
+const BaseColor: ResourceColor = `rgba(0, 0, 0, 1)`;
+const TrackColor: ResourceColor = 'rgba(0, 0, 0, 0.2)';
 const ScrollBarWidth: Length = '40vp';
 const squareSymbol = $r('sys.symbol.square');
 const squareCheckedSymbol = $r('sys.symbol.checkmark_square_fill');
@@ -211,7 +211,7 @@ export struct MakeSlider {
       .height('50%')
       .alignSelf(ItemAlign.End)
       .trackColor(TrackColor)
-      .selectedColor(ButtonColor)
+      .selectedColor(TrackColor)
       .onChange((value, _) => this.onChangeCallback(value))
   }
 }

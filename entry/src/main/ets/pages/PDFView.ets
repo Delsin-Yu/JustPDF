@@ -161,6 +161,8 @@ struct PDFView {
   @State viewScale: number = 1.0;
   @State viewportSize: Vector2 = Vec2(0, 0);
   @State showControls: boolean = true;
+  @State controlsTransparency: number = 0.5;
+  private transparencyTimeoutId: number | undefined = undefined;
   private lastTouchPoint: Vector2 | undefined = undefined;
   private lastPinchDistance: number | undefined = undefined;
   private lastPinchCenter: Vector2 | undefined = undefined;
@@ -228,6 +230,7 @@ struct PDFView {
     this.gotoPage(0);
     // 使用TaskPool启动后台缓存
     this.startBackgroundCaching();
+    this.startTransparencyTimeout();
   }
 
   aboutToDisappear(): void {
@@ -1385,6 +1388,14 @@ struct PDFView {
     }
   }
 
+  startTransparencyTimeout(): void {
+    if (this.transparencyTimeoutId) {
+      clearTimeout(this.transparencyTimeoutId);
+    }
+    this.controlsTransparency = 1;
+    this.transparencyTimeoutId = setTimeout(() => this.controlsTransparency = 0.5, 1000 * 3);
+  }
+
   build() {
     RelativeContainer() {
 
@@ -1658,6 +1669,7 @@ struct PDFView {
       .alignRules(FullRect)
       .margin(ContainerPadding)
       .hitTestBehavior(HitTestMode.Transparent)
+      .opacity(this.controlsTransparency)
 
     }.hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
@@ -1723,5 +1735,6 @@ struct PDFView {
           }
       }
     })
+    .onTouchTestDone(() => this.startTransparencyTimeout())
   }
 }
