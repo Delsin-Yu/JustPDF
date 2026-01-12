@@ -2137,7 +2137,7 @@ struct PDFView {
                 builder: () => this.tutorialDialogBuilder()
               })
             }
-          })
+          }).visibility(toVisibility(this.showControls))
 
           Blank()
 
