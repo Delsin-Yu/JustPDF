@@ -8,7 +8,6 @@ import {
   StyleNumBadgeButton,
   StyleStrBadgeButton,
   StyleText,
-  StyleToggle,
   toVisibility
 } from './UIComponents';
 import { CustomContentDialogV2, AdvancedDialogV2Button, LengthMetricsUnit, window, LengthMetrics } from '@kit.ArkUI';
@@ -2054,9 +2053,12 @@ struct PDFView {
             .visibility(toVisibility(this.showControls))
           StyleButton({ text: '尾页', onClickCallback: () => this.gotoPage(this.totalPageCount - 1) })
             .visibility(toVisibility(this.showControls))
-          StyleToggle({
+          StyleButton({
             text: this.showControls ? '收起' : '展开',
-            onChangeCallback: value => this.showControls = !value
+            alternateColor: this.showControls ? ButtonColor : ButtonColorSemiTransparent,
+            onClickCallback: () => {
+              this.setShowControls(!this.showControls);
+            }
           })
 
         }.height('100%')
