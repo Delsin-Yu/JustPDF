@@ -166,8 +166,10 @@ struct PDFView {
   private lastTouchPoint: Vector2 | undefined = undefined;
   private lastPinchDistance: number | undefined = undefined;
   private lastPinchCenter: Vector2 | undefined = undefined;
-  private lastDualFingerEndTime: number = 0; // 双指手势结束时的时间戳
-  private isDualFingerActive: boolean = false; // 当前是否有双指手势激活
+  private lastDualFingerEndTime: number = 0;
+  private isDualFingerActive: boolean = false;
+  private lastMousePoint: Vector2 | undefined = undefined;
+  private activeMouseButton: number = 0; // 当前是否有双指手势激活
   private readonly minScale: number = 0.5;
   private readonly maxScale: number = 9.0;
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -261,8 +263,6 @@ struct PDFView {
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
     } catch (error) {
     }
-
-    //TODO: this.hotKeyRegistration.set()
 
     this.immersiveListening();
     const context = this.getUIContext().getHostContext() as Context;
@@ -1326,7 +1326,8 @@ struct PDFView {
   handleViewAction(event: TouchEvent): void {
     const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
-    const isTripleTouch = event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
+    const isTripleTouch =
+      event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
 
     if (isTripleTouch) {
       if (event.type === TouchType.Down && (this.annotateMode === 'draw' || this.annotateMode === 'erase')) {
@@ -1438,6 +1439,179 @@ struct PDFView {
     }
   }
 
+  handleMouseEvent(event: MouseEvent): void {
+    const mousePoint = Vec2(event.x, event.y);
+    const isLeftButton = event.button === MouseButton.Left;
+    const isRightButton = event.button === MouseButton.Right;
+
+    if (event.action === MouseAction.Press) {
+      this.lastMousePoint = mousePoint;
+      if (isLeftButton) {
+        this.activeMouseButton = 1;
+      } else if (isRightButton) {
+        this.activeMouseButton = 2;
+      }
+    } else if (event.action === MouseAction.Move) {
+      if (this.lastMousePoint !== undefined && this.activeMouseButton !== 0) {
+        const delta = Vec2(
+          mousePoint.x - this.lastMousePoint.x,
+          mousePoint.y - this.lastMousePoint.y
+        );
+
+        if (this.annotateMode === 'drag') {
+          if (this.activeMouseButton === 1 || this.activeMouseButton === 2) {
+            this.viewPan = Vec2(
+              this.viewPan.x + delta.x,
+              this.viewPan.y + delta.y
+            );
+            this.clampViewPan();
+          }
+        } else {
+          if (this.activeMouseButton === 2) {
+            this.viewPan = Vec2(
+              this.viewPan.x + delta.x,
+              this.viewPan.y + delta.y
+            );
+            this.clampViewPan();
+          }
+        }
+
+        this.lastMousePoint = mousePoint;
+      }
+    } else if (event.action === MouseAction.Release) {
+      this.lastMousePoint = undefined;
+      this.activeMouseButton = 0;
+    }
+  }
+
+  handleDrawMouse(
+    drawCtx: CanvasRenderingContext2D,
+    targetCtx: CanvasRenderingContext2D,
+    pageIndex: number,
+    event: MouseEvent
+  ): void {
+    const isLeftButton = event.button === MouseButton.Left;
+    if (!isLeftButton) {
+      return;
+    }
+
+    const mousePoint = Vec2(event.x, event.y);
+
+    if (this.annotateMode === 'draw') {
+      if (event.action === MouseAction.Press) {
+        this.activeDrawPath.path.moveTo(mousePoint.x, mousePoint.y);
+        this.activeDrawPath.points.push(mousePoint);
+      } else if (event.action === MouseAction.Move && this.activeMouseButton === 1) {
+        this.activeDrawPath.path.lineTo(mousePoint.x, mousePoint.y);
+        drawCtx.reset();
+        this.applyStrokeStyle(drawCtx);
+        drawCtx.stroke(this.activeDrawPath.path);
+        this.activeDrawPath.points.push(mousePoint);
+      } else if (event.action === MouseAction.Release) {
+        this.activeDrawPath.points.push(mousePoint);
+
+        let pathLength = 0;
+        for (let i = 1; i < this.activeDrawPath.points.length; i++) {
+          const p1 = this.activeDrawPath.points[i - 1];
+          const p2 = this.activeDrawPath.points[i];
+          const dx = p2.x - p1.x;
+          const dy = p2.y - p1.y;
+          pathLength += Math.sqrt(dx * dx + dy * dy);
+        }
+
+        const minPathLength = 2 * CanvasOverSampling;
+        if (pathLength >= minPathLength) {
+          if (!this.pageStrokes.hasKey(pageIndex)) {
+            this.pageStrokes.set(pageIndex, []);
+          }
+          this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+          this.appendUndoHistory({
+            path: this.activeDrawPath,
+            mode: 'add',
+            pageIndex: pageIndex
+          });
+          this.updateUnsavedStrokesFlag();
+          this.loadPageStrokes(targetCtx, pageIndex);
+        }
+        this.activeDrawPath = { path: new Path2D(), points: [] };
+        drawCtx.reset();
+      }
+    } else if (this.annotateMode === 'erase') {
+      if (!this.pageStrokes.hasKey(pageIndex)) {
+        return;
+      }
+
+      const eraseThreshold = 20 * CanvasOverSampling;
+      const strokes = this.pageStrokes.get(pageIndex);
+
+      if (event.action === MouseAction.Press) {
+        this.pathsToErase.clear();
+      }
+
+      if (event.action === MouseAction.Press || (event.action === MouseAction.Move && this.activeMouseButton === 1)) {
+        for (const stroke of strokes) {
+          if (this.pathsToErase.has(stroke)) {
+            continue;
+          }
+          for (const point of stroke.points) {
+            const dx = mousePoint.x - point.x;
+            const dy = mousePoint.y - point.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance < eraseThreshold) {
+              this.pathsToErase.add(stroke);
+              break;
+            }
+          }
+        }
+
+        targetCtx.reset();
+        this.applyStrokeStyle(targetCtx);
+        for (const stroke of strokes) {
+          if (!this.pathsToErase.has(stroke)) {
+            targetCtx.stroke(stroke.path);
+          }
+        }
+      } else if (event.action === MouseAction.Release) {
+        if (this.pathsToErase.size > 0) {
+          const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
+          this.pageStrokes.set(pageIndex, remainingStrokes);
+
+          this.pathsToErase.forEach(erasedPath => {
+            this.appendUndoHistory({
+              path: erasedPath,
+              mode: 'erase',
+              pageIndex: pageIndex
+            });
+          });
+
+          this.pathsToErase.clear();
+          targetCtx.reset();
+          this.updateUnsavedStrokesFlag();
+          this.loadPageStrokes(targetCtx, pageIndex);
+        }
+      }
+    }
+  }
+
+  handleMouseAxisEvent(event: AxisEvent): void {
+    const scrollAmount = -event.getVerticalAxisValue();
+    if (scrollAmount != undefined && scrollAmount != 0) {
+      const mousePoint = Vec2(event.x, event.y);
+      const zoomFactor = scrollAmount > 0 ? 1.1 : 0.9;
+      const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.viewScale * zoomFactor));
+      const actualScaleChange = newScale / this.viewScale;
+
+      const newPanX = mousePoint.x - (mousePoint.x - this.viewPan.x) * actualScaleChange;
+      const newPanY = mousePoint.y - (mousePoint.y - this.viewPan.y) * actualScaleChange;
+
+      this.viewScale = newScale;
+      this.viewPan = Vec2(newPanX, newPanY);
+      this.clampViewPan();
+
+      this.checkAndUpdateRenderScale();
+    }
+  }
+
   startTransparencyTimeout(): void {
     if (this.transparencyTimeoutId) {
       clearTimeout(this.transparencyTimeoutId);
@@ -1452,7 +1626,7 @@ struct PDFView {
       Row(ContainerCfg) {
 
         RelativeContainer() {
-          Image(this.view1PixelMap).alignRules(FullRect)
+          Image(this.view1PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view1Ctx)
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
             .scale(this.getCanvasScale(0))
@@ -1463,12 +1637,14 @@ struct PDFView {
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
               event))
+            .onMouse(event => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
+              event))
         }
         .size(toSize(this.view1ViewSize))
         .visibility(toVisibility(true))
 
         RelativeContainer() {
-          Image(this.view2PixelMap).alignRules(FullRect)
+          Image(this.view2PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view2Ctx)
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
             .scale(this.getCanvasScale(1))
@@ -1479,12 +1655,14 @@ struct PDFView {
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
               event))
+            .onMouse(event => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
+              event))
         }
         .size(toSize(this.view2ViewSize))
         .visibility(toVisibility(this.view2Visible))
 
         RelativeContainer() {
-          Image(this.view3PixelMap).alignRules(FullRect)
+          Image(this.view3PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view3Ctx)
             .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
             .scale(this.getCanvasScale(2))
@@ -1494,6 +1672,8 @@ struct PDFView {
             .scale(this.getCanvasScale(2))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
+              event))
+            .onMouse(event => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
               event))
         }
         .size(toSize(this.view3ViewSize))
@@ -1517,6 +1697,8 @@ struct PDFView {
         })
         .hitTestBehavior(HitTestMode.Transparent)
         .onTouch(event => this.handleViewAction(event))
+        .onMouse(event => this.handleMouseEvent(event))
+        .onAxisEvent(event => this.handleMouseAxisEvent(event))
 
       Button(PageFlipButtonOption)
         .size(PageFlipButtonSize)
@@ -1721,7 +1903,8 @@ struct PDFView {
       .hitTestBehavior(HitTestMode.Transparent)
       .opacity(this.controlsTransparency)
 
-    }.hitTestBehavior(HitTestMode.Transparent)
+    }
+    .hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
     .backgroundColor($r('sys.color.white'))
     .onKeyEvent(keyEvent => {
