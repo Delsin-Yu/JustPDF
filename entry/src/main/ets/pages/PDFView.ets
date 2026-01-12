@@ -257,10 +257,12 @@ struct PDFView {
 
   private immersiveListening() {
     harmonyShare.on('knockShare', this.immersiveCallback);
+    harmonyShare.on('gesturesShare', this.immersiveCallback);
   }
 
   private immersiveDisablingListening() {
     harmonyShare.off('knockShare', this.immersiveCallback);
+    harmonyShare.off('gesturesShare', this.immersiveCallback);
   }
 
   startBackgroundCaching(): void {
