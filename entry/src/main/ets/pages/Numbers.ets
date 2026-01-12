@@ -32,3 +32,11 @@ export function pxToVp(v: Vector2, uiContext: UIContext): Vector2 {
 export function vpToPx(v: Vector2, uiContext: UIContext): Vector2 {
   return Vec2(uiContext.vp2px(v.x), uiContext.vp2px(v.y));
 }
+
+export function generateGUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
