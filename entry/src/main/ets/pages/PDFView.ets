@@ -11,7 +11,7 @@ import {
   StyleToggle,
   toVisibility
 } from './UIComponents';
-import { LengthMetricsUnit, window } from '@kit.ArkUI';
+import { CustomContentDialogV2, AdvancedDialogV2Button, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
@@ -1620,6 +1620,34 @@ struct PDFView {
     this.transparencyTimeoutId = setTimeout(() => this.controlsTransparency = 0.5, 1000 * 3);
   }
 
+  @Builder
+  tutorialDialogBuilder(): void {
+    CustomContentDialogV2({
+      primaryTitle: 'Just PDF 使用教程',
+      contentBuilder: () => {
+        this.buildTutorialContent();
+      },
+      buttons: [
+        new AdvancedDialogV2Button({
+          content: '关闭',
+          buttonStyle: ButtonStyleMode.TEXTUAL,
+          role: ButtonRole.NORMAL,
+        })
+      ],
+    })
+  }
+
+  @Builder
+  buildTutorialContent(): void {
+    Scroll() {
+      Text(){
+        // Span("Just PDF 是为音乐演奏从业者设计的 PDF 阅读器，提供简洁、流畅的阅读及标注体验，以及对常见翻谱器的支持。")
+
+      }
+        .fontSize(40);
+    }
+  }
+
   build() {
     RelativeContainer() {
 
@@ -1880,6 +1908,14 @@ struct PDFView {
             text: '分享',
             onClickCallback: () => this.executeShare()
           }).visibility(toVisibility(this.showControls)).id(ShareButtonId)
+          StyleButton({
+            text: '教程',
+            onClickCallback: () => {
+              this.getUIContext().getPromptAction().openCustomDialog({
+                builder: () => this.tutorialDialogBuilder()
+              })
+            }
+          })
 
           Blank()
 
