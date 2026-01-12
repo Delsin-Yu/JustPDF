@@ -1284,6 +1284,14 @@ struct PDFView {
   handleViewAction(event: TouchEvent): void {
     const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
+    const isTripleTouch = event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
+
+    if (isTripleTouch) {
+      if (event.type === TouchType.Down && (this.annotateMode === 'draw' || this.annotateMode === 'erase')) {
+        this.executeUndo();
+      }
+      return;
+    }
 
     if (isSingleTouch) {
       // 仅在拖动模式下处理单指平移
