@@ -25,14 +25,16 @@ struct Index {
   async loadAndViewFile(uri: string) {
     let uiContext = this.getUIContext();
     let dir = uiContext.getHostContext()!.tempDir;
-    let file = dir + "/temp.pdf";
+    let file = dir + "/sandboxed.pdf";
+    let tempFile = dir + "/saveTemp.pdf";
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
     await fs.copyFile(sourceFile.fd, file);
     hilog.info(0x0000, TAG, "copyFile succeed");
     let args: Record<string, string> = {
       'systemPath': uri,
-      'sandboxPath': file
+      'sandboxPath': file,
+      'saveTempPath': tempFile
     }
     uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }

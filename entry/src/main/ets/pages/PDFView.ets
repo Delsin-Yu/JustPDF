@@ -15,7 +15,7 @@ import { App, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
-import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
+import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
 import { preferences } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -125,9 +125,10 @@ interface KeystrokeEvent {
 
 @Entry
 @Component
-struct PDFView2 {
+struct PDFView {
   private systemPath = '';
   private sandBoxPath = '';
+  private saveTempPath = '';
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   private document = new pdfService.PdfDocument();
   private pages: Array<pdfService.PdfPage> = [];
@@ -189,6 +190,7 @@ struct PDFView2 {
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     this.systemPath = args['systemPath'];
     this.sandBoxPath = args['sandboxPath'];
+    this.saveTempPath = args['saveTempPath'];
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
       hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${result}`)
@@ -835,28 +837,43 @@ struct PDFView2 {
 
       for (const stroke of strokes) {
         const transformedPoints: Vector2[] = [];
-        const pdfPoints: Vector2[] = stroke.points;
-        for (const point of pdfPoints) {
+        for (const point of stroke.points) {
           const transformedPoint = Vec2(
             (point.x / canvasSizeVp.x) * pdfPageSize.x,
             (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
           );
           transformedPoints.push(transformedPoint);
         }
-        const annotationInfo = new pdfService.PolylineAnnotationInfo();
-        annotationInfo.title = '由 Just PDF 创建的注释';
+        const annotationInfo = new pdfService.InkAnnotationInfo();
+        annotationInfo.subject = '由 Just PDF 创建的注释';
         annotationInfo.creationDate = new Date(Date.now());
         annotationInfo.modifiedTime = new Date(Date.now());
-        annotationInfo.vertexes = transformedPoints;
-        annotationInfo.lineColor = 0xff0000ff;
+        annotationInfo.inkPoints = transformedPoints;
+        annotationInfo.lineColor = 3547621;
+        const border = new pdfService.PdfBorder()
+        border.borderColor = -1;
+        border.borderStyle = pdfService.BorderStyle.NONE;
+        border.borderWidth = -1;
+        annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
+        annotationInfo.uniqueId = generateGUID();
         const annotation = pdfPage.addAnnotation(annotationInfo);
         affectedPage.get(pageIndex).push(annotation);
       }
     }
 
-    const success = this.document.saveDocument(this.sandBoxPath);
+    // Clean up any existing temporary file before saving
+    try {
+      await fs.unlink(this.saveTempPath);
+    } catch (error) {
+      // Ignore if file doesn't exist
+      if (error.code !== 13900002) {
+        hilog.warn(0, 'PDFView', `清理临时文件时出现非致命错误: ${error}`);
+      }
+    }
+
+    const success = this.document.saveDocument(this.saveTempPath);
     if (!success) {
-      hilog.error(0, 'PDFView', `保存 PDF 文件到沙箱时出错`);
+      hilog.error(0, 'PDFView', `保存 PDF 文件到临时路径时出错`);
       for (const pageIndex of affectedPage.keys()) {
         const pdfPage = this.pages[pageIndex];
         const annotations = affectedPage.get(pageIndex);
@@ -864,6 +881,19 @@ struct PDFView2 {
           pdfPage.removeAnnotation(annotation);
         }
       }
+      return;
+    }
+
+    try {
+      await fs.rename(this.saveTempPath, this.sandBoxPath);
+    } catch (error) {
+      hilog.error(0, 'PDFView', `将临时文件重命名到沙箱路径时出错: ${error}`);
+      try {
+        await fs.unlink(this.saveTempPath);
+      } catch (unlinkError) {
+        hilog.error(0, 'PDFView', `删除临时文件时出错: ${unlinkError}`);
+      }
+      this.revertChanges(affectedPage);
       return;
     }
 
@@ -905,7 +935,7 @@ struct PDFView2 {
     this.invalidateAffectedPages(Array.from(affectedPage.keys()));
   }
 
-  revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): void {
+  async revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): Promise<void> {
     for (const pageIndex of affectedPage.keys()) {
       const pdfPage = this.pages[pageIndex];
       const annotations = affectedPage.get(pageIndex);
@@ -913,7 +943,21 @@ struct PDFView2 {
         pdfPage.removeAnnotation(annotation);
       }
     }
-    this.document.saveDocument(this.sandBoxPath);
+    const success = this.document.saveDocument(this.saveTempPath);
+    if (success) {
+      try {
+        await fs.rename(this.saveTempPath, this.sandBoxPath);
+      } catch (error) {
+        hilog.error(0, 'PDFView', `重命名回退文件时出错: ${error}`);
+        try {
+          await fs.unlink(this.saveTempPath);
+        } catch (unlinkError) {
+          hilog.error(0, 'PDFView', `删除临时回退文件时出错: ${unlinkError}`);
+        }
+      }
+    } else {
+      hilog.error(0, 'PDFView', `保存回退 PDF 文件时出错`);
+    }
   }
 
   invalidateAffectedPages(affectedPageIndices: number[]): void {
