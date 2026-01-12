@@ -4,7 +4,7 @@ const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
 const ButtonSize: SizeOptions = { height: 40, width: 80 };
 const ButtonSizeWide: SizeOptions = { height: 40, width: 90 };
-export const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.7)`;
+export const ButtonColor: ResourceColor = `rgba(50, 50, 50, 0.5)`;
 const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
 export const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
 const BaseColor: ResourceColor = `rgba(50, 50, 50, 1)`;
@@ -78,7 +78,7 @@ export struct StyleToggle {
     .hitTestBehavior(HitTestMode.Block)
     .monopolizeEvents(true)
     .backgroundColor(ButtonColor)
-    .selectedColor(ButtonColorHighlight)
+    .selectedColor(ButtonColorSemiTransparent)
     .onChange(value => this.onChangeCallback(value))
   }
 }

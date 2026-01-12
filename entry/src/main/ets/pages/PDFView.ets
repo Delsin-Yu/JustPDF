@@ -23,6 +23,7 @@ import { picker } from '@kit.CoreFileKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
+import { common } from '@kit.AbilityKit';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -57,6 +58,7 @@ const FullRect: AlignRuleOption = {
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
+const ShareButtonId: string = 'shareButton';
 
 interface PathWithPoints {
   path: Path2D;
@@ -245,14 +247,18 @@ struct PDFView {
     this.immersiveDisablingListening();
   }
 
-  private immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
+  makeSharedData(): systemShare.SharedData {
     const shareData: systemShare.SharedData = new systemShare.SharedData({
       utd: utd.UniformDataType.PDF,
       uri: fileUri.getUriFromPath(this.sandBoxPath),
       title: this.fileName,
       description: `共 ${this.totalPageCount} 页`
     });
-    sharableTarget.share(shareData);
+    return shareData;
+  }
+
+  private immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
+    sharableTarget.share(this.makeSharedData());
   }
 
   private immersiveListening() {
@@ -1086,6 +1092,14 @@ struct PDFView {
     }
   }
 
+  executeShare(): void {
+    let controller: systemShare.ShareController = new systemShare.ShareController(this.makeSharedData());
+    // 获取UIAbility上下文对象
+    let uiContext: UIContext = this.getUIContext();
+    let context = uiContext.getHostContext() as common.UIAbilityContext;
+    controller.show(context, { anchor: ShareButtonId });
+  }
+
   getCanvasSize(pageIndex: number): Vector2 {
     if (pageIndex >= this.pages.length) {
       return Vec2(0, 0);
@@ -1593,6 +1607,10 @@ struct PDFView {
               }
             }
           }).visibility(toVisibility(this.showControls && deviceInfo.deviceType != "phone"))
+          StyleButton({
+            text: '分享',
+            onClickCallback: () => this.executeShare()
+          }).visibility(toVisibility(this.showControls)).id(ShareButtonId)
 
           Blank()
 
