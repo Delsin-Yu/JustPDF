@@ -11,7 +11,7 @@ import {
   StyleToggle,
   toVisibility
 } from './UIComponents';
-import { App, LengthMetricsUnit, window } from '@kit.ArkUI';
+import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
@@ -189,6 +189,24 @@ struct PDFView {
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
 
+  backToMainMenu(): void {
+    this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
+  }
+
+  showAlertDialog(title: string, message: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.getUIContext().showAlertDialog({
+        title: title,
+        message: message,
+        confirm: {
+          defaultFocus: true,
+          action: () => resolve(),
+          value: $r('sys.string.general_confirm')
+        }
+      });
+    });
+  }
+
   aboutToAppear(): void {
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     this.systemPath = args['systemPath'];
@@ -197,8 +215,31 @@ struct PDFView {
     this.fileName = args['fileName'];
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${result}`)
-      App.terminate();
+
+      let resultText: string;
+      switch (result) {
+        case pdfService.ParseResult.PARSE_ERROR_FILE:
+          resultText = '文件错误';
+          break;
+        case pdfService.ParseResult.PARSE_ERROR_FORMAT:
+          resultText = '格式错误';
+          break;
+        case pdfService.ParseResult.PARSE_ERROR_PASSWORD:
+          resultText = '暂不支持加密的 PDF 文件';
+          break;
+        case pdfService.ParseResult.PARSE_ERROR_HANDLER:
+          resultText = '处理程序错误';
+          break;
+        case pdfService.ParseResult.PARSE_ERROR_CERT:
+          resultText = '证书错误';
+          break;
+      }
+
+      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`)
+      this.showAlertDialog('加载错误', `无法加载 PDF 文件: ${resultText}`)
+        .then(() => {
+          this.backToMainMenu();
+        });
       return;
     }
     this.totalPageCount = this.document.getPageCount();
@@ -978,6 +1019,7 @@ struct PDFView {
       await fs.close(dstFile);
     } catch (err) {
       hilog.error(0, 'PDFView', `保存 PDF 文件到选定位置 ${saveUri} 时出错: ${err}`);
+      await this.showAlertDialog('保存失败', '无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。');
       this.revertChanges(affectedPage);
       return;
     }
