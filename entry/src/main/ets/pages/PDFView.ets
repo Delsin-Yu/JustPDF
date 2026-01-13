@@ -68,6 +68,76 @@ interface History {
   pageIndex: number;
 }
 
+class PageInfo {
+  pageIndex: number;
+  pdfPage: pdfService.PdfPage;
+  private caches: Map<number, PageCache> = new Map();
+  private pendingTasks: Map<number, Promise<PageCache>> = new Map();
+  strokes: Array<PathWithPoints> = [];
+
+  constructor(pageIndex: number, pdfPage: pdfService.PdfPage) {
+    this.pageIndex = pageIndex;
+    this.pdfPage = pdfPage;
+  }
+
+  getCache(renderScale: number): PageCache | undefined {
+    return this.caches.get(renderScale);
+  }
+
+  setCache(renderScale: number, cache: PageCache): void {
+    this.caches.set(renderScale, cache);
+  }
+
+  hasCache(renderScale: number): boolean {
+    return this.caches.has(renderScale);
+  }
+
+  hasPendingTask(renderScale: number): boolean {
+    return this.pendingTasks.has(renderScale);
+  }
+
+  getPendingTask(renderScale: number): Promise<PageCache> | undefined {
+    return this.pendingTasks.get(renderScale);
+  }
+
+  setPendingTask(renderScale: number, task: Promise<PageCache>): void {
+    this.pendingTasks.set(renderScale, task);
+  }
+
+  removePendingTask(renderScale: number): void {
+    this.pendingTasks.delete(renderScale);
+  }
+
+  getAnyCache(): PageCache | undefined {
+    if (this.caches.size > 0) {
+      return this.caches.values().next().value;
+    }
+    return undefined;
+  }
+
+  getLowestRenderScaleCache(): PageCache | undefined {
+    let lowestScale: number | undefined = undefined;
+    let lowestCache: PageCache | undefined = undefined;
+    for (const pair of this.caches.entries()) {
+      const scale = pair[0];
+      const cache = pair[1];
+      if (lowestScale === undefined || scale < lowestScale) {
+        lowestScale = scale;
+        lowestCache = cache;
+      }
+    }
+    return lowestCache;
+  }
+
+  clearCaches(): void {
+    this.caches.clear();
+  }
+
+  clearPendingTasks(): void {
+    this.pendingTasks.clear();
+  }
+}
+
 function clearStack<T>(stack: Stack<T>): void {
   while (!stack.isEmpty()) {
     stack.pop();
@@ -113,17 +183,6 @@ interface PageCache {
   displaySize: Vector2; // UI 显示大小（始终为 MIN_RENDER_SCALE）
 }
 
-// 创建多级缓存键的辅助函数
-function makeCacheKey(pageIndex: number, renderScale: number): string {
-  return `${pageIndex}_${renderScale}`;
-}
-
-interface KeystrokeEvent {
-  keyCode: KeyCode;
-  ctrlKey: boolean;
-  shiftKey: boolean;
-}
-
 @Entry
 @Component
 struct PDFView {
@@ -133,14 +192,9 @@ struct PDFView {
   private fileName = '';
   private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   private document = new pdfService.PdfDocument();
-  private pages: Array<pdfService.PdfPage> = [];
-  // 多级缓存：键为 "pageIndex_renderScale"
-  private pageCache: HashMap<string, PageCache> = new HashMap<string, PageCache>();
-  private pendingTasks: HashMap<string, Promise<Object>> = new HashMap<string, Promise<Object>>();
+  private pages: PageInfo[] = [];
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
-  // 跟踪可见页面的当前渲染缩放级别
   private currentRenderScale: number = MIN_RENDER_SCALE;
-  // 跟踪当前显示的页面
   private displayedPageIndices: number[] = [];
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
@@ -179,8 +233,6 @@ struct PDFView {
   private view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   private view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  // 多级缓存：键为 "pageIndex_renderScale"
-  private pageStrokes: HashMap<number, Array<PathWithPoints>> = new HashMap<number, Array<PathWithPoints>>();
   private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
   private pathsToErase: Set<PathWithPoints> = new Set();
   private undoHistory: Stack<History> = new Stack<History>();
@@ -217,7 +269,7 @@ struct PDFView {
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
 
-      let resultText: string;
+      let resultText: string = "";
       switch (result) {
         case pdfService.ParseResult.PARSE_ERROR_FILE:
           resultText = '文件错误';
@@ -246,8 +298,8 @@ struct PDFView {
     this.totalPageCount = this.document.getPageCount();
 
     for (let i = 0; i < this.totalPageCount; i++) {
-      const page = this.document.getPage(i);
-      this.pages.push(page);
+      const pdfPage = this.document.getPage(i);
+      this.pages.push(new PageInfo(i, pdfPage));
     }
 
     // 加载首选项
@@ -313,24 +365,23 @@ struct PDFView {
   }
 
   startBackgroundCaching(): void {
-    // 以最小缩放尺度在后台缓存页面，优先级较低
     for (let i = 0; i < this.totalPageCount; i++) {
-      const cacheKey = makeCacheKey(i, MIN_RENDER_SCALE);
-      if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
+      const pageInfo = this.pages[i];
+      if (!pageInfo.hasCache(MIN_RENDER_SCALE) && !pageInfo.hasPendingTask(MIN_RENDER_SCALE)) {
         const task = new taskpool.Task(cachePage, this.sandBoxPath, i, MIN_RENDER_SCALE);
         const promise = taskpool.execute(task, taskpool.Priority.LOW)
           .then(pageCache => {
-            this.pageCache.set(cacheKey, pageCache as PageCache);
-            this.pendingTasks.remove(cacheKey);
+            pageInfo.setCache(MIN_RENDER_SCALE, pageCache as PageCache);
+            pageInfo.removePendingTask(MIN_RENDER_SCALE);
             hilog.info(0, 'PDFView', `页面 ${i} 已在缩放 ${MIN_RENDER_SCALE} 下缓存`);
             return pageCache;
           })
           .catch((error: Error) => {
-            this.pendingTasks.remove(cacheKey);
+            pageInfo.removePendingTask(MIN_RENDER_SCALE);
             hilog.error(0, 'PDFView', `缓存页面 ${i} 失败: ${error.message}`);
             throw error;
           });
-        this.pendingTasks.set(cacheKey, promise);
+        pageInfo.setPendingTask(MIN_RENDER_SCALE, promise as Promise<PageCache>);
       }
     }
   }
@@ -396,31 +447,20 @@ struct PDFView {
   }
 
   async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
-    const cacheKey = makeCacheKey(targetIndex, renderScale);
+    const pageInfo = this.pages[targetIndex];
 
-    // 如果已在请求的缩放尺度缓存，立即返回
-    if (this.pageCache.hasKey(cacheKey)) {
-      return this.pageCache.get(cacheKey);
+    const cached = pageInfo.getCache(renderScale);
+    if (cached !== undefined) {
+      return cached;
     }
 
-    // 如果为此确切的键有待处理任务，等待它
-    if (this.pendingTasks.hasKey(cacheKey)) {
-      return await this.pendingTasks.get(cacheKey) as PageCache;
+    const pendingTask = pageInfo.getPendingTask(renderScale);
+    if (pendingTask !== undefined) {
+      return await pendingTask;
     }
 
-    // 检查我们是否有低分辨率版本可以暂时返回
-    // 当我们在后台渲染高分辨率时
-    let fallbackCache: PageCache | undefined = undefined;
-    for (const scale of RENDER_SCALE_LEVELS) {
-      if (scale < renderScale) {
-        const fallbackKey = makeCacheKey(targetIndex, scale);
-        if (this.pageCache.hasKey(fallbackKey)) {
-          fallbackCache = this.pageCache.get(fallbackKey);
-        }
-      }
-    }
+    const fallbackCache = pageInfo.getLowestRenderScaleCache();
 
-    // 为请求的渲染缩放创建任务
     const priority = renderScale === MIN_RENDER_SCALE
       ? taskpool.Priority.HIGH
       : taskpool.Priority.MEDIUM;
@@ -428,24 +468,21 @@ struct PDFView {
     const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex, renderScale);
     const promise = taskpool.execute(task, priority)
       .then(pageCache => {
-        this.pageCache.set(cacheKey, pageCache as PageCache);
-        this.pendingTasks.remove(cacheKey);
+        pageInfo.setCache(renderScale, pageCache as PageCache);
+        pageInfo.removePendingTask(renderScale);
         hilog.info(0, 'PDFView', `页面 ${targetIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache;
       })
       .catch((error: Error) => {
-        this.pendingTasks.remove(cacheKey);
+        pageInfo.removePendingTask(renderScale);
         hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${targetIndex} 失败: ${error.message}`);
         throw error;
       });
 
-    this.pendingTasks.set(cacheKey, promise);
+    pageInfo.setPendingTask(renderScale, promise as Promise<PageCache>);
 
-    // 如果我们有备选方案，立即返回它并让高分辨率版本在后台加载
     if (fallbackCache !== undefined) {
-      // 在高分辨率版本准备好时安排更新
       promise.then((highResCache) => {
-        // 如果此页面仍然可见，更新显示的 pixelMap
         if (this.displayedPageIndices.includes(targetIndex)) {
           const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
           const cache = highResCache as PageCache;
@@ -799,9 +836,8 @@ struct PDFView {
   }
 
   updateUnsavedStrokesFlag(): void {
-    for (const pageIndex of this.pageStrokes.keys()) {
-      const strokes = this.pageStrokes.get(pageIndex);
-      if (strokes.length > 0) {
+    for (const pageInfo of this.pages) {
+      if (pageInfo.strokes.length > 0) {
         this.hasUnsavedStrokes = true;
         return;
       }
@@ -810,12 +846,12 @@ struct PDFView {
   }
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
-    if (!this.pageStrokes.hasKey(pageIndex)) {
+    const pageInfo = this.pages[pageIndex];
+    if (pageInfo.strokes.length === 0) {
       return;
     }
-    const strokes = this.pageStrokes.get(pageIndex);
     this.applyStrokeStyle(ctx);
-    strokes.forEach(stroke => ctx.stroke(stroke.path));
+    pageInfo.strokes.forEach(stroke => ctx.stroke(stroke.path));
   }
 
   appendUndoHistory(history: History): void {
@@ -837,21 +873,14 @@ struct PDFView {
       this.gotoPage(history.pageIndex);
     }
 
+    const pageInfo = this.pages[history.pageIndex];
     if (history.mode === 'add') {
-      // 撤销添加：移除笔画
-      if (this.pageStrokes.hasKey(history.pageIndex)) {
-        const strokes = this.pageStrokes.get(history.pageIndex);
-        const index = strokes.indexOf(history.path);
-        if (index >= 0) {
-          strokes.splice(index, 1);
-        }
+      const index = pageInfo.strokes.indexOf(history.path);
+      if (index >= 0) {
+        pageInfo.strokes.splice(index, 1);
       }
     } else if (history.mode === 'erase') {
-      // 撤销擦除：恢复笔画
-      if (!this.pageStrokes.hasKey(history.pageIndex)) {
-        this.pageStrokes.set(history.pageIndex, []);
-      }
-      this.pageStrokes.get(history.pageIndex).push(history.path);
+      pageInfo.strokes.push(history.path);
     }
 
     this.redoHistory.push(history);
@@ -872,20 +901,13 @@ struct PDFView {
       this.gotoPage(history.pageIndex);
     }
 
+    const pageInfo = this.pages[history.pageIndex];
     if (history.mode === 'add') {
-      // 重做添加：重新添加笔画
-      if (!this.pageStrokes.hasKey(history.pageIndex)) {
-        this.pageStrokes.set(history.pageIndex, []);
-      }
-      this.pageStrokes.get(history.pageIndex).push(history.path);
+      pageInfo.strokes.push(history.path);
     } else if (history.mode === 'erase') {
-      // 重做擦除：再次移除笔画
-      if (this.pageStrokes.hasKey(history.pageIndex)) {
-        const strokes = this.pageStrokes.get(history.pageIndex);
-        const index = strokes.indexOf(history.path);
-        if (index >= 0) {
-          strokes.splice(index, 1);
-        }
+      const index = pageInfo.strokes.indexOf(history.path);
+      if (index >= 0) {
+        pageInfo.strokes.splice(index, 1);
       }
     }
 
@@ -921,22 +943,20 @@ struct PDFView {
     }
 
     const affectedPage = new HashMap<number, pdfService.PdfAnnotation[]>();
-    for (const pageIndex of this.pageStrokes.keys()) {
-      if (pageIndex >= this.pages.length) {
+    for (const pageInfo of this.pages) {
+      if (pageInfo.strokes.length === 0) {
         continue;
       }
-      const strokes = this.pageStrokes.get(pageIndex);
-      if (strokes.length > 0) {
-        affectedPage.set(pageIndex, []);
-      }
-      const pdfPage = this.pages[pageIndex];
+      const pageIndex = pageInfo.pageIndex;
+      affectedPage.set(pageIndex, []);
+      const pdfPage = pageInfo.pdfPage;
       const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
 
       const uiContext = this.getUIContext();
       const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
       const canvasSizeVp = pxToVp(canvasSizePx, uiContext);
 
-      for (const stroke of strokes) {
+      for (const stroke of pageInfo.strokes) {
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
           const transformedPoint = Vec2(
@@ -975,7 +995,7 @@ struct PDFView {
         const pdfPage = this.pages[pageIndex];
         const annotations = affectedPage.get(pageIndex);
         for (const annotation of annotations) {
-          pdfPage.removeAnnotation(annotation);
+          pdfPage.pdfPage.removeAnnotation(annotation);
         }
       }
       return;
@@ -1023,7 +1043,9 @@ struct PDFView {
       return;
     }
 
-    this.pageStrokes.clear();
+    for (const pageInfo of this.pages) {
+      pageInfo.strokes = [];
+    }
     clearStack(this.undoHistory);
     clearStack(this.redoHistory);
     this.undoHistoryCount = 0;
@@ -1035,10 +1057,10 @@ struct PDFView {
 
   async revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): Promise<void> {
     for (const pageIndex of affectedPage.keys()) {
-      const pdfPage = this.pages[pageIndex];
+      const pageInfo = this.pages[pageIndex];
       const annotations = affectedPage.get(pageIndex);
       for (const annotation of annotations) {
-        pdfPage.removeAnnotation(annotation);
+        pageInfo.pdfPage.removeAnnotation(annotation);
       }
     }
     const success = this.document.saveDocument(this.saveTempPath);
@@ -1064,15 +1086,9 @@ struct PDFView {
     }
 
     for (const pageIndex of affectedPageIndices) {
-      for (const scale of RENDER_SCALE_LEVELS) {
-        const cacheKey = makeCacheKey(pageIndex, scale);
-        if (this.pageCache.hasKey(cacheKey)) {
-          this.pageCache.remove(cacheKey);
-        }
-        if (this.pendingTasks.hasKey(cacheKey)) {
-          this.pendingTasks.remove(cacheKey);
-        }
-      }
+      const pageInfo = this.pages[pageIndex];
+      pageInfo.clearCaches();
+      pageInfo.clearPendingTasks();
     }
 
     const currentPageAffected = this.displayedPageIndices.some(idx =>
@@ -1080,22 +1096,22 @@ struct PDFView {
     );
 
     for (const pageIndex of affectedPageIndices) {
-      const cacheKey = makeCacheKey(pageIndex, MIN_RENDER_SCALE);
-      if (!this.pageCache.hasKey(cacheKey) && !this.pendingTasks.hasKey(cacheKey)) {
+      const pageInfo = this.pages[pageIndex];
+      if (!pageInfo.hasCache(MIN_RENDER_SCALE) && !pageInfo.hasPendingTask(MIN_RENDER_SCALE)) {
         const task = new taskpool.Task(cachePage, this.sandBoxPath, pageIndex, MIN_RENDER_SCALE);
         const promise = taskpool.execute(task, taskpool.Priority.HIGH)
           .then(pageCache => {
-            this.pageCache.set(cacheKey, pageCache as PageCache);
-            this.pendingTasks.remove(cacheKey);
+            pageInfo.setCache(MIN_RENDER_SCALE, pageCache as PageCache);
+            pageInfo.removePendingTask(MIN_RENDER_SCALE);
             hilog.info(0, 'PDFView', `页面 ${pageIndex} 已在缩放 ${MIN_RENDER_SCALE} 下重新缓存`);
             return pageCache;
           })
           .catch((error: Error) => {
-            this.pendingTasks.remove(cacheKey);
+            pageInfo.removePendingTask(MIN_RENDER_SCALE);
             hilog.error(0, 'PDFView', `重新缓存页面 ${pageIndex} 失败: ${error.message}`);
             throw error;
           });
-        this.pendingTasks.set(cacheKey, promise);
+        pageInfo.setPendingTask(MIN_RENDER_SCALE, promise as Promise<PageCache>);
       }
     }
 
@@ -1157,8 +1173,8 @@ struct PDFView {
     if (pageIndex >= this.pages.length) {
       return Vec2(0, 0);
     }
-    const page = this.pages[pageIndex];
-    return Vec2(page.getWidth() * CanvasOverSampling, page.getHeight() * CanvasOverSampling);
+    const pageInfo = this.pages[pageIndex];
+    return Vec2(pageInfo.pdfPage.getWidth() * CanvasOverSampling, pageInfo.pdfPage.getHeight() * CanvasOverSampling);
   }
 
   getCanvasScale(viewIndex: number): ScaleOptions {
@@ -1207,6 +1223,8 @@ struct PDFView {
       return;
     }
 
+    const pageInfo = this.pages[pageIndex];
+
     // 保护：忽略双指手势激活期间或结束后不久的触摸事件
     // 这防止了在捏合开始时（第二根手指触碰前）和结束时（抬起一根手指后）的意外绘制/擦除
     const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
@@ -1250,10 +1268,7 @@ struct PDFView {
 
         const minPathLength = 2 * CanvasOverSampling;
         if (pathLength >= minPathLength) {
-          if (!this.pageStrokes.hasKey(pageIndex)) {
-            this.pageStrokes.set(pageIndex, []);
-          }
-          this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+          pageInfo.strokes.push(this.activeDrawPath);
           this.appendUndoHistory({
             path: this.activeDrawPath,
             mode: 'add',
@@ -1266,19 +1281,18 @@ struct PDFView {
         drawCtx.reset();
       }
     } else if (this.annotateMode === 'erase') {
-      if (!this.pageStrokes.hasKey(pageIndex)) {
+      if (pageInfo.strokes.length === 0) {
         return;
       }
 
       const eraseThreshold = 20 * CanvasOverSampling;
-      const strokes = this.pageStrokes.get(pageIndex);
 
       if (event.type === TouchType.Down) {
         this.pathsToErase.clear();
       }
 
       if (event.type === TouchType.Down || event.type === TouchType.Move) {
-        for (const stroke of strokes) {
+        for (const stroke of pageInfo.strokes) {
           if (this.pathsToErase.has(stroke)) {
             continue;
           }
@@ -1295,15 +1309,14 @@ struct PDFView {
 
         targetCtx.reset();
         this.applyStrokeStyle(targetCtx);
-        for (const stroke of strokes) {
+        for (const stroke of pageInfo.strokes) {
           if (!this.pathsToErase.has(stroke)) {
             targetCtx.stroke(stroke.path);
           }
         }
       } else if (event.type === TouchType.Up) {
         if (this.pathsToErase.size > 0) {
-          const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
-          this.pageStrokes.set(pageIndex, remainingStrokes);
+          pageInfo.strokes = pageInfo.strokes.filter(stroke => !this.pathsToErase.has(stroke));
 
           this.pathsToErase.forEach(erasedPath => {
             this.appendUndoHistory({
@@ -1494,6 +1507,7 @@ struct PDFView {
       return;
     }
 
+    const pageInfo = this.pages[pageIndex];
     const mousePoint = Vec2(event.x, event.y);
 
     if (this.annotateMode === 'draw') {
@@ -1520,10 +1534,7 @@ struct PDFView {
 
         const minPathLength = 2 * CanvasOverSampling;
         if (pathLength >= minPathLength) {
-          if (!this.pageStrokes.hasKey(pageIndex)) {
-            this.pageStrokes.set(pageIndex, []);
-          }
-          this.pageStrokes.get(pageIndex).push(this.activeDrawPath);
+          pageInfo.strokes.push(this.activeDrawPath);
           this.appendUndoHistory({
             path: this.activeDrawPath,
             mode: 'add',
@@ -1536,19 +1547,18 @@ struct PDFView {
         drawCtx.reset();
       }
     } else if (this.annotateMode === 'erase') {
-      if (!this.pageStrokes.hasKey(pageIndex)) {
+      if (pageInfo.strokes.length === 0) {
         return;
       }
 
       const eraseThreshold = 20 * CanvasOverSampling;
-      const strokes = this.pageStrokes.get(pageIndex);
 
       if (event.action === MouseAction.Press) {
         this.pathsToErase.clear();
       }
 
       if (event.action === MouseAction.Press || (event.action === MouseAction.Move && this.activeMouseButton === 1)) {
-        for (const stroke of strokes) {
+        for (const stroke of pageInfo.strokes) {
           if (this.pathsToErase.has(stroke)) {
             continue;
           }
@@ -1565,15 +1575,14 @@ struct PDFView {
 
         targetCtx.reset();
         this.applyStrokeStyle(targetCtx);
-        for (const stroke of strokes) {
+        for (const stroke of pageInfo.strokes) {
           if (!this.pathsToErase.has(stroke)) {
             targetCtx.stroke(stroke.path);
           }
         }
       } else if (event.action === MouseAction.Release) {
         if (this.pathsToErase.size > 0) {
-          const remainingStrokes = strokes.filter(stroke => !this.pathsToErase.has(stroke));
-          this.pageStrokes.set(pageIndex, remainingStrokes);
+          pageInfo.strokes = pageInfo.strokes.filter(stroke => !this.pathsToErase.has(stroke));
 
           this.pathsToErase.forEach(erasedPath => {
             this.appendUndoHistory({
