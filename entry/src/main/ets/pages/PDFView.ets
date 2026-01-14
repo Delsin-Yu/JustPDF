@@ -1,27 +1,17 @@
-import {
-  ButtonColor,
-  ButtonColorSemiTransparent,
-  getCheckIcon,
-  getCheckIconName,
-  MakeSlider,
-  StyleButton,
-  StyleNumBadgeButton,
-  StyleStrBadgeButton,
-  StyleText,
-  toVisibility
-} from './UIComponents';
-import { CustomContentDialogV2, AdvancedDialogV2Button, LengthMetricsUnit, window, LengthMetrics } from '@kit.ArkUI';
+import { ButtonColor, ButtonColorSemiTransparent, clearStack, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, getCheckIconName, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
+import { AdvancedDialogV2Button, CustomContentDialogV2, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
-import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from './Numbers';
+import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
-import { Tutorial } from './Tutorial';
+import { Tutorial } from '../components/Tutorial';
+import { History, PageCache, PageInfo, PathWithPoints } from '../components/PageInfo';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -29,121 +19,13 @@ const MIN_RENDER_SCALE: number = 4;
 // 切换到更高渲染缩放的阈值（基于viewScale）
 const SCALE_THRESHOLDS: number[] = [2.0]; // 在2.0倍视图缩放时切换到8倍
 
-const ContainerSpacing: number = 8;
-const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
-const ContainerPadding: Padding = {
-  left: `${ContainerSpacing}px`,
-  right: `${ContainerSpacing}px`,
-  top: `${ContainerSpacing}px`,
-  bottom: `${ContainerSpacing}px`
-}
-const TopLeft: AlignRuleOption = {
-  top: { anchor: '__container__', align: VerticalAlign.Top },
-  left: { anchor: '__container__', align: HorizontalAlign.Start },
-};
-const TopRight: AlignRuleOption = {
-  top: { anchor: '__container__', align: VerticalAlign.Top },
-  right: { anchor: '__container__', align: HorizontalAlign.End }
-}
-const FullRect: AlignRuleOption = {
-  'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
-  'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
-  'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
-  'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
-}
+
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
-
-interface PathWithPoints {
-  path: Path2D;
-  points: Array<Vector2>;
-}
-
-interface History {
-  path: PathWithPoints;
-  mode: 'add' | 'erase';
-  pageIndex: number;
-}
-
-class PageInfo {
-  pageIndex: number;
-  pdfPage: pdfService.PdfPage;
-  private caches: Map<number, PageCache> = new Map();
-  private pendingTasks: Map<number, Promise<PageCache>> = new Map();
-  strokes: Array<PathWithPoints> = [];
-
-  constructor(pageIndex: number, pdfPage: pdfService.PdfPage) {
-    this.pageIndex = pageIndex;
-    this.pdfPage = pdfPage;
-  }
-
-  getCache(renderScale: number): PageCache | undefined {
-    return this.caches.get(renderScale);
-  }
-
-  setCache(renderScale: number, cache: PageCache): void {
-    this.caches.set(renderScale, cache);
-  }
-
-  hasCache(renderScale: number): boolean {
-    return this.caches.has(renderScale);
-  }
-
-  hasPendingTask(renderScale: number): boolean {
-    return this.pendingTasks.has(renderScale);
-  }
-
-  getPendingTask(renderScale: number): Promise<PageCache> | undefined {
-    return this.pendingTasks.get(renderScale);
-  }
-
-  setPendingTask(renderScale: number, task: Promise<PageCache>): void {
-    this.pendingTasks.set(renderScale, task);
-  }
-
-  removePendingTask(renderScale: number): void {
-    this.pendingTasks.delete(renderScale);
-  }
-
-  getAnyCache(): PageCache | undefined {
-    if (this.caches.size > 0) {
-      return this.caches.values().next().value;
-    }
-    return undefined;
-  }
-
-  getLowestRenderScaleCache(): PageCache | undefined {
-    let lowestScale: number | undefined = undefined;
-    let lowestCache: PageCache | undefined = undefined;
-    for (const pair of this.caches.entries()) {
-      const scale = pair[0];
-      const cache = pair[1];
-      if (lowestScale === undefined || scale < lowestScale) {
-        lowestScale = scale;
-        lowestCache = cache;
-      }
-    }
-    return lowestCache;
-  }
-
-  clearCaches(): void {
-    this.caches.clear();
-  }
-
-  clearPendingTasks(): void {
-    this.pendingTasks.clear();
-  }
-}
-
-function clearStack<T>(stack: Stack<T>): void {
-  while (!stack.isEmpty()) {
-    stack.pop();
-  }
-}
 
 @Concurrent
 function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
@@ -174,14 +56,6 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
     baseSize: baseSize,
     displaySize: displaySize
   };
-}
-
-interface PageCache {
-  page: pdfService.PdfPage;
-  pixelMap: PixelMap;
-  renderScale: number;
-  baseSize: Vector2; // 原始页面大小（无缩放）
-  displaySize: Vector2; // UI 显示大小（始终为 MIN_RENDER_SCALE）
 }
 
 @Entry
@@ -1645,8 +1519,6 @@ struct PDFView {
       ],
     })
   }
-
-
 
   @Builder
   buildTutorialContent(): void {
