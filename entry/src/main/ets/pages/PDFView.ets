@@ -62,16 +62,16 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
 @Entry
 @Component
 struct PDFView {
-  private systemPath = '';
-  private sandBoxPath = '';
-  private saveTempPath = '';
-  private fileName = '';
-  private mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
-  private document = new pdfService.PdfDocument();
-  private pages: PageInfo[] = [];
-  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
-  private currentRenderScale: number = MIN_RENDER_SCALE;
-  private displayedPageIndices: number[] = [];
+  systemPath = '';
+  sandBoxPath = '';
+  saveTempPath = '';
+  fileName = '';
+  mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
+  document = new pdfService.PdfDocument();
+  pages: PageInfo[] = [];
+  preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  currentRenderScale: number = MIN_RENDER_SCALE;
+  displayedPageIndices: number[] = [];
   @State view1PixelMap: PixelMap | undefined = undefined;
   @State view2PixelMap: PixelMap | undefined = undefined;
   @State view3PixelMap: PixelMap | undefined = undefined;
@@ -91,33 +91,33 @@ struct PDFView {
   @State viewportSize: Vector2 = Vec2(0, 0);
   @State showControls: boolean = true;
   @State controlsTransparency: number = 0.5;
-  private transparencyTimeoutId: number | undefined = undefined;
-  private lastTouchPoint: Vector2 | undefined = undefined;
-  private lastPinchDistance: number | undefined = undefined;
-  private lastPinchCenter: Vector2 | undefined = undefined;
-  private lastDualFingerEndTime: number = 0;
-  private isDualFingerActive: boolean = false;
-  private lastMousePoint: Vector2 | undefined = undefined;
-  private activeMouseButton: number = 0; // 当前是否有双指手势激活
-  private readonly minScale: number = 0.5;
-  private readonly maxScale: number = 9.0;
-  private settings: RenderingContextSettings = new RenderingContextSettings(true);
+  transparencyTimeoutId: number | undefined = undefined;
+  lastTouchPoint: Vector2 | undefined = undefined;
+  lastPinchDistance: number | undefined = undefined;
+  lastPinchCenter: Vector2 | undefined = undefined;
+  lastDualFingerEndTime: number = 0;
+  isDualFingerActive: boolean = false;
+  lastMousePoint: Vector2 | undefined = undefined;
+  activeMouseButton: number = 0; // 当前是否有双指手势激活
+  readonly minScale: number = 0.5;
+  readonly maxScale: number = 9.0;
+  settings: RenderingContextSettings = new RenderingContextSettings(true);
   // 绘制/注释状态
-  private view1Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private view2Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private view3Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  private activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
-  private pathsToErase: Set<PathWithPoints> = new Set();
-  private undoHistory: Stack<History> = new Stack<History>();
-  private redoHistory: Stack<History> = new Stack<History>();
+  view1Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  view2Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  view3Ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
+  pathsToErase: Set<PathWithPoints> = new Set();
+  undoHistory: Stack<History> = new Stack<History>();
+  redoHistory: Stack<History> = new Stack<History>();
   @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
-  private hotkeys: InputAction[] = [];
+  hotkeys: InputAction[] = [];
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
@@ -231,7 +231,7 @@ struct PDFView {
     context.eventHub.emit('onBackGround');
   }
 
-  private onBackGround = () => {
+  onBackGround = () => {
     this.immersiveDisablingListening();
   }
 
@@ -245,21 +245,21 @@ struct PDFView {
     return shareData;
   }
 
-  private immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
+  immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
     sharableTarget.share(this.makeSharedData());
   }
 
-  private immersiveListening() {
+  immersiveListening() {
     harmonyShare.on('knockShare', this.immersiveCallback);
     harmonyShare.on('gesturesShare', this.immersiveCallback);
   }
 
-  private immersiveDisablingListening() {
+  immersiveDisablingListening() {
     harmonyShare.off('knockShare', this.immersiveCallback);
     harmonyShare.off('gesturesShare', this.immersiveCallback);
   }
 
-  private checkHotkey(keyCode: KeyCode, isCtrlPressed: boolean, isShiftPressed: boolean): (() => void) | null {
+  checkHotkey(keyCode: KeyCode, isCtrlPressed: boolean, isShiftPressed: boolean): (() => void) | null {
     for (const hotkey of this.hotkeys) {
       if (hotkey.keyCodes.includes(keyCode) && hotkey.ctrl === isCtrlPressed && hotkey.shift === isShiftPressed) {
         return hotkey.action;
@@ -287,6 +287,17 @@ struct PDFView {
           });
         pageInfo.setPendingTask(MIN_RENDER_SCALE, promise as Promise<PageCache>);
       }
+    }
+  }
+
+  getShowControlsText(): string {
+    switch (this.annotateMode) {
+      case 'drag':
+        return '拖动';
+      case 'draw':
+        return '绘制';
+      case 'erase':
+        return '擦除';
     }
   }
 
@@ -1682,9 +1693,9 @@ struct PDFView {
           repeating: false
         })
 
-      Row(ContainerCfg) {
-        Column(ContainerCfg) {
 
+      Column(ContainerCfg) {
+        Row(ContainerCfg) {
           StyleButton({
             text: '显示', menuElement: [
               {
@@ -1712,8 +1723,7 @@ struct PDFView {
                 action: () => this.setPageDisplayMode('triContinuous'),
                 symbolIcon: getCheckIcon(this.pageDisplayMode == 'triContinuous')
               }]
-          })
-            .visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls))
           StyleButton({
             text: '模式', menuElement: [
               {
@@ -1731,80 +1741,9 @@ struct PDFView {
                 action: () => this.setPageFlipMode('extern'),
                 symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
               }]
-          })
-            .visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls))
 
           Blank()
-
-          StyleButton({ text: '视口', onClickCallback: () => this.resetViewToFit() })
-            .visibility(toVisibility(this.showControls))
-          StyleButton({ text: '首页', onClickCallback: () => this.gotoPage(0) })
-            .visibility(toVisibility(this.showControls))
-          StyleButton({ text: '尾页', onClickCallback: () => this.gotoPage(this.totalPageCount - 1) })
-            .visibility(toVisibility(this.showControls))
-          StyleButton({
-            text: this.showControls ? '收起' : '展开',
-            alternateColor: this.showControls ? ButtonColor : ButtonColorSemiTransparent,
-            onClickCallback: () => {
-              this.setShowControls(!this.showControls);
-            }
-          })
-
-        }.height('100%')
-
-        Column(ContainerCfg) {
-          Blank()
-          StyleButton({
-            text: '拖动',
-            symbol: getCheckIconName(this.annotateMode == 'drag'),
-            alternateColor: this.annotateMode == 'drag' ? ButtonColorSemiTransparent : ButtonColor,
-            onClickCallback: () => this.setAnnotateMode('drag')
-          }).visibility(toVisibility(this.showControls))
-
-          StyleButton({
-            text: '绘制',
-            symbol: getCheckIconName(this.annotateMode == 'draw'),
-            alternateColor: this.annotateMode == 'draw' ? ButtonColorSemiTransparent : ButtonColor,
-            onClickCallback: () => this.setAnnotateMode('draw')
-          }).visibility(toVisibility(this.showControls))
-
-          StyleButton({
-            text: '擦除',
-            symbol: getCheckIconName(this.annotateMode == 'erase'),
-            alternateColor: this.annotateMode == 'erase' ? ButtonColorSemiTransparent : ButtonColor,
-            onClickCallback: () => this.setAnnotateMode('erase')
-          }).visibility(toVisibility(this.showControls))
-        }.height('100%')
-
-        Blank();
-
-        Column(ContainerCfg) {
-          Blank()
-
-          StyleNumBadgeButton({
-            text: '撤回',
-            count: this.undoHistoryCount,
-            onClickCallback: () => this.executeUndo()
-          }).visibility(toVisibility(this.showControls))
-
-          StyleNumBadgeButton({
-            text: '重做',
-            count: this.redoHistoryCount,
-            onClickCallback: () => this.executeRedo()
-          }).visibility(toVisibility(this.showControls))
-
-          StyleStrBadgeButton({
-            text: '保存',
-            badgeText: '!',
-            badgeVisibility: this.hasUnsavedStrokes,
-            onClickCallback: () => this.executeSave()
-          }).visibility(toVisibility(this.showControls))
-
-          StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
-            .visibility(toVisibility(this.pageFlipMode == 'button'))
-        }.height('100%')
-
-        Column(ContainerCfg) {
 
           StyleButton({
             text: this.isExclusiveFullScreen ? '窗口' : '全屏',
@@ -1830,28 +1769,99 @@ struct PDFView {
             }
           }).visibility(toVisibility(this.showControls))
 
+        }.width('100%')
+
+        Row(ContainerCfg) {
+          Blank()
+          Column(ContainerCfg) {
+            Blank().layoutWeight(1)
+            MakeSlider(
+              {
+                value: this.currentPageIndex,
+                min: 0,
+                max: this.totalPageCount - 1,
+                onChangeCallback: newValue => this.gotoPage(newValue)
+              }
+            ).visibility(toVisibility(this.showControls))
+            StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` })
+              .visibility(toVisibility(this.showControls || this.pageFlipMode == 'button'))
+          }
+        }.layoutWeight(1).width('100%')
+
+        Row(ContainerCfg) {
+          StyleButton({
+            text: this.showControls ? '收起' : '展开',
+            alternateColor: this.showControls ? ButtonColor : ButtonColorSemiTransparent,
+            onClickCallback: () => {
+              this.setShowControls(!this.showControls);
+            }
+          })
+          StyleButton({
+            text: '导航', menuElement: [
+              {
+                value: "重置视口",
+                action: () => this.resetViewToFit(),
+              },
+              {
+                value: "跳转首页",
+                action: () => this.gotoPage(0),
+              },
+              {
+                value: "跳转尾页",
+                action: () => this.gotoPage(this.totalPageCount - 1),
+              }]
+          }).visibility(toVisibility(this.showControls))
+          StyleButton({
+            text: this.getShowControlsText(), menuElement: [
+              {
+                value: "拖动",
+                action: () => this.setAnnotateMode('drag'),
+                symbolIcon: getCheckIcon(this.annotateMode == 'drag')
+              },
+              {
+                value: "绘制",
+                action: () => this.setAnnotateMode('draw'),
+                symbolIcon: getCheckIcon(this.annotateMode == 'draw')
+              },
+              {
+                value: "擦除",
+                action: () => this.setAnnotateMode('erase'),
+                symbolIcon: getCheckIcon(this.annotateMode == 'erase')
+              }]
+          }).visibility(toVisibility(this.showControls))
+
           Blank()
 
-          MakeSlider(
-            {
-              value: this.currentPageIndex,
-              min: 0,
-              max: this.totalPageCount - 1,
-              onChangeCallback: newValue => this.gotoPage(newValue)
-            }
-          )
-            .visibility(toVisibility(this.showControls))
-          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` })
+          StyleNumBadgeButton({
+            text: '撤回',
+            count: this.undoHistoryCount,
+            onClickCallback: () => this.executeUndo()
+          }).visibility(toVisibility(this.showControls))
+          StyleNumBadgeButton({
+            text: '重做',
+            count: this.redoHistoryCount,
+            onClickCallback: () => this.executeRedo()
+          }).visibility(toVisibility(this.showControls))
+          StyleStrBadgeButton({
+            text: '保存',
+            badgeText: '!',
+            badgeVisibility: this.hasUnsavedStrokes,
+            onClickCallback: () => this.executeSave()
+          }).visibility(toVisibility(this.showControls))
+          StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
+            .visibility(toVisibility(this.pageFlipMode == 'button'))
           StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
+          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(!this.showControls && this.pageFlipMode != 'button'))
 
-        }.height('100%');
+        }.width('100%')
       }
+      .layoutWeight(1)
+
       .alignRules(FullRect)
       .margin(ContainerPadding)
       .hitTestBehavior(HitTestMode.Transparent)
       .opacity(this.controlsTransparency)
-
     }
     .hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
