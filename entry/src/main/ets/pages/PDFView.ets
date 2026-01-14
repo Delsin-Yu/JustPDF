@@ -12,6 +12,7 @@ import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 import { Tutorial } from '../components/Tutorial';
 import { History, PageCache, PageInfo, PathWithPoints } from '../components/PageInfo';
+import { InputAction } from '../components/Input';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -116,6 +117,7 @@ struct PDFView {
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
+  private hotkeys: InputAction[] = [];
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
@@ -194,6 +196,24 @@ struct PDFView {
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
 
+    // Previous page / Go to first page
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.gotoPrevPage()));
+    // Next page / Go to last page
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.gotoNextPage()));
+    // Undo (Ctrl+Z)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => this.executeUndo()));
+    // Redo (Ctrl+Shift+Z)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => this.executeRedo()));
+    // Redo (Ctrl+Y)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.executeRedo()));
+    // Save (Ctrl+S)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.executeSave()));
+    // Go to first page (Ctrl+Up/Left)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
+    // Go to last page (Ctrl+Down/Right/Space)
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
+
+
     this.gotoPage(0);
     // 使用TaskPool启动后台缓存
     this.startBackgroundCaching();
@@ -237,6 +257,15 @@ struct PDFView {
   private immersiveDisablingListening() {
     harmonyShare.off('knockShare', this.immersiveCallback);
     harmonyShare.off('gesturesShare', this.immersiveCallback);
+  }
+
+  private checkHotkey(keyCode: KeyCode, isCtrlPressed: boolean, isShiftPressed: boolean): (() => void) | null {
+    for (const hotkey of this.hotkeys) {
+      if (hotkey.keyCodes.includes(keyCode) && hotkey.ctrl === isCtrlPressed && hotkey.shift === isShiftPressed) {
+        return hotkey.action;
+      }
+    }
+    return null;
   }
 
   startBackgroundCaching(): void {
@@ -1845,47 +1874,11 @@ struct PDFView {
         } catch (error) {
         }
       }
-      switch (keyEvent.keyCode) {
-        case KeyCode.KEYCODE_DPAD_UP:
-        case KeyCode.KEYCODE_DPAD_LEFT:
-          keyEvent.stopPropagation();
-          if (isCtrlPressed) {
-            this.gotoPage(0);
-          } else {
-            this.gotoPrevPage();
-          }
-          break;
-        case KeyCode.KEYCODE_DPAD_DOWN:
-        case KeyCode.KEYCODE_DPAD_RIGHT:
-        case KeyCode.KEYCODE_SPACE:
-          keyEvent.stopPropagation();
-          if (isCtrlPressed) {
-            this.gotoPage(this.totalPageCount - 1);
-          } else {
-            this.gotoNextPage();
-          }
-          break;
-        case KeyCode.KEYCODE_Z:
-          if (isCtrlPressed) {
-            keyEvent.stopPropagation();
-            if (isShiftPressed) {
-              this.executeRedo();
-            } else {
-              this.executeUndo();
-            }
-          }
-          break;
-        case KeyCode.KEYCODE_Y:
-          if (isCtrlPressed) {
-            keyEvent.stopPropagation();
-            this.executeRedo();
-          }
-          break;
-        case KeyCode.KEYCODE_S:
-          if (isCtrlPressed) {
-            keyEvent.stopPropagation();
-            this.executeSave();
-          }
+
+      const action = this.checkHotkey(keyEvent.keyCode, isCtrlPressed, isShiftPressed);
+      if (action !== null) {
+        keyEvent.stopPropagation();
+        action();
       }
     })
     .onTouchTestDone(() => this.startTransparencyTimeout())
