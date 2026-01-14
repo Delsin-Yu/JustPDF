@@ -1,12 +1,17 @@
-import { SymbolGlyphModifier } from "@kit.ArkUI";
+import { SymbolGlyphModifier } from '@kit.ArkUI';
+import { Stack } from '@kit.ArkTS';
 
 const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
 const ButtonSize: SizeOptions = { height: 40, width: 80 };
 const ButtonSizeWide: SizeOptions = { height: 40, width: 90 };
+
 export const ButtonColor: ResourceColor = `rgba(0, 0, 0, 0.4)`;
+
 const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
+
 export const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
+
 const BaseColor: ResourceColor = `rgba(0, 0, 0, 1)`;
 const TrackColor: ResourceColor = 'rgba(0, 0, 0, 0.2)';
 const ScrollBarWidth: Length = '40vp';
@@ -20,6 +25,34 @@ const boxChecked: SymbolGlyphModifier = new SymbolGlyphModifier(squareCheckedSym
   .fontColor([Color.White])
   .fontSize(ButtonFontSize)
   .fontWeight(FontWeight.Medium);
+
+export const ContainerSpacing: number = 8;
+
+export const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
+
+export const ContainerPadding: Padding = {
+  left: `${ContainerSpacing}px`,
+  right: `${ContainerSpacing}px`,
+  top: `${ContainerSpacing}px`,
+  bottom: `${ContainerSpacing}px`
+}
+
+export const TopLeft: AlignRuleOption = {
+  top: { anchor: '__container__', align: VerticalAlign.Top },
+  left: { anchor: '__container__', align: HorizontalAlign.Start },
+};
+
+export const TopRight: AlignRuleOption = {
+  top: { anchor: '__container__', align: VerticalAlign.Top },
+  right: { anchor: '__container__', align: HorizontalAlign.End }
+}
+
+export const FullRect: AlignRuleOption = {
+  'top': { 'anchor': '__container__', 'align': VerticalAlign.Top },
+  'bottom': { 'anchor': '__container__', 'align': VerticalAlign.Bottom },
+  'left': { 'anchor': '__container__', 'align': HorizontalAlign.Start },
+  'right': { 'anchor': '__container__', 'align': HorizontalAlign.End },
+}
 
 export function toVisibility(value: boolean): Visibility {
   return value ? Visibility.Visible : Visibility.None;
@@ -38,6 +71,13 @@ export function getCheckIconName(checked: boolean): string {
   }
   return 'sys.symbol.square';
 }
+
+export function clearStack<T>(stack: Stack<T>): void {
+  while (!stack.isEmpty()) {
+    stack.pop();
+  }
+}
+
 
 @ComponentV2
 export struct StyleText {
@@ -63,7 +103,6 @@ export struct StyleText {
 
 @ComponentV2
 export struct StyleButton {
-
   @Param text: string = '';
   @Param style: 'normal' | 'wide' = 'normal';
   @Param symbol: string | undefined = undefined;
@@ -71,6 +110,7 @@ export struct StyleButton {
   @Param onClickCallback: () => void = () => {
   };
   @Param alternateColor: ResourceColor | undefined = undefined;
+
   build() {
     Button() {
       Text() {
