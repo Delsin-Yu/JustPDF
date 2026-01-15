@@ -71,7 +71,6 @@ export class PageInfo {
    * @param sandboxPath Path to the PDF file
    * @param renderScale The render scale to cache at
    * @param priority Task priority (LOW for background, HIGH for immediate)
-   * @param cachePageFunction The function to use for caching
    * @returns Promise that resolves when caching is complete, or undefined if already cached/pending
    */
   public ensureCached(

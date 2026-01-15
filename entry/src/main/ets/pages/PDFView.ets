@@ -352,6 +352,98 @@ struct PDFView {
     );
   }
 
+  // 根据显示模式计算要显示的页面索引
+  private calculateDisplayIndices(targetIndex: number): number[] {
+    switch (this.pageDisplayMode) {
+      case 'single':
+        return [targetIndex];
+
+      case 'dual': {
+        const index1 = targetIndex % 2 === 0 ? targetIndex : targetIndex - 1;
+        const indices = [index1];
+        if (index1 + 1 < this.totalPageCount) {
+          indices.push(index1 + 1);
+        }
+        return indices;
+      }
+
+      case 'dualContinuous': {
+        const indices = [targetIndex];
+        if (targetIndex + 1 < this.totalPageCount) {
+          indices.push(targetIndex + 1);
+        }
+        return indices;
+      }
+
+      case 'tri': {
+        const groupIndex = Math.floor(targetIndex / 3);
+        const index1 = groupIndex * 3;
+        const indices = [index1];
+        if (index1 + 1 < this.totalPageCount) {
+          indices.push(index1 + 1);
+        }
+        if (index1 + 2 < this.totalPageCount) {
+          indices.push(index1 + 2);
+        }
+        return indices;
+      }
+
+      case 'triContinuous': {
+        const indices = [targetIndex];
+        if (targetIndex + 1 < this.totalPageCount) {
+          indices.push(targetIndex + 1);
+        }
+        if (targetIndex + 2 < this.totalPageCount) {
+          indices.push(targetIndex + 2);
+        }
+        return indices;
+      }
+    }
+  }
+
+  // 加载页面缓存并更新视图状态
+  private async loadAndDisplayPages(indices: number[]): Promise<void> {
+    // 加载每个页面并设置对应视图
+    for (let i = 0; i < 3; i++) {
+      if (i < indices.length) {
+        const cache = await this.getPageCache(indices[i], this.currentRenderScale);
+        switch (i) {
+          case 0:
+            this.view1PixelMap = cache.pixelMap;
+            this.view1ViewSize = cache.displaySize;
+            break;
+          case 1:
+            this.view2PixelMap = cache.pixelMap;
+            this.view2ViewSize = cache.displaySize;
+            break;
+          case 2:
+            this.view3PixelMap = cache.pixelMap;
+            this.view3ViewSize = cache.displaySize;
+            break;
+        }
+      } else {
+        switch (i) {
+          case 0:
+            this.view1PixelMap = undefined;
+            break;
+          case 1:
+            this.view2PixelMap = undefined;
+            break;
+          case 2:
+            this.view3PixelMap = undefined;
+            break;
+        }
+      }
+    }
+
+    // 设置视图可见性
+    this.view2Visible = indices.length > 1;
+    this.view3Visible = indices.length > 2;
+
+    // 更新总体视图大小
+    this.updateViewSize();
+  }
+
   async gotoPage(targetIndex: number): Promise<void> {
     if (targetIndex < 0 || targetIndex >= this.totalPageCount) {
       return;
@@ -361,166 +453,11 @@ struct PDFView {
     // 导航到新页面时重置渲染缩放
     this.currentRenderScale = MIN_RENDER_SCALE;
 
-    if (this.pageDisplayMode === 'single') {
-      this.displayedPageIndices = [targetIndex];
-      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
-      this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.displaySize;
-      this.view2PixelMap = undefined;
-      this.view3PixelMap = undefined;
-      this.view2Visible = false;
-      this.view3Visible = false;
-      this.viewSize = view1Page.displaySize;
-    } else if (this.pageDisplayMode === 'dual') {
-      let index1: number;
-      let index2: number | undefined;
+    // 计算要显示的页面索引
+    this.displayedPageIndices = this.calculateDisplayIndices(targetIndex);
 
-      if (targetIndex % 2 === 0) {
-        index1 = targetIndex;
-        index2 = targetIndex + 1 < this.totalPageCount ? targetIndex + 1 : undefined;
-      } else {
-        index1 = targetIndex - 1;
-        index2 = targetIndex;
-      }
-
-      this.displayedPageIndices = index2 !== undefined ? [index1, index2] : [index1];
-      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
-      this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.displaySize;
-
-      if (index2 !== undefined) {
-        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
-        this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.displaySize;
-        this.view2Visible = true;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
-          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
-        );
-      } else {
-        this.view2PixelMap = undefined;
-        this.view2Visible = false;
-        this.viewSize = view1Page.displaySize;
-      }
-      this.view3PixelMap = undefined;
-      this.view3Visible = false;
-    } else if (this.pageDisplayMode === 'dualContinuous') {
-      this.displayedPageIndices = targetIndex + 1 < this.totalPageCount
-        ? [targetIndex, targetIndex + 1]
-        : [targetIndex];
-      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
-      this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.displaySize;
-
-      if (targetIndex + 1 < this.totalPageCount) {
-        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
-        this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.displaySize;
-        this.view2Visible = true;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + view2Page.displaySize.x,
-          Math.max(view1Page.displaySize.y, view2Page.displaySize.y)
-        );
-      } else {
-        this.view2PixelMap = undefined;
-        this.view2Visible = false;
-        this.viewSize = view1Page.displaySize;
-      }
-      this.view3PixelMap = undefined;
-      this.view3Visible = false;
-    } else if (this.pageDisplayMode === 'tri') {
-      let index1: number;
-      let index2: number | undefined;
-      let index3: number | undefined;
-
-      const groupIndex = Math.floor(targetIndex / 3);
-      index1 = groupIndex * 3;
-      index2 = index1 + 1 < this.totalPageCount ? index1 + 1 : undefined;
-      index3 = index1 + 2 < this.totalPageCount ? index1 + 2 : undefined;
-
-      this.displayedPageIndices = [index1];
-      if (index2 !== undefined) {
-        this.displayedPageIndices.push(index2);
-      }
-      if (index3 !== undefined) {
-        this.displayedPageIndices.push(index3);
-      }
-
-      const view1Page = await this.getPageCache(index1, this.currentRenderScale);
-      this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.displaySize;
-
-      if (index2 !== undefined) {
-        const view2Page = await this.getPageCache(index2, this.currentRenderScale);
-        this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.displaySize;
-        this.view2Visible = true;
-      } else {
-        this.view2PixelMap = undefined;
-        this.view2Visible = false;
-      }
-
-      if (index3 !== undefined) {
-        const view3Page = await this.getPageCache(index3, this.currentRenderScale);
-        this.view3PixelMap = view3Page.pixelMap;
-        this.view3ViewSize = view3Page.displaySize;
-        this.view3Visible = true;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing +
-          view3Page.displaySize.x,
-          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
-        );
-      } else {
-        this.view3PixelMap = undefined;
-        this.view3Visible = false;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x + (index2 !== undefined ? ContainerSpacing + this.view2ViewSize.x : 0),
-          Math.max(view1Page.displaySize.y, index2 !== undefined ? this.view2ViewSize.y : 0)
-        );
-      }
-    } else if (this.pageDisplayMode === 'triContinuous') {
-      this.displayedPageIndices = [targetIndex];
-      if (targetIndex + 1 < this.totalPageCount) {
-        this.displayedPageIndices.push(targetIndex + 1);
-      }
-      if (targetIndex + 2 < this.totalPageCount) {
-        this.displayedPageIndices.push(targetIndex + 2);
-      }
-
-      const view1Page = await this.getPageCache(targetIndex, this.currentRenderScale);
-      this.view1PixelMap = view1Page.pixelMap;
-      this.view1ViewSize = view1Page.displaySize;
-
-      if (targetIndex + 1 < this.totalPageCount) {
-        const view2Page = await this.getPageCache(targetIndex + 1, this.currentRenderScale);
-        this.view2PixelMap = view2Page.pixelMap;
-        this.view2ViewSize = view2Page.displaySize;
-        this.view2Visible = true;
-      } else {
-        this.view2PixelMap = undefined;
-        this.view2Visible = false;
-      }
-
-      if (targetIndex + 2 < this.totalPageCount) {
-        const view3Page = await this.getPageCache(targetIndex + 2, this.currentRenderScale);
-        this.view3PixelMap = view3Page.pixelMap;
-        this.view3ViewSize = view3Page.displaySize;
-        this.view3Visible = true;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x + ContainerSpacing + this.view2ViewSize.x + ContainerSpacing +
-          view3Page.displaySize.x,
-          Math.max(view1Page.displaySize.y, this.view2ViewSize.y, view3Page.displaySize.y)
-        );
-      } else {
-        this.view3PixelMap = undefined;
-        this.view3Visible = false;
-        this.viewSize = Vec2(
-          view1Page.displaySize.x +
-            (targetIndex + 1 < this.totalPageCount ? ContainerSpacing + this.view2ViewSize.x : 0),
-          Math.max(view1Page.displaySize.y, targetIndex + 1 < this.totalPageCount ? this.view2ViewSize.y : 0)
-        );
-      }
-    }
+    // 加载并显示页面
+    await this.loadAndDisplayPages(this.displayedPageIndices);
 
     // 重置视图以适应视口中的内容
     this.resetViewToFit();
