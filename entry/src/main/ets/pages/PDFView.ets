@@ -13,6 +13,7 @@ import { common } from '@kit.AbilityKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, PageCache, PageInfo, PathWithPoints } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
+import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -27,37 +28,6 @@ const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
-
-@Concurrent
-function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
-  const document = new pdfService.PdfDocument();
-  const result = document.loadDocument(sandboxPath);
-  if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-    throw new Error(`加载文档失败: ${result}`);
-  }
-
-  const page = document.getPage(pageIndex);
-  const baseSize = Vec2(page.getWidth(), page.getHeight());
-  const renderSize = mul(baseSize, renderScale);
-  const matrix = new pdfService.PdfMatrix();
-  matrix.x = 0;
-  matrix.y = 0;
-  matrix.width = renderSize.x;
-  matrix.height = renderSize.y;
-  matrix.rotate = 0;
-  const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
-
-  // 显示大小始终为 MIN_RENDER_SCALE (2)，以保持一致的 UI 缩放
-  const displaySize = mul(baseSize, 2);
-
-  return {
-    page: page,
-    pixelMap: pixelMap,
-    renderScale: renderScale,
-    baseSize: baseSize,
-    displaySize: displaySize
-  };
-}
 
 @Entry
 @Component
@@ -123,6 +93,13 @@ struct PDFView {
     width: '60%',
     height: '90%'
   });
+  pageManagerDialogController: CustomDialogController = new CustomDialogController({
+    builder: PageManagerDialogBuilder({
+    }),
+    width: '80%',
+    height: '90%',
+    autoCancel: false
+  })
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
@@ -276,22 +253,7 @@ struct PDFView {
   startBackgroundCaching(): void {
     for (let i = 0; i < this.totalPageCount; i++) {
       const pageInfo = this.pages[i];
-      if (!pageInfo.hasCache(MIN_RENDER_SCALE) && !pageInfo.hasPendingTask(MIN_RENDER_SCALE)) {
-        const task = new taskpool.Task(cachePage, this.sandBoxPath, i, MIN_RENDER_SCALE);
-        const promise = taskpool.execute(task, taskpool.Priority.LOW)
-          .then(pageCache => {
-            pageInfo.setCache(MIN_RENDER_SCALE, pageCache as PageCache);
-            pageInfo.removePendingTask(MIN_RENDER_SCALE);
-            hilog.info(0, 'PDFView', `页面 ${i} 已在缩放 ${MIN_RENDER_SCALE} 下缓存`);
-            return pageCache;
-          })
-          .catch((error: Error) => {
-            pageInfo.removePendingTask(MIN_RENDER_SCALE);
-            hilog.error(0, 'PDFView', `缓存页面 ${i} 失败: ${error.message}`);
-            throw error;
-          });
-        pageInfo.setPendingTask(MIN_RENDER_SCALE, promise as Promise<PageCache>);
-      }
+      pageInfo.ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.LOW);
     }
   }
 
@@ -369,56 +331,25 @@ struct PDFView {
   async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
     const pageInfo = this.pages[targetIndex];
 
-    const cached = pageInfo.getCache(renderScale);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    const pendingTask = pageInfo.getPendingTask(renderScale);
-    if (pendingTask !== undefined) {
-      return await pendingTask;
-    }
-
-    const fallbackCache = pageInfo.getLowestRenderScaleCache();
-
-    const priority = renderScale === MIN_RENDER_SCALE
-      ? taskpool.Priority.HIGH
-      : taskpool.Priority.MEDIUM;
-
-    const task = new taskpool.Task(cachePage, this.sandBoxPath, targetIndex, renderScale);
-    const promise = taskpool.execute(task, priority)
-      .then(pageCache => {
-        pageInfo.setCache(renderScale, pageCache as PageCache);
-        pageInfo.removePendingTask(renderScale);
-        hilog.info(0, 'PDFView', `页面 ${targetIndex} 已在缩放 ${renderScale} 下缓存`);
-        return pageCache;
-      })
-      .catch((error: Error) => {
-        pageInfo.removePendingTask(renderScale);
-        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${targetIndex} 失败: ${error.message}`);
-        throw error;
-      });
-
-    pageInfo.setPendingTask(renderScale, promise as Promise<PageCache>);
-
-    if (fallbackCache !== undefined) {
-      promise.then((highResCache) => {
+    // Use PageInfo's async caching method with callback for automatic high-res display update
+    return await pageInfo.getPageCacheAsync(
+      this.sandBoxPath,
+      renderScale,
+      MIN_RENDER_SCALE,
+      (highResCache: PageCache) => {
+        // Automatically update display when high-res version is ready
         if (this.displayedPageIndices.includes(targetIndex)) {
           const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
-          const cache = highResCache as PageCache;
           if (displayIndex === 0) {
-            this.view1PixelMap = cache.pixelMap;
+            this.view1PixelMap = highResCache.pixelMap;
           } else if (displayIndex === 1) {
-            this.view2PixelMap = cache.pixelMap;
+            this.view2PixelMap = highResCache.pixelMap;
           } else if (displayIndex === 2) {
-            this.view3PixelMap = cache.pixelMap;
+            this.view3PixelMap = highResCache.pixelMap;
           }
         }
-      });
-      return fallbackCache;
-    }
-
-    return await promise as PageCache;
+      }
+    );
   }
 
   async gotoPage(targetIndex: number): Promise<void> {
@@ -1006,9 +937,7 @@ struct PDFView {
     }
 
     for (const pageIndex of affectedPageIndices) {
-      const pageInfo = this.pages[pageIndex];
-      pageInfo.clearCaches();
-      pageInfo.clearPendingTasks();
+      this.pages[pageIndex].InvalidateCaches();
     }
 
     const currentPageAffected = this.displayedPageIndices.some(idx =>
@@ -1017,22 +946,7 @@ struct PDFView {
 
     for (const pageIndex of affectedPageIndices) {
       const pageInfo = this.pages[pageIndex];
-      if (!pageInfo.hasCache(MIN_RENDER_SCALE) && !pageInfo.hasPendingTask(MIN_RENDER_SCALE)) {
-        const task = new taskpool.Task(cachePage, this.sandBoxPath, pageIndex, MIN_RENDER_SCALE);
-        const promise = taskpool.execute(task, taskpool.Priority.HIGH)
-          .then(pageCache => {
-            pageInfo.setCache(MIN_RENDER_SCALE, pageCache as PageCache);
-            pageInfo.removePendingTask(MIN_RENDER_SCALE);
-            hilog.info(0, 'PDFView', `页面 ${pageIndex} 已在缩放 ${MIN_RENDER_SCALE} 下重新缓存`);
-            return pageCache;
-          })
-          .catch((error: Error) => {
-            pageInfo.removePendingTask(MIN_RENDER_SCALE);
-            hilog.error(0, 'PDFView', `重新缓存页面 ${pageIndex} 失败: ${error.message}`);
-            throw error;
-          });
-        pageInfo.setPendingTask(MIN_RENDER_SCALE, promise as Promise<PageCache>);
-      }
+      pageInfo.ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.HIGH);
     }
 
     if (currentPageAffected) {
@@ -1720,6 +1634,11 @@ struct PDFView {
                 action: () => this.setPageFlipMode('extern'),
                 symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
               }]
+          }).visibility(toVisibility(this.showControls))
+          StyleButton({
+            text: '页面', onClickCallback: () => {
+              this.pageManagerDialogController.open()
+            }
           }).visibility(toVisibility(this.showControls))
 
           Blank()
