@@ -1,5 +1,5 @@
-import { ButtonColor, ButtonColorSemiTransparent, clearStack, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, getCheckIconName, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
-import { AdvancedDialogV2Button, CustomContentDialogV2, LengthMetricsUnit, window } from '@kit.ArkUI';
+import { ButtonColor, ButtonColorSemiTransparent, clearStack, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
+import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HashMap, Stack, taskpool } from '@kit.ArkTS';
@@ -10,7 +10,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
-import { Tutorial } from '../components/Tutorial';
+import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, PageCache, PageInfo, PathWithPoints } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 
@@ -118,6 +118,11 @@ struct PDFView {
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
   hotkeys: InputAction[] = [];
+  tutorialDialogController: CustomDialogController = new CustomDialogController({
+    builder: TutorialDialogBuilder(),
+    width: '60%',
+    height: '90%'
+  });
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
@@ -1543,32 +1548,6 @@ struct PDFView {
     this.transparencyTimeoutId = setTimeout(() => this.controlsTransparency = 0.5, 1000 * 3);
   }
 
-  @Builder
-  tutorialDialogBuilder(): void {
-    CustomContentDialogV2({
-      primaryTitle: 'Just PDF 使用教程',
-      contentBuilder: () => {
-        this.buildTutorialContent();
-      },
-      buttons: [
-        new AdvancedDialogV2Button({
-          content: '关闭',
-          buttonStyle: ButtonStyleMode.TEXTUAL,
-          role: ButtonRole.NORMAL,
-        })
-      ],
-    })
-  }
-
-  @Builder
-  buildTutorialContent(): void {
-    Scroll() {
-      Tutorial()
-    }
-    .width('100%')
-    .height('100%')
-  }
-
   build() {
     RelativeContainer() {
 
@@ -1763,9 +1742,7 @@ struct PDFView {
           StyleButton({
             text: '教程',
             onClickCallback: () => {
-              this.getUIContext().getPromptAction().openCustomDialog({
-                builder: () => this.tutorialDialogBuilder()
-              })
+              this.tutorialDialogController.open();
             }
           }).visibility(toVisibility(this.showControls))
 
@@ -1857,7 +1834,6 @@ struct PDFView {
         }.width('100%')
       }
       .layoutWeight(1)
-
       .alignRules(FullRect)
       .margin(ContainerPadding)
       .hitTestBehavior(HitTestMode.Transparent)

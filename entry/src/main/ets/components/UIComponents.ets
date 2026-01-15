@@ -37,6 +37,18 @@ export const ContainerPadding: Padding = {
   bottom: `${ContainerSpacing}px`
 }
 
+
+export const ContainerWideSpacing: number = 16;
+
+export const ContainerWideCfg: RowOptions | ColumnOptions = { space: `${ContainerWideSpacing}px` };
+
+export const ContainerWidePadding: Padding = {
+  left: `${ContainerWideSpacing}px`,
+  right: `${ContainerWideSpacing}px`,
+  top: `${ContainerWideSpacing}px`,
+  bottom: `${ContainerWideSpacing}px`
+}
+
 export const TopLeft: AlignRuleOption = {
   top: { anchor: '__container__', align: VerticalAlign.Top },
   left: { anchor: '__container__', align: HorizontalAlign.Start },
