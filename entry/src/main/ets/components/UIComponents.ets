@@ -84,13 +84,6 @@ export function getCheckIconName(checked: boolean): string {
   return 'sys.symbol.square';
 }
 
-export function clearStack<T>(stack: Stack<T>): void {
-  while (!stack.isEmpty()) {
-    stack.pop();
-  }
-}
-
-
 @ComponentV2
 export struct StyleText {
   @Param text: string = '';

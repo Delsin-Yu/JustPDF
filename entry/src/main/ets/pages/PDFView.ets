@@ -1,8 +1,8 @@
-import { ButtonColor, ButtonColorSemiTransparent, clearStack, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
+import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
 import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HashMap, Stack, taskpool } from '@kit.ArkTS';
+import { taskpool } from '@kit.ArkTS';
 import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
@@ -11,8 +11,9 @@ import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
-import { NewStroke, History, PageCache, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
+import { History, NewStroke, PageCache, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
+import { Stack } from '../components/Colletions';
 import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
@@ -36,7 +37,7 @@ struct PDFView {
   sandBoxPath = '';
   saveTempPath = '';
   fileName = '';
-  mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
+  mainWindow: window.Window = (AppStorage.get('window') as window.Window);
   document = new pdfService.PdfDocument();
   pages: PageInfoDataSource = new PageInfoDataSource();
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
@@ -94,19 +95,19 @@ struct PDFView {
     height: '90%'
   });
   pageManagerDialogController: CustomDialogController = new CustomDialogController({
-    builder: PageManagerDialogBuilder({
-    }),
+    builder: PageManagerDialogBuilder({}),
     width: '80%',
     height: '90%',
     autoCancel: false
   })
 
   backToMainMenu(): void {
-    this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' });
+    this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
+    });
   }
 
   showAlertDialog(title: string, message: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve) => {
       this.getUIContext().showAlertDialog({
         title: title,
         message: message,
@@ -162,16 +163,21 @@ struct PDFView {
     }
 
     // 加载首选项
-    this.showControls = this.preferences.getSync('showControls', true) as boolean;
-    this.pageDisplayMode = this.preferences.getSync('pageDisplayMode',
-      'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
-    this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
-    this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
-    this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen =
-      statusType == window.WindowStatusType.FULL_SCREEN);
+
     try {
+      this.showControls = this.preferences.getSync('showControls', true) as boolean;
+      this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+      this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
+      this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
+    } catch (e) {
+      hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
+    }
+
+    try {
+      this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN);
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
     } catch (error) {
+      hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
 
     this.immersiveListening();
@@ -636,15 +642,17 @@ struct PDFView {
   appendUndoHistory(history: History): void {
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
-    clearStack(this.redoHistory);
+    this.redoHistory.clear();
     this.redoHistoryCount = 0;
   }
 
   executeUndo(): void {
-    if (this.undoHistory.isEmpty()) {
+    const history = this.undoHistory.pop();
+
+    if (!history) {
       return;
     }
-    const history = this.undoHistory.pop();
+
     this.undoHistoryCount = this.undoHistory.length;
 
     const needsPageNavigation = !this.displayedPageIndices.includes(history.pageIndex);
@@ -665,10 +673,12 @@ struct PDFView {
   }
 
   executeRedo(): void {
-    if (this.redoHistory.isEmpty()) {
+    const history = this.redoHistory.pop();
+
+    if (!history) {
       return;
     }
-    const history = this.redoHistory.pop();
+
     this.redoHistoryCount = this.redoHistory.length;
 
     const needsPageNavigation = !this.displayedPageIndices.includes(history.pageIndex);
@@ -713,10 +723,10 @@ struct PDFView {
       return;
     }
 
-    const affectedPage = new HashMap<number, pdfService.PdfAnnotation[]>();
+    const affectedPage = new Map<number, pdfService.PdfAnnotation[]>();
 
     for (let pageIndex = 0; pageIndex < this.pages.totalCount(); pageIndex++) {
-      if(this.pages.getPageStrokesCount(pageIndex) == 0) {
+      if (this.pages.getPageStrokesCount(pageIndex) == 0) {
         continue;
       }
       const pdfPageSize = this.pages.getPageRawSize(pageIndex);
@@ -763,6 +773,9 @@ struct PDFView {
       hilog.error(0, 'PDFView', `保存 PDF 文件到临时路径时出错`);
       for (const pageIndex of affectedPage.keys()) {
         const annotations = affectedPage.get(pageIndex);
+        if (!annotations) {
+          continue;
+        }
         this.pages.removePdfAnnotations(pageIndex, annotations);
       }
       return;
@@ -811,8 +824,8 @@ struct PDFView {
     }
 
     this.pages.clearAllStrokes();
-    clearStack(this.undoHistory);
-    clearStack(this.redoHistory);
+    this.undoHistory.clear();
+    this.redoHistory.clear();
     this.undoHistoryCount = 0;
     this.redoHistoryCount = 0;
     this.hasUnsavedStrokes = false;
@@ -820,9 +833,12 @@ struct PDFView {
     this.invalidateAffectedPages(Array.from(affectedPage.keys()));
   }
 
-  async revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): Promise<void> {
+  async revertChanges(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<void> {
     for (const pageIndex of affectedPage.keys()) {
       const annotations = affectedPage.get(pageIndex);
+      if (!annotations) {
+        continue;
+      }
       this.pages.removePdfAnnotations(pageIndex, annotations);
     }
     const success = this.document.saveDocument(this.saveTempPath);
@@ -910,7 +926,8 @@ struct PDFView {
     // 获取UIAbility上下文对象
     let uiContext: UIContext = this.getUIContext();
     let context = uiContext.getHostContext() as common.UIAbilityContext;
-    controller.show(context, { anchor: ShareButtonId });
+    controller.show(context, { anchor: ShareButtonId }).catch(() => {
+    });
   }
 
   getCanvasSize(pageIndex: number): Vector2 {
