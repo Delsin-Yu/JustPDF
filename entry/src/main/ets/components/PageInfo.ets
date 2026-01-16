@@ -3,13 +3,31 @@ import { mul, Vec2, Vector2 } from '../components/Numbers';
 import { taskpool } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-export interface PathWithPoints {
+export interface ReadonlyStroke {
+  readonly points: readonly Vector2[];
+  stroke(renderingContext: CanvasRenderingContext2D): void;
+}
+
+export function NewStroke(): Stroke {
+  return new Stroke(new Path2D(), []);
+}
+
+export class Stroke implements ReadonlyStroke {
   path: Path2D;
   points: Vector2[];
+
+  constructor(path: Path2D, points: Vector2[]) {
+    this.path = path;
+    this.points = points;
+  }
+
+  public stroke(renderingContext: CanvasRenderingContext2D): void {
+    renderingContext.stroke(this.path);
+  }
 }
 
 export interface History {
-  path: PathWithPoints;
+  path: ReadonlyStroke;
   mode: 'add' | 'erase';
   pageIndex: number;
 }
@@ -53,12 +71,16 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
   };
 }
 
-export class PageInfo {
-  pageIndex: number;
-  pdfPage: pdfService.PdfPage;
+export interface ReadonlyPageInfo {
+
+}
+
+export class PageInfo implements ReadonlyPageInfo {
+  public pageIndex: number;
+  public pdfPage: pdfService.PdfPage;
+  public strokes: Stroke[] = [];
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, Promise<PageCache>> = new Map();
-  strokes: PathWithPoints[] = [];
 
   constructor(pageIndex: number, pdfPage: pdfService.PdfPage) {
     this.pageIndex = pageIndex;
@@ -115,9 +137,15 @@ export class PageInfo {
     return lowestCache;
   }
 
-  public InvalidateCaches(): void {
+  public invalidateCaches(): void {
     this.caches.clear();
     this.pendingTasks.clear();
+  }
+
+  public stroke(renderingContext: CanvasRenderingContext2D): void {
+    for (const stroke of this.strokes) {
+      stroke.stroke(renderingContext);
+    }
   }
 
   public async getPageCacheAsync(
@@ -176,5 +204,145 @@ export class PageInfo {
 
     // Otherwise wait for the promise to complete
     return await promise as PageCache;
+  }
+
+  get strokesCount(): number {
+    return this.strokes.length;
+  }
+}
+
+export class PageInfoDataSource implements IDataSource {
+  private list: PageInfo[] = [];
+  private listeners: DataChangeListener[] = [];
+
+  public totalCount(): number {
+    return this.list.length;
+  }
+
+  public getData(index: number): ReadonlyPageInfo {
+    return this.list[index];
+  }
+
+  public registerDataChangeListener(listener: DataChangeListener): void {
+    this.listeners.push(listener);
+  }
+
+  public unregisterDataChangeListener(listener: DataChangeListener): void {
+    const idx = this.listeners.indexOf(listener);
+    if (idx >= 0) {
+      this.listeners.splice(idx, 1);
+    }
+  }
+
+  public push(pageInfo: PageInfo): void {
+    this.list.push(pageInfo);
+    this.listeners.forEach(listener => listener.onDataChange(this.list.length - 1));
+  }
+
+  public ensureCached(index: number, sandboxPath: string,
+    renderScale: number,
+    priority: taskpool.Priority): Promise<PageCache> | undefined {
+    const pageInfo = this.list[index];
+    return pageInfo.ensureCached(sandboxPath, renderScale, priority);
+  }
+
+  public async getPageCacheAsync(
+    index: number,
+    sandboxPath: string,
+    renderScale: number,
+    minRenderScale: number,
+    onHighResReady?: (cache: PageCache) => void
+  ): Promise<PageCache> {
+    const pageInfo = this.list[index];
+    return await pageInfo.getPageCacheAsync(
+      sandboxPath,
+      renderScale,
+      minRenderScale,
+      onHighResReady
+    );
+  }
+
+  public getPageStrokesCount(index: number): number {
+    const pageInfo = this.list[index];
+    return pageInfo.strokesCount;
+  }
+
+  public getPageRawSize(index: number): Vector2 {
+    const pageInfo = this.list[index];
+    return Vec2(pageInfo.pdfPage.getWidth(), pageInfo.pdfPage.getHeight());
+  }
+
+  public iteratePageStrokes(index: number): Iterable<ReadonlyStroke> {
+    const pageInfo = this.list[index];
+    return pageInfo.strokes;
+  }
+
+  public addPdfAnnotations(index: number, annotationInfo: pdfService.PdfAnnotationInfo[]): pdfService.PdfAnnotation[] {
+    const pageInfo = this.list[index];
+    const annotations: pdfService.PdfAnnotation[] = [];
+    for (const info of annotationInfo) {
+      const annotation = pageInfo.pdfPage.addAnnotation(info);
+      annotations.push(annotation);
+    }
+    this.markChanged(index);
+    return annotations;
+  }
+
+  public removePdfAnnotations(index: number, annotations: pdfService.PdfAnnotation[]): void {
+    const pageInfo = this.list[index];
+    for (const annotation of annotations) {
+      pageInfo.pdfPage.removeAnnotation(annotation);
+    }
+    this.markChanged(index);
+  }
+
+  public stokePage(index: number, renderingContext: CanvasRenderingContext2D) {
+    const pageInfo = this.list[index];
+    pageInfo.stroke(renderingContext);
+  }
+
+  public addStroke(index: number, pathWithPoints: Stroke): void {
+    const pageInfo = this.list[index];
+    pageInfo.strokes.push(pathWithPoints);
+    this.markChanged(index);
+  }
+
+  public removeStroke(index: number, pathWithPoints: Stroke): void {
+    const pageInfo = this.list[index];
+    const idx = pageInfo.strokes.indexOf(pathWithPoints);
+    if (idx >= 0) {
+      pageInfo.strokes.splice(idx, 1);
+      this.markChanged(index);
+    }
+  }
+
+  public removeStrokeWhere(index: number, predicate: (stroke: ReadonlyStroke) => boolean): void {
+    const pageInfo = this.list[index];
+    const originalLength = pageInfo.strokes.length;
+    pageInfo.strokes = pageInfo.strokes.filter(stroke => !predicate(stroke));
+    if (pageInfo.strokes.length !== originalLength) {
+      this.markChanged(index);
+    }
+  }
+
+  public clearAllStrokes(): void {
+    for (let i = 0; i < this.list.length; i++) {
+      const pageInfo = this.list[i];
+      pageInfo.strokes = [];
+      this.markChanged(i);
+    }
+  }
+
+  public invalidateCaches(index: number): void {
+    const pageInfo = this.list[index];
+    pageInfo.invalidateCaches();
+  }
+
+  private markChanged(index: number): void {
+    this.listeners.forEach(listener => listener.onDataChange(index));
+  }
+
+  public iteratePages(): Iterable<ReadonlyPageInfo> {
+    return this.list;
   }
 }
