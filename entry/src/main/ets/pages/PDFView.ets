@@ -252,8 +252,7 @@ struct PDFView {
 
   startBackgroundCaching(): void {
     for (let i = 0; i < this.totalPageCount; i++) {
-      const pageInfo = this.pages[i];
-      pageInfo.ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.LOW);
+      this.pages[i].ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.LOW);
     }
   }
 
@@ -403,42 +402,36 @@ struct PDFView {
 
   // 加载页面缓存并更新视图状态
   private async loadAndDisplayPages(indices: number[]): Promise<void> {
-    // 加载每个页面并设置对应视图
-    for (let i = 0; i < 3; i++) {
-      if (i < indices.length) {
-        const cache = await this.getPageCache(indices[i], this.currentRenderScale);
-        switch (i) {
-          case 0:
-            this.view1PixelMap = cache.pixelMap;
-            this.view1ViewSize = cache.displaySize;
-            break;
-          case 1:
-            this.view2PixelMap = cache.pixelMap;
-            this.view2ViewSize = cache.displaySize;
-            break;
-          case 2:
-            this.view3PixelMap = cache.pixelMap;
-            this.view3ViewSize = cache.displaySize;
-            break;
-        }
-      } else {
-        switch (i) {
-          case 0:
-            this.view1PixelMap = undefined;
-            break;
-          case 1:
-            this.view2PixelMap = undefined;
-            break;
-          case 2:
-            this.view3PixelMap = undefined;
-            break;
-        }
-      }
+    // 加载第一个页面
+    if (indices.length > 0) {
+      const cache = await this.getPageCache(indices[0], this.currentRenderScale);
+      this.view1PixelMap = cache.pixelMap;
+      this.view1ViewSize = cache.displaySize;
+    } else {
+      this.view1PixelMap = undefined;
     }
 
-    // 设置视图可见性
-    this.view2Visible = indices.length > 1;
-    this.view3Visible = indices.length > 2;
+    // 加载第二个页面
+    if (indices.length > 1) {
+      const cache = await this.getPageCache(indices[1], this.currentRenderScale);
+      this.view2PixelMap = cache.pixelMap;
+      this.view2ViewSize = cache.displaySize;
+      this.view2Visible = true;
+    } else {
+      this.view2PixelMap = undefined;
+      this.view2Visible = false;
+    }
+
+    // 加载第三个页面
+    if (indices.length > 2) {
+      const cache = await this.getPageCache(indices[2], this.currentRenderScale);
+      this.view3PixelMap = cache.pixelMap;
+      this.view3ViewSize = cache.displaySize;
+      this.view3Visible = true;
+    } else {
+      this.view3PixelMap = undefined;
+      this.view3Visible = false;
+    }
 
     // 更新总体视图大小
     this.updateViewSize();
