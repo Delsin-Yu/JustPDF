@@ -11,7 +11,7 @@ import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
-import { History, PageCache, PageInfo, PathWithPoints } from '../components/PageInfo';
+import { NewStroke, History, PageCache, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
 
@@ -38,7 +38,7 @@ struct PDFView {
   fileName = '';
   mainWindow: window.Window = (AppStorage.get('windowStage') as window.WindowStage).getMainWindowSync();
   document = new pdfService.PdfDocument();
-  pages: PageInfo[] = [];
+  pages: PageInfoDataSource = new PageInfoDataSource();
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   currentRenderScale: number = MIN_RENDER_SCALE;
   displayedPageIndices: number[] = [];
@@ -79,8 +79,8 @@ struct PDFView {
   view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
-  activeDrawPath: PathWithPoints = { path: new Path2D(), points: [] };
-  pathsToErase: Set<PathWithPoints> = new Set();
+  activeDrawPath: Stroke = NewStroke();
+  pathsToErase: Set<ReadonlyStroke> = new Set();
   undoHistory: Stack<History> = new Stack<History>();
   redoHistory: Stack<History> = new Stack<History>();
   @State hasUnsavedStrokes: boolean = false;
@@ -252,7 +252,7 @@ struct PDFView {
 
   startBackgroundCaching(): void {
     for (let i = 0; i < this.totalPageCount; i++) {
-      this.pages[i].ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.LOW);
+      this.pages.ensureCached(i, this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.LOW);
     }
   }
 
@@ -328,10 +328,9 @@ struct PDFView {
   }
 
   async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
-    const pageInfo = this.pages[targetIndex];
-
     // Use PageInfo's async caching method with callback for automatic high-res display update
-    return await pageInfo.getPageCacheAsync(
+    return await this.pages.getPageCacheAsync(
+      targetIndex,
       this.sandBoxPath,
       renderScale,
       MIN_RENDER_SCALE,
@@ -617,8 +616,8 @@ struct PDFView {
   }
 
   updateUnsavedStrokesFlag(): void {
-    for (const pageInfo of this.pages) {
-      if (pageInfo.strokes.length > 0) {
+    for (let i = 0; i < this.totalPageCount; i++) {
+      if (this.pages.getPageStrokesCount(i) > 0) {
         this.hasUnsavedStrokes = true;
         return;
       }
@@ -627,12 +626,11 @@ struct PDFView {
   }
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
-    const pageInfo = this.pages[pageIndex];
-    if (pageInfo.strokes.length === 0) {
+    if (this.pages.getPageStrokesCount(pageIndex) === 0) {
       return;
     }
     this.applyStrokeStyle(ctx);
-    pageInfo.strokes.forEach(stroke => ctx.stroke(stroke.path));
+    this.pages.stokePage(pageIndex, ctx);
   }
 
   appendUndoHistory(history: History): void {
@@ -654,14 +652,10 @@ struct PDFView {
       this.gotoPage(history.pageIndex);
     }
 
-    const pageInfo = this.pages[history.pageIndex];
     if (history.mode === 'add') {
-      const index = pageInfo.strokes.indexOf(history.path);
-      if (index >= 0) {
-        pageInfo.strokes.splice(index, 1);
-      }
+      this.pages.removeStroke(history.pageIndex, history.path as Stroke);
     } else if (history.mode === 'erase') {
-      pageInfo.strokes.push(history.path);
+      this.pages.addStroke(history.pageIndex, history.path as Stroke);
     }
 
     this.redoHistory.push(history);
@@ -682,14 +676,10 @@ struct PDFView {
       this.gotoPage(history.pageIndex);
     }
 
-    const pageInfo = this.pages[history.pageIndex];
     if (history.mode === 'add') {
-      pageInfo.strokes.push(history.path);
+      this.pages.addStroke(history.pageIndex, history.path as Stroke);
     } else if (history.mode === 'erase') {
-      const index = pageInfo.strokes.indexOf(history.path);
-      if (index >= 0) {
-        pageInfo.strokes.splice(index, 1);
-      }
+      this.pages.removeStroke(history.pageIndex, history.path as Stroke);
     }
 
     this.undoHistory.push(history);
@@ -724,20 +714,18 @@ struct PDFView {
     }
 
     const affectedPage = new HashMap<number, pdfService.PdfAnnotation[]>();
-    for (const pageInfo of this.pages) {
-      if (pageInfo.strokes.length === 0) {
+
+    for (let pageIndex = 0; pageIndex < this.pages.totalCount(); pageIndex++) {
+      if(this.pages.getPageStrokesCount(pageIndex) == 0) {
         continue;
       }
-      const pageIndex = pageInfo.pageIndex;
-      affectedPage.set(pageIndex, []);
-      const pdfPage = pageInfo.pdfPage;
-      const pdfPageSize = Vec2(pdfPage.getWidth(), pdfPage.getHeight());
-
+      const pdfPageSize = this.pages.getPageRawSize(pageIndex);
       const uiContext = this.getUIContext();
       const canvasSizePx = mul(pdfPageSize, CanvasOverSampling);
       const canvasSizeVp = pxToVp(canvasSizePx, uiContext);
 
-      for (const stroke of pageInfo.strokes) {
+      const annotationsToAdd: pdfService.PolylineAnnotationInfo[] = [];
+      for (const stroke of this.pages.iteratePageStrokes(pageIndex)) {
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
           const transformedPoint = Vec2(
@@ -754,9 +742,10 @@ struct PDFView {
         annotationInfo.lineColor = 3547621;
         annotationInfo.uniqueId = generateGUID();
         annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
-        const annotation = pdfPage.addAnnotation(annotationInfo);
-        affectedPage.get(pageIndex).push(annotation);
+        annotationsToAdd.push(annotationInfo);
       }
+      const annotations = this.pages.addPdfAnnotations(pageIndex, annotationsToAdd);
+      affectedPage.set(pageIndex, annotations);
     }
 
     // Clean up any existing temporary file before saving
@@ -773,11 +762,8 @@ struct PDFView {
     if (!success) {
       hilog.error(0, 'PDFView', `保存 PDF 文件到临时路径时出错`);
       for (const pageIndex of affectedPage.keys()) {
-        const pdfPage = this.pages[pageIndex];
         const annotations = affectedPage.get(pageIndex);
-        for (const annotation of annotations) {
-          pdfPage.pdfPage.removeAnnotation(annotation);
-        }
+        this.pages.removePdfAnnotations(pageIndex, annotations);
       }
       return;
     }
@@ -824,9 +810,7 @@ struct PDFView {
       return;
     }
 
-    for (const pageInfo of this.pages) {
-      pageInfo.strokes = [];
-    }
+    this.pages.clearAllStrokes();
     clearStack(this.undoHistory);
     clearStack(this.redoHistory);
     this.undoHistoryCount = 0;
@@ -838,11 +822,8 @@ struct PDFView {
 
   async revertChanges(affectedPage: HashMap<number, pdfService.PdfAnnotation[]>): Promise<void> {
     for (const pageIndex of affectedPage.keys()) {
-      const pageInfo = this.pages[pageIndex];
       const annotations = affectedPage.get(pageIndex);
-      for (const annotation of annotations) {
-        pageInfo.pdfPage.removeAnnotation(annotation);
-      }
+      this.pages.removePdfAnnotations(pageIndex, annotations);
     }
     const success = this.document.saveDocument(this.saveTempPath);
     if (success) {
@@ -867,7 +848,7 @@ struct PDFView {
     }
 
     for (const pageIndex of affectedPageIndices) {
-      this.pages[pageIndex].InvalidateCaches();
+      this.pages.invalidateCaches(pageIndex);
     }
 
     const currentPageAffected = this.displayedPageIndices.some(idx =>
@@ -875,8 +856,7 @@ struct PDFView {
     );
 
     for (const pageIndex of affectedPageIndices) {
-      const pageInfo = this.pages[pageIndex];
-      pageInfo.ensureCached(this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.HIGH);
+      this.pages.ensureCached(pageIndex, this.sandBoxPath, MIN_RENDER_SCALE, taskpool.Priority.HIGH);
     }
 
     if (currentPageAffected) {
@@ -934,11 +914,11 @@ struct PDFView {
   }
 
   getCanvasSize(pageIndex: number): Vector2 {
-    if (pageIndex >= this.pages.length) {
+    if (pageIndex >= this.pages.totalCount()) {
       return Vec2(0, 0);
     }
-    const pageInfo = this.pages[pageIndex];
-    return Vec2(pageInfo.pdfPage.getWidth() * CanvasOverSampling, pageInfo.pdfPage.getHeight() * CanvasOverSampling);
+    const pageRawSize = this.pages.getPageRawSize(pageIndex);
+    return mul(pageRawSize, CanvasOverSampling);
   }
 
   getCanvasScale(viewIndex: number): ScaleOptions {
@@ -987,15 +967,13 @@ struct PDFView {
       return;
     }
 
-    const pageInfo = this.pages[pageIndex];
-
     // 保护：忽略双指手势激活期间或结束后不久的触摸事件
     // 这防止了在捏合开始时（第二根手指触碰前）和结束时（抬起一根手指后）的意外绘制/擦除
     const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
     if (this.isDualFingerActive || timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
       // 如果我们在绘制中，重置活动绘制状态
       if (this.activeDrawPath.points.length > 0) {
-        this.activeDrawPath = { path: new Path2D(), points: [] };
+        this.activeDrawPath = NewStroke();
         drawCtx.reset();
       }
       // 如果在擦除模式中，清除待擦除的路径
@@ -1032,7 +1010,7 @@ struct PDFView {
 
         const minPathLength = 2 * CanvasOverSampling;
         if (pathLength >= minPathLength) {
-          pageInfo.strokes.push(this.activeDrawPath);
+          this.pages.addStroke(pageIndex, this.activeDrawPath);
           this.appendUndoHistory({
             path: this.activeDrawPath,
             mode: 'add',
@@ -1041,11 +1019,11 @@ struct PDFView {
           this.updateUnsavedStrokesFlag();
           this.loadPageStrokes(targetCtx, pageIndex);
         }
-        this.activeDrawPath = { path: new Path2D(), points: [] };
+        this.activeDrawPath = NewStroke();
         drawCtx.reset();
       }
     } else if (this.annotateMode === 'erase') {
-      if (pageInfo.strokes.length === 0) {
+      if (this.pages.getPageStrokesCount(pageIndex) === 0) {
         return;
       }
 
@@ -1056,7 +1034,7 @@ struct PDFView {
       }
 
       if (event.type === TouchType.Down || event.type === TouchType.Move) {
-        for (const stroke of pageInfo.strokes) {
+        for (const stroke of this.pages.iteratePageStrokes(pageIndex)) {
           if (this.pathsToErase.has(stroke)) {
             continue;
           }
@@ -1073,14 +1051,14 @@ struct PDFView {
 
         targetCtx.reset();
         this.applyStrokeStyle(targetCtx);
-        for (const stroke of pageInfo.strokes) {
+        for (const stroke of this.pages.iteratePageStrokes(pageIndex)) {
           if (!this.pathsToErase.has(stroke)) {
-            targetCtx.stroke(stroke.path);
+            stroke.stroke(targetCtx);
           }
         }
       } else if (event.type === TouchType.Up) {
         if (this.pathsToErase.size > 0) {
-          pageInfo.strokes = pageInfo.strokes.filter(stroke => !this.pathsToErase.has(stroke));
+          this.pages.removeStrokeWhere(pageIndex, stroke => this.pathsToErase.has(stroke));
 
           this.pathsToErase.forEach(erasedPath => {
             this.appendUndoHistory({
@@ -1144,7 +1122,7 @@ struct PDFView {
 
       // 立即中断并清除任何进行中的绘制/擦除操作
       if (this.activeDrawPath.points.length > 0) {
-        this.activeDrawPath = { path: new Path2D(), points: [] };
+        this.activeDrawPath = NewStroke();
         this.view1DrawCtx.reset();
         this.view2DrawCtx.reset();
         this.view3DrawCtx.reset();
@@ -1271,7 +1249,6 @@ struct PDFView {
       return;
     }
 
-    const pageInfo = this.pages[pageIndex];
     const mousePoint = Vec2(event.x, event.y);
 
     if (this.annotateMode === 'draw') {
@@ -1298,7 +1275,7 @@ struct PDFView {
 
         const minPathLength = 2 * CanvasOverSampling;
         if (pathLength >= minPathLength) {
-          pageInfo.strokes.push(this.activeDrawPath);
+          this.pages.addStroke(pageIndex, this.activeDrawPath);
           this.appendUndoHistory({
             path: this.activeDrawPath,
             mode: 'add',
@@ -1307,11 +1284,11 @@ struct PDFView {
           this.updateUnsavedStrokesFlag();
           this.loadPageStrokes(targetCtx, pageIndex);
         }
-        this.activeDrawPath = { path: new Path2D(), points: [] };
+        this.activeDrawPath = NewStroke();
         drawCtx.reset();
       }
     } else if (this.annotateMode === 'erase') {
-      if (pageInfo.strokes.length === 0) {
+      if (this.pages.getPageStrokesCount(pageIndex) == 0) {
         return;
       }
 
@@ -1322,7 +1299,7 @@ struct PDFView {
       }
 
       if (event.action === MouseAction.Press || (event.action === MouseAction.Move && this.activeMouseButton === 1)) {
-        for (const stroke of pageInfo.strokes) {
+        for (const stroke of this.pages.iteratePageStrokes(pageIndex)) {
           if (this.pathsToErase.has(stroke)) {
             continue;
           }
@@ -1339,15 +1316,14 @@ struct PDFView {
 
         targetCtx.reset();
         this.applyStrokeStyle(targetCtx);
-        for (const stroke of pageInfo.strokes) {
+        for (const stroke of this.pages.iteratePageStrokes(pageIndex)) {
           if (!this.pathsToErase.has(stroke)) {
-            targetCtx.stroke(stroke.path);
+            stroke.stroke(targetCtx);
           }
         }
       } else if (event.action === MouseAction.Release) {
         if (this.pathsToErase.size > 0) {
-          pageInfo.strokes = pageInfo.strokes.filter(stroke => !this.pathsToErase.has(stroke));
-
+          this.pages.removeStrokeWhere(pageIndex, stroke => this.pathsToErase.has(stroke));
           this.pathsToErase.forEach(erasedPath => {
             this.appendUndoHistory({
               path: erasedPath,
