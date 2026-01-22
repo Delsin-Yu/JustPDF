@@ -96,7 +96,8 @@ struct PDFView {
   });
   pageManagerDialogController: CustomDialogController = new CustomDialogController({
     builder: PageManagerDialogBuilder({
-      pageGroups: this.pageGroups
+      pageGroups: this.pageGroups,
+      onPageSelected: page => this.gotoPage(page.globalPageIndex!)
     }),
     width: '80%',
     height: '90%',
