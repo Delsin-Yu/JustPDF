@@ -2,6 +2,7 @@ import { pdfService } from '@kit.PDFKit';
 import { mul, Vec2, Vector2 } from '../components/Numbers';
 import { taskpool } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { image } from '@kit.ImageKit';
 
 export interface ReadonlyStroke {
   readonly points: readonly Vector2[];
@@ -41,14 +42,16 @@ export interface PageCache {
 }
 
 @Concurrent
-function cachePage(sandboxPath: string, pageIndex: number, renderScale: number = 2): PageCache {
+function cachePage(documentPath: string, documentIndex: number, renderScale: number = 2): PageCache {
+
   const document = new pdfService.PdfDocument();
-  const result = document.loadDocument(sandboxPath);
+  const result = document.loadDocument(documentPath);
   if (result != pdfService.ParseResult.PARSE_SUCCESS) {
     throw new Error(`加载文档失败: ${result}`);
   }
 
-  const page = document.getPage(pageIndex);
+  const page = document.getPage(documentIndex);
+
   const baseSize = Vec2(page.getWidth(), page.getHeight());
   const renderSize = mul(baseSize, renderScale);
   const matrix = new pdfService.PdfMatrix();
@@ -72,19 +75,60 @@ function cachePage(sandboxPath: string, pageIndex: number, renderScale: number =
 }
 
 export interface ReadonlyPageInfo {
-
+  readonly globalPageIndex: number | undefined;
+  readonly localPageIndex: number;
+  readonly pdfPage: pdfService.PdfPage;
+  readonly strokes: readonly ReadonlyStroke[];
+  readonly pageThumbnail: image.PixelMap | undefined;
+  requestPageThumbnail(preferredSize: Vector2): void;
 }
 
+export const MIN_RENDER_SCALE: number = 4;
+
+@ObservedV2
 export class PageInfo implements ReadonlyPageInfo {
-  public pageIndex: number;
+  public globalPageIndex: number | undefined;
+  public localPageIndex: number;
   public pdfPage: pdfService.PdfPage;
   public strokes: Stroke[] = [];
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, Promise<PageCache>> = new Map();
+  private pagePath: string;
+  @Trace public pageThumbnail: image.PixelMap | undefined = undefined;
+  private pageThumbnailTask: Promise<void> | undefined = undefined;
+  public associatedSource: PageInfoDataSource | undefined = undefined;
 
-  constructor(pageIndex: number, pdfPage: pdfService.PdfPage) {
-    this.pageIndex = pageIndex;
+  constructor(localPageIndex: number, pdfPage: pdfService.PdfPage, pagePath: string) {
+    this.localPageIndex = localPageIndex;
     this.pdfPage = pdfPage;
+    this.pagePath = pagePath;
+  }
+
+  public requestPageThumbnail(preferredSize: Vector2): void {
+    hilog.warn(0, 'PDFView', `请求页面 ${this.localPageIndex} 缩略图，首选大小: ${preferredSize.x}x${preferredSize.y}`);
+
+    if (this.pageThumbnail) return;
+    if (this.pageThumbnailTask) return;
+
+    const pageSize = Vec2(this.pdfPage.getWidth(), this.pdfPage.getHeight());
+    const scaleX = preferredSize.x / pageSize.x;
+    const scaleY = preferredSize.y / pageSize.y;
+    const scale = Math.min(scaleX, scaleY);
+    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale);
+    hilog.info(0, 'PDFView', `开始生成页面 ${this.localPageIndex} 缩略图，缩放比例: ${scale}`);
+    this.pageThumbnailTask = taskpool.execute(task, taskpool.Priority.LOW)
+      .then(result => {
+        const pageCache = result as PageCache;
+        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已生成 ${scale.toFixed(2)}`);
+        this.pageThumbnail = pageCache.pixelMap;
+        if (!this.associatedSource || !this.globalPageIndex) return;
+        this.associatedSource.markPageChanged(this.globalPageIndex);
+      })
+      .catch((error: Error) => {
+        hilog.error(0, 'PDFView', `生成页面 ${this.localPageIndex} 缩略图失败: ${error.message}`);
+        throw error;
+      });
+    return;
   }
 
   /**
@@ -96,7 +140,6 @@ export class PageInfo implements ReadonlyPageInfo {
    * @returns Promise that resolves when caching is complete, or undefined if already cached/pending
    */
   public ensureCached(
-    sandboxPath: string,
     renderScale: number,
     priority: taskpool.Priority
   ): Promise<PageCache> | undefined {
@@ -105,17 +148,18 @@ export class PageInfo implements ReadonlyPageInfo {
       return undefined;
     }
 
-    const task = new taskpool.Task(cachePage, sandboxPath, this.pageIndex, renderScale);
+    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale);
     const promise = taskpool.execute(task, priority)
-      .then(pageCache => {
+      .then(result => {
+        const pageCache = result as PageCache;
         this.caches.set(renderScale, pageCache as PageCache);
         this.pendingTasks.delete(renderScale);
-        hilog.info(0, 'PDFView', `页面 ${this.pageIndex} 已在缩放 ${renderScale} 下缓存`);
+        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache as PageCache;
       })
       .catch((error: Error) => {
         this.pendingTasks.delete(renderScale);
-        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${this.pageIndex} 失败: ${error.message}`);
+        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${this.localPageIndex} 失败: ${error.message}`);
         throw error;
       });
 
@@ -149,9 +193,7 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 
   public async getPageCacheAsync(
-    sandboxPath: string,
     renderScale: number,
-    minRenderScale: number,
     onHighResReady?: (cache: PageCache) => void
   ): Promise<PageCache> {
     // Check if already cached
@@ -170,22 +212,23 @@ export class PageInfo implements ReadonlyPageInfo {
     const fallbackCache = this.getLowestRenderScaleCache();
 
     // Determine priority based on render scale
-    const priority = renderScale === minRenderScale
+    const priority = renderScale === MIN_RENDER_SCALE
       ? taskpool.Priority.HIGH
       : taskpool.Priority.MEDIUM;
 
     // Create and execute the caching task
-    const task = new taskpool.Task(cachePage, sandboxPath, this.pageIndex, renderScale);
+    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale);
     const promise = taskpool.execute(task, priority)
-      .then(pageCache => {
-        this.caches.set(renderScale, pageCache as PageCache);
+      .then(result => {
+        let pageCache: PageCache = result as PageCache;
+        this.caches.set(renderScale, pageCache);
         this.pendingTasks.delete(renderScale);
-        hilog.info(0, 'PDFView', `页面 ${this.pageIndex} 已在缩放 ${renderScale} 下缓存`);
+        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache;
       })
       .catch((error: Error) => {
         this.pendingTasks.delete(renderScale);
-        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${this.pageIndex} 失败: ${error.message}`);
+        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${this.localPageIndex} 失败: ${error.message}`);
         throw error;
       });
 
@@ -211,16 +254,75 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 }
 
+export interface ReadonlyPageGroup extends IDataSource {
+  readonly groupName: string;
+  readonly pages: readonly ReadonlyPageInfo[];
+}
+
+@ObservedV2
+export class PageGroup implements ReadonlyPageGroup {
+  public groupName: string;
+  public pages: PageInfo[];
+  private listeners: DataChangeListener[] = [];
+
+  constructor(groupName: string, pages: PageInfo[]) {
+    this.groupName = groupName;
+    this.pages = pages;
+  }
+
+  totalCount(): number {
+    return this.pages.length;
+  }
+
+  getData(index: number): PageInfo {
+    return this.pages[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    this.listeners.push(listener);
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const idx = this.listeners.indexOf(listener);
+    if (idx >= 0) {
+      this.listeners.splice(idx, 1);
+    }
+  }
+
+  public markAllPagesChanged(): void {
+    // hilog.error(0, "PDFView", `标记 PageGroup ${this.groupName} 所有页面为已更改 ${this.listeners.length}`);
+    for (let i = 0; i < this.pages.length; i++) {
+      this.listeners.forEach(listener => listener.onDataChange(i));
+    }
+  }
+
+  public markChanged(pageInfo: ReadonlyPageInfo): void {
+    const pageIndex = this.pages.indexOf(pageInfo as PageInfo);
+    // hilog.error(0, "PDFView", `标记 PageGroup ${this.groupName} 页面 ${pageIndex} 为已更改 ${this.listeners.length}`);
+    if (pageIndex >= 0) {
+      this.listeners.forEach(listener => listener.onDataChange(pageIndex));
+    }
+  }
+}
+
 export class PageInfoDataSource implements IDataSource {
-  private list: PageInfo[] = [];
+  private pageGroups: PageGroup[] = [];
   private listeners: DataChangeListener[] = [];
 
   public totalCount(): number {
-    return this.list.length;
+    return this.pageGroups.length;
   }
 
-  public getData(index: number): ReadonlyPageInfo {
-    return this.list[index];
+  public totalPageCount(): number {
+    let count = 0;
+    for (const group of this.pageGroups) {
+      count += group.pages.length;
+    }
+    return count;
+  }
+
+  public getData(index: number): PageGroup {
+    return this.pageGroups[index];
   }
 
   public registerDataChangeListener(listener: DataChangeListener): void {
@@ -234,115 +336,180 @@ export class PageInfoDataSource implements IDataSource {
     }
   }
 
-  public push(pageInfo: PageInfo): void {
-    this.list.push(pageInfo);
-    this.listeners.forEach(listener => listener.onDataChange(this.list.length - 1));
+  public push(pageGroup: PageGroup): void {
+    this.pageGroups.push(pageGroup);
+    // Calculate the starting global page index for this new group
+    let pageCounter = 0;
+    for (let i = 0; i < this.pageGroups.length - 1; i++) {
+      pageCounter += this.pageGroups[i].pages.length;
+    }
+    for (const pageInfo of pageGroup.pages) {
+      pageInfo.associatedSource = this;
+      pageInfo.ensureCached(MIN_RENDER_SCALE, taskpool.Priority.LOW);
+      pageInfo.globalPageIndex = pageCounter;
+      pageCounter++;
+    }
+    this.listeners.forEach(listener => listener.onDataAdd(this.pageGroups.length - 1));
   }
 
-  public ensureCached(index: number, sandboxPath: string,
+  private getPageInfo(pageIndex: number): [PageGroup, PageInfo, number] {
+    let pageCounter = 0;
+    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
+      const group = this.pageGroups[groupIndex];
+      if (pageIndex < pageCounter + group.pages.length) {
+        return [group, group.pages[pageIndex - pageCounter] as PageInfo, groupIndex];
+      }
+      pageCounter += group.pages.length;
+    }
+    throw new Error(`PageInfo not found for index ${pageIndex}`);
+  }
+
+  public ensureCached(
+    index: number,
     renderScale: number,
     priority: taskpool.Priority): Promise<PageCache> | undefined {
-    const pageInfo = this.list[index];
-    return pageInfo.ensureCached(sandboxPath, renderScale, priority);
+    const result = this.getPageInfo(index);
+    return result[1].ensureCached(renderScale, priority);
   }
 
   public async getPageCacheAsync(
     index: number,
-    sandboxPath: string,
     renderScale: number,
-    minRenderScale: number,
     onHighResReady?: (cache: PageCache) => void
   ): Promise<PageCache> {
-    const pageInfo = this.list[index];
-    return await pageInfo.getPageCacheAsync(
-      sandboxPath,
+    const result = this.getPageInfo(index);
+    return await result[1].getPageCacheAsync(
       renderScale,
-      minRenderScale,
       onHighResReady
     );
   }
 
   public getPageStrokesCount(index: number): number {
-    const pageInfo = this.list[index];
-    return pageInfo.strokesCount;
+    const result = this.getPageInfo(index);
+    return result[1].strokesCount;
   }
 
   public getPageRawSize(index: number): Vector2 {
-    const pageInfo = this.list[index];
-    return Vec2(pageInfo.pdfPage.getWidth(), pageInfo.pdfPage.getHeight());
+    const result = this.getPageInfo(index);
+    return Vec2(result[1].pdfPage.getWidth(), result[1].pdfPage.getHeight());
   }
 
   public iteratePageStrokes(index: number): Iterable<ReadonlyStroke> {
-    const pageInfo = this.list[index];
-    return pageInfo.strokes;
+    const result = this.getPageInfo(index);
+    return result[1].strokes;
   }
 
   public addPdfAnnotations(index: number, annotationInfo: pdfService.PdfAnnotationInfo[]): pdfService.PdfAnnotation[] {
-    const pageInfo = this.list[index];
+    const result = this.getPageInfo(index);
     const annotations: pdfService.PdfAnnotation[] = [];
     for (const info of annotationInfo) {
-      const annotation = pageInfo.pdfPage.addAnnotation(info);
+      const annotation = result[1].pdfPage.addAnnotation(info);
       annotations.push(annotation);
     }
-    this.markChanged(index);
+    this.notifyPageChanged(result[0], result[1], result[2]);
     return annotations;
   }
 
   public removePdfAnnotations(index: number, annotations: pdfService.PdfAnnotation[]): void {
-    const pageInfo = this.list[index];
+    const result = this.getPageInfo(index);
     for (const annotation of annotations) {
-      pageInfo.pdfPage.removeAnnotation(annotation);
+      result[1].pdfPage.removeAnnotation(annotation);
     }
-    this.markChanged(index);
+    this.notifyPageChanged(result[0], result[1], result[2]);
   }
 
   public stokePage(index: number, renderingContext: CanvasRenderingContext2D) {
-    const pageInfo = this.list[index];
-    pageInfo.stroke(renderingContext);
+    const result = this.getPageInfo(index);
+    result[1].stroke(renderingContext);
   }
 
   public addStroke(index: number, pathWithPoints: Stroke): void {
-    const pageInfo = this.list[index];
-    pageInfo.strokes.push(pathWithPoints);
-    this.markChanged(index);
+    const result = this.getPageInfo(index);
+    result[1].strokes.push(pathWithPoints);
+    this.notifyPageChanged(result[0], result[1], result[2]);
   }
 
   public removeStroke(index: number, pathWithPoints: Stroke): void {
-    const pageInfo = this.list[index];
-    const idx = pageInfo.strokes.indexOf(pathWithPoints);
-    if (idx >= 0) {
-      pageInfo.strokes.splice(idx, 1);
-      this.markChanged(index);
-    }
+    const result = this.getPageInfo(index);
+    const idx = result[1].strokes.indexOf(pathWithPoints);
+    if (idx < 0) return;
+    result[1].strokes.splice(idx, 1);
+    this.notifyPageChanged(result[0], result[1], result[2]);
   }
 
-  public removeStrokeWhere(index: number, predicate: (stroke: ReadonlyStroke) => boolean): void {
-    const pageInfo = this.list[index];
-    const originalLength = pageInfo.strokes.length;
-    pageInfo.strokes = pageInfo.strokes.filter(stroke => !predicate(stroke));
-    if (pageInfo.strokes.length !== originalLength) {
-      this.markChanged(index);
-    }
+  public removeStrokeWhere(pageIndex: number, predicate: (stroke: ReadonlyStroke) => boolean): void {
+    const result = this.getPageInfo(pageIndex);
+    const originalLength = result[1].strokes.length;
+    result[1].strokes = result[1].strokes.filter(stroke => !predicate(stroke));
+    if (result[1].strokes.length == originalLength) return;
+    this.notifyPageChanged(result[0], result[1], result[2]);
   }
 
   public clearAllStrokes(): void {
-    for (let i = 0; i < this.list.length; i++) {
-      const pageInfo = this.list[i];
-      pageInfo.strokes = [];
-      this.markChanged(i);
+    // Track which groups actually had strokes cleared
+    const changedGroupIndices: number[] = [];
+    
+    for (let pageGroupIndex = 0; pageGroupIndex < this.pageGroups.length; pageGroupIndex++) {
+      const pageGroup = this.pageGroups[pageGroupIndex];
+      let groupHadStrokes = false;
+      
+      for (const page of pageGroup.pages) {
+        if (page.strokes.length > 0) {
+          page.strokes = [];
+          groupHadStrokes = true;
+        }
+      }
+      
+      if (groupHadStrokes) {
+        changedGroupIndices.push(pageGroupIndex);
+      }
+    }
+    
+    // Only notify for groups that actually changed
+    for (const groupIndex of changedGroupIndices) {
+      this.pageGroups[groupIndex].markAllPagesChanged();
+      this.notifyPageGroupChanged(groupIndex);
     }
   }
 
-  public invalidateCaches(index: number): void {
-    const pageInfo = this.list[index];
-    pageInfo.invalidateCaches();
+  public invalidateCaches(pageIndex: number): void {
+    const result = this.getPageInfo(pageIndex);
+    result[1].invalidateCaches();
   }
 
-  private markChanged(index: number): void {
-    this.listeners.forEach(listener => listener.onDataChange(index));
+  private notifyPageGroupChanged(groupIndex: number): void {
+    // hilog.error(0, "PDFView", `通知 PageGroup ${groupIndex} 数据变更 ${this.listeners.length}`);
+    this.listeners.forEach(listener => listener.onDataChange(groupIndex));
   }
 
-  public iteratePages(): Iterable<ReadonlyPageInfo> {
-    return this.list;
+  /**
+   * Notifies both PageGroup and PageInfoDataSource listeners about a page change.
+   * This is the preferred method for notifying changes to a specific page.
+   * @param group The PageGroup containing the page
+   * @param pageInfo The PageInfo that changed
+   * @param groupIndex The index of the group in pageGroups
+   */
+  private notifyPageChanged(group: PageGroup, pageInfo: PageInfo, groupIndex: number): void {
+    group.markChanged(pageInfo);
+    this.notifyPageGroupChanged(groupIndex);
+  }
+
+  /**
+   * Marks the page at the given global page index as changed.
+   * This is used by PageInfo when it needs to notify the data source of changes.
+   * @param globalPageIndex The global page index
+   */
+  public markPageChanged(globalPageIndex: number): void {
+    let pageCounter = 0;
+    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
+      const group = this.pageGroups[groupIndex];
+      if (globalPageIndex < pageCounter + group.pages.length) {
+        const localPageIndex = globalPageIndex - pageCounter;
+        const pageInfo = group.pages[localPageIndex];
+        this.notifyPageChanged(group, pageInfo, groupIndex);
+        return;
+      }
+      pageCounter += group.pages.length;
+    }
   }
 }

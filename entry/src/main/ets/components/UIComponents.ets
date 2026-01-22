@@ -139,6 +139,13 @@ export struct StyleButton {
   }
 }
 
+export const StyleBadgeStyle: BadgeStyle = {
+  badgeColor: BaseColor,
+  borderColor: Color.Transparent,
+  fontSize: HalfButtonFontSize,
+  fontWeight: FontWeight.Bold,
+};
+
 @ComponentV2
 export struct StyleNumBadgeButton {
   @Param text: string = '';
@@ -156,11 +163,7 @@ export struct StyleNumBadgeButton {
       count: this.count,
       maxCount: this.maxCount,
       position: this.badgePosition,
-      style: {
-        badgeColor: BaseColor,
-        borderColor: Color.Transparent,
-        fontSize: HalfButtonFontSize
-      }
+      style: StyleBadgeStyle
     }) {
       StyleButton({
         text: this.text,
@@ -191,10 +194,10 @@ export struct StyleStrBadgeButton {
       value: this.badgeText,
       position: this.badgePosition,
       style: {
-        badgeColor: BaseColor,
-        borderColor: Color.Transparent,
-        fontSize: HalfButtonFontSize,
-        fontWeight: FontWeight.Bold,
+        badgeColor: StyleBadgeStyle.badgeColor,
+        borderColor: StyleBadgeStyle.borderColor,
+        fontSize: StyleBadgeStyle.fontSize,
+        fontWeight: StyleBadgeStyle.fontWeight,
         badgeSize: this.badgeVisibility ? null : 0
       }
     }) {
