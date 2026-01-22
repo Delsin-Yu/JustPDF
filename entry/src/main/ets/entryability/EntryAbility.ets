@@ -8,12 +8,13 @@ export default class EntryAbility extends UIAbility {
   private preferences: preferences.Preferences | undefined;
   private window: window.Window | undefined;
 
-  onCreate(want: Want): void {
+  onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     } catch (error) {
     }
     hilog.info(0, 'PDFView', '%{public}s', 'Ability onCreate');
+    hilog.info(0, 'PDFView', `Exit Reason: ${launchParam.lastExitReason}`);
 
     let uri = want.uri;
     if (uri == null || uri == undefined) {
