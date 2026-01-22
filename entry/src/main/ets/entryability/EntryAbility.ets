@@ -1,4 +1,4 @@
-import { ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
@@ -75,6 +75,10 @@ export default class EntryAbility extends UIAbility {
 
       hilog.info(0, 'PDFView', 'Succeeded in loading the content.');
     });
+  }
+
+  onMemoryLevel(level: AbilityConstant.MemoryLevel): void {
+    hilog.fatal(0, 'PDFView', 'Ability onMemoryLevel, level: %{public}d', level);
   }
 
   restoreWindowState(): void {

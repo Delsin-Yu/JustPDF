@@ -85,6 +85,16 @@ export interface ReadonlyPageInfo {
 
 export const MIN_RENDER_SCALE: number = 4;
 
+interface PendingCacheTask {
+  task: taskpool.Task;
+  promise: Promise<PageCache>;
+}
+
+interface PendingThumbnailTask {
+  task: taskpool.Task;
+  promise: Promise<void>;
+}
+
 @ObservedV2
 export class PageInfo implements ReadonlyPageInfo {
   public globalPageIndex: number | undefined;
@@ -92,10 +102,10 @@ export class PageInfo implements ReadonlyPageInfo {
   public pdfPage: pdfService.PdfPage;
   public strokes: Stroke[] = [];
   private caches: Map<number, PageCache> = new Map();
-  private pendingTasks: Map<number, Promise<PageCache>> = new Map();
+  private pendingTasks: Map<number, PendingCacheTask> = new Map();
   private pagePath: string;
   @Trace public pageThumbnail: image.PixelMap | undefined = undefined;
-  private pageThumbnailTask: Promise<void> | undefined = undefined;
+  private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
   public associatedSource: PageInfoDataSource | undefined = undefined;
 
   constructor(localPageIndex: number, pdfPage: pdfService.PdfPage, pagePath: string) {
@@ -116,18 +126,21 @@ export class PageInfo implements ReadonlyPageInfo {
     const scale = Math.min(scaleX, scaleY);
     const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale);
     hilog.info(0, 'PDFView', `开始生成页面 ${this.localPageIndex} 缩略图，缩放比例: ${scale}`);
-    this.pageThumbnailTask = taskpool.execute(task, taskpool.Priority.LOW)
+    const promise = taskpool.execute(task, taskpool.Priority.LOW)
       .then(result => {
         const pageCache = result as PageCache;
         hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已生成 ${scale.toFixed(2)}`);
         this.pageThumbnail = pageCache.pixelMap;
+        this.pageThumbnailTask = undefined;
         if (!this.associatedSource || !this.globalPageIndex) return;
         this.associatedSource.markPageChanged(this.globalPageIndex);
       })
       .catch((error: Error) => {
+        this.pageThumbnailTask = undefined;
         hilog.error(0, 'PDFView', `生成页面 ${this.localPageIndex} 缩略图失败: ${error.message}`);
         throw error;
       });
+    this.pageThumbnailTask = { task, promise };
     return;
   }
 
@@ -163,8 +176,72 @@ export class PageInfo implements ReadonlyPageInfo {
         throw error;
       });
 
-    this.pendingTasks.set(renderScale, promise as Promise<PageCache>);
+    this.pendingTasks.set(renderScale, { task, promise });
     return promise as Promise<PageCache>;
+  }
+
+  /**
+   * Cancels all pending cache tasks.
+   */
+  public cancelPendingTasks(): void {
+    for (const pendingTask of this.pendingTasks.values()) {
+      try {
+        taskpool.cancel(pendingTask.task);
+      } catch (error) {
+        // Task may have already completed or been cancelled
+        hilog.debug(0, 'PDFView', `取消任务时出错: ${error}`);
+      }
+    }
+    this.pendingTasks.clear();
+  }
+
+  /**
+   * Evicts all viewer caches, releasing PixelMaps and cancelling pending tasks.
+   * Used to free memory for pages that are far from the current view.
+   */
+  public evictViewerCache(): void {
+    // Release all cached PixelMaps
+    for (const cache of this.caches.values()) {
+      try {
+        cache.pixelMap.release();
+      } catch (error) {
+        hilog.debug(0, 'PDFView', `释放 PixelMap 时出错: ${error}`);
+      }
+    }
+    this.caches.clear();
+    
+    // Cancel pending cache tasks
+    this.cancelPendingTasks();
+    
+    hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 查看器缓存已清除`);
+  }
+
+  /**
+   * Evicts the thumbnail, releasing the PixelMap and cancelling any pending thumbnail task.
+   * Used to free memory when the thumbnail scrolls out of view.
+   */
+  public evictThumbnail(): void {
+    // Cancel pending thumbnail task if any
+    if (this.pageThumbnailTask) {
+      try {
+        taskpool.cancel(this.pageThumbnailTask.task);
+      } catch (error) {
+        hilog.debug(0, 'PDFView', `取消缩略图任务时出错: ${error}`);
+      }
+      this.pageThumbnailTask = undefined;
+    }
+    
+    // Release the thumbnail PixelMap
+    if (this.pageThumbnail) {
+      try {
+        this.pageThumbnail.release();
+      } catch (error) {
+        hilog.debug(0, 'PDFView', `释放缩略图 PixelMap 时出错: ${error}`);
+      }
+      this.pageThumbnail = undefined;
+    }
+    
+    hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已清除`);
   }
 
   private getLowestRenderScaleCache(): PageCache | undefined {
@@ -205,7 +282,7 @@ export class PageInfo implements ReadonlyPageInfo {
     // Check if there's a pending task
     const pendingTask = this.pendingTasks.get(renderScale);
     if (pendingTask !== undefined) {
-      return await pendingTask;
+      return await pendingTask.promise;
     }
 
     // Get fallback cache (lowest render scale available)
@@ -232,7 +309,7 @@ export class PageInfo implements ReadonlyPageInfo {
         throw error;
       });
 
-    this.pendingTasks.set(renderScale, promise as Promise<PageCache>);
+    this.pendingTasks.set(renderScale, { task, promise });
 
     // If we have a fallback cache, return it immediately while high-res loads in background
     if (fallbackCache !== undefined) {
@@ -345,7 +422,7 @@ export class PageInfoDataSource implements IDataSource {
     }
     for (const pageInfo of pageGroup.pages) {
       pageInfo.associatedSource = this;
-      pageInfo.ensureCached(MIN_RENDER_SCALE, taskpool.Priority.LOW);
+      // Removed eager caching - pages will be cached on-demand via prefetchPagesAround()
       pageInfo.globalPageIndex = pageCounter;
       pageCounter++;
     }
@@ -370,6 +447,56 @@ export class PageInfoDataSource implements IDataSource {
     priority: taskpool.Priority): Promise<PageCache> | undefined {
     const result = this.getPageInfo(index);
     return result[1].ensureCached(renderScale, priority);
+  }
+
+  /**
+   * Prefetches pages around the center index and evicts caches for distant pages.
+   * @param centerIndex The current page index being viewed
+   * @param prefetchRange Number of pages to prefetch on each side (default: 3)
+   * @param evictionRange Pages beyond this range will have their viewer caches evicted (default: 5)
+   */
+  public prefetchPagesAround(
+    centerIndex: number,
+    prefetchRange: number = 3,
+    evictionRange: number = 5
+  ): void {
+    const totalPages = this.totalPageCount();
+    
+    // Prefetch pages within range
+    for (let offset = -prefetchRange; offset <= prefetchRange; offset++) {
+      const pageIndex = centerIndex + offset;
+      if (pageIndex < 0 || pageIndex >= totalPages) continue;
+      
+      // Determine priority: HIGH for center, MEDIUM for adjacent
+      const priority = offset === 0
+        ? taskpool.Priority.HIGH
+        : taskpool.Priority.MEDIUM;
+      
+      try {
+        const result = this.getPageInfo(pageIndex);
+        result[1].ensureCached(MIN_RENDER_SCALE, priority);
+      } catch (error) {
+        hilog.debug(0, 'PDFView', `预取页面 ${pageIndex} 时出错: ${error}`);
+      }
+    }
+    
+    // Evict viewer caches for pages outside eviction range
+    // Note: Thumbnails are managed separately via evictThumbnail() in PageManagerDialog
+    let pageCounter = 0;
+    for (const group of this.pageGroups) {
+      for (const pageInfo of group.pages) {
+        const globalIndex = pageCounter;
+        const distance = Math.abs(globalIndex - centerIndex);
+        
+        if (distance > evictionRange) {
+          pageInfo.evictViewerCache();
+        }
+        
+        pageCounter++;
+      }
+    }
+    
+    hilog.info(0, 'PDFView', `预取页面 ${centerIndex} 周围 ±${prefetchRange}，清除 ±${evictionRange} 外的缓存`);
   }
 
   public async getPageCacheAsync(

@@ -1,7 +1,37 @@
 import { Vec2, vpToPx } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageGroup, ReadonlyPageInfo } from './PageInfo';
 import { ContainerCfg, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing } from './UIComponents';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+
+
+@Reusable
+struct PageIcon {
+  @Require pageInfo: PageInfo;
+
+  aboutToAppear(): void {
+    this.pageInfo.requestPageThumbnail(vpToPx(Vec2(400, 400), this.getUIContext()));
+  }
+
+  aboutToReuse(params: Record<string, Object | null | undefined>): void {
+    this.pageInfo.requestPageThumbnail(vpToPx(Vec2(400, 400), this.getUIContext()));
+  }
+
+  aboutToRecycle(): void {
+    this.pageInfo.evictThumbnail();
+  }
+
+  aboutToDisappear(): void {
+    this.pageInfo.evictThumbnail();
+  }
+
+  build() {
+    Column(ContainerCfg) {
+      Image(this.pageInfo.pageThumbnail)
+        .borderRadius(10)
+        .draggable(false)
+    }.padding(ContainerPadding)
+  }
+}
+
 
 @CustomDialog
 export struct PageManagerDialogBuilder {
@@ -24,15 +54,7 @@ export struct PageManagerDialogBuilder {
         LazyForEach(this.pageGroups, (pageGroup: PageGroup) => {
           ListItemGroup({ header: this.GroupHeader(pageGroup.groupName) }) {
             LazyForEach(pageGroup, (pageInfo: PageInfo) => {
-              ListItem() {
-                Column(ContainerCfg) {
-                  Image(pageInfo.pageThumbnail)
-                    .borderRadius(10)
-                    .draggable(false)
-                }.padding(ContainerPadding)
-              }
-              .onAppear(() => pageInfo.requestPageThumbnail(vpToPx(Vec2(400, 400), this.getUIContext())))
-              .onDisAppear(() => hilog.info(0, "PDFView", `Page thumbnail disappeared: ${pageInfo.globalPageIndex}`))
+              PageIcon({pageInfo: pageInfo})
             })
           }
           .padding(ContainerWidePadding)

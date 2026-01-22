@@ -206,7 +206,6 @@ struct PDFView {
     // Go to last page (Ctrl+Down/Right/Space)
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
 
-
     this.gotoPage(0);
     this.startTransparencyTimeout();
   }
@@ -448,6 +447,9 @@ struct PDFView {
 
     // 计算要显示的页面索引
     this.displayedPageIndices = this.calculateDisplayIndices(targetIndex);
+
+    // Prefetch adjacent pages and evict distant page caches
+    this.pageGroups.prefetchPagesAround(targetIndex, 3, 5);
 
     // 加载并显示页面
     await this.loadAndDisplayPages(this.displayedPageIndices);
