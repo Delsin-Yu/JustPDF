@@ -639,4 +639,98 @@ export class PageInfoDataSource implements IDataSource {
       pageCounter += group.pages.length;
     }
   }
+
+  /**
+   * Moves a page from one global index to another.
+   * Removes the page from its source position and inserts it at the destination position.
+   * @param srcIndex The global index of the page to move
+   * @param dstIndex The global index where the page should be inserted
+   */
+  public movePage(srcIndex: number, dstIndex: number): void {
+    if (srcIndex === dstIndex) return;
+
+    const totalPages = this.totalPageCount();
+    if (srcIndex < 0 || srcIndex >= totalPages) {
+      throw new Error(`Source index ${srcIndex} out of bounds`);
+    }
+    if (dstIndex < 0 || dstIndex > totalPages) {
+      throw new Error(`Destination index ${dstIndex} out of bounds`);
+    }
+
+    // Find source page info
+    const pageInfoResult = this.getPageInfo(srcIndex);
+    const srcGroup = pageInfoResult[0];
+    const srcPageInfo = pageInfoResult[1];
+    const srcGroupIndex = pageInfoResult[2];
+
+    const srcLocalIndex = srcGroup.pages.indexOf(srcPageInfo);
+
+    // Remove from source group
+    srcGroup.pages.splice(srcLocalIndex, 1);
+
+    // Adjust destination index if source was before destination
+    let adjustedDstIndex = dstIndex;
+    if (srcIndex < dstIndex) {
+      adjustedDstIndex--;
+    }
+
+    // Find destination group and local index
+    let pageCounter = 0;
+    let dstGroup: PageGroup | undefined = undefined;
+    let dstGroupIndex = 0;
+    let dstLocalIndex = 0;
+
+    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
+      const group = this.pageGroups[groupIndex];
+      if (adjustedDstIndex <= pageCounter + group.pages.length) {
+        dstGroup = group;
+        dstGroupIndex = groupIndex;
+        dstLocalIndex = adjustedDstIndex - pageCounter;
+        break;
+      }
+      pageCounter += group.pages.length;
+    }
+
+    // If destination is at the very end, insert into the last group
+    if (!dstGroup && this.pageGroups.length > 0) {
+      dstGroupIndex = this.pageGroups.length - 1;
+      dstGroup = this.pageGroups[dstGroupIndex];
+      dstLocalIndex = dstGroup.pages.length;
+    }
+
+    if (!dstGroup) {
+      throw new Error(`Could not find destination group for index ${dstIndex}`);
+    }
+
+    // Insert into destination group
+    dstGroup.pages.splice(dstLocalIndex, 0, srcPageInfo);
+
+    // Update global page indices for all pages
+    this.recalculateGlobalIndices();
+
+    // Notify affected groups
+    const affectedGroupIndices = new Set<number>();
+    affectedGroupIndices.add(srcGroupIndex);
+    affectedGroupIndices.add(dstGroupIndex);
+
+    for (const groupIndex of affectedGroupIndices) {
+      this.pageGroups[groupIndex].markAllPagesChanged();
+      this.notifyPageGroupChanged(groupIndex);
+    }
+
+    hilog.info(0, 'PDFView', `页面从 ${srcIndex} 移动到 ${dstIndex}`);
+  }
+
+  /**
+   * Recalculates global page indices for all pages after a move operation.
+   */
+  private recalculateGlobalIndices(): void {
+    let pageCounter = 0;
+    for (const group of this.pageGroups) {
+      for (const pageInfo of group.pages) {
+        pageInfo.globalPageIndex = pageCounter;
+        pageCounter++;
+      }
+    }
+  }
 }
