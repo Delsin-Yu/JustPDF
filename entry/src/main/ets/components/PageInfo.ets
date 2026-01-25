@@ -1,6 +1,6 @@
 import { pdfService } from '@kit.PDFKit';
 import { mul, Vec2, Vector2 } from '../components/Numbers';
-import { taskpool } from '@kit.ArkTS';
+import { taskpool, util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 
@@ -97,6 +97,7 @@ interface PendingThumbnailTask {
 
 @ObservedV2
 export class PageInfo implements ReadonlyPageInfo {
+  public readonly pageId: string = util.generateRandomUUID(true);
   public globalPageIndex: number | undefined;
   public localPageIndex: number;
   public pdfPage: pdfService.PdfPage;
@@ -338,6 +339,7 @@ export interface ReadonlyPageGroup extends IDataSource {
 
 @ObservedV2
 export class PageGroup implements ReadonlyPageGroup {
+  public readonly groupId: string = util.generateRandomUUID(true);
   public groupName: string;
   public pages: PageInfo[];
   private listeners: DataChangeListener[] = [];
@@ -385,6 +387,7 @@ export class PageGroup implements ReadonlyPageGroup {
 export class PageInfoDataSource implements IDataSource {
   private pageGroups: PageGroup[] = [];
   private listeners: DataChangeListener[] = [];
+  public onPageReordered?: (oldIndex: number, newIndex: number) => void;
 
   public totalCount(): number {
     return this.pageGroups.length;
@@ -719,6 +722,11 @@ export class PageInfoDataSource implements IDataSource {
     }
 
     hilog.info(0, 'PDFView', `页面从 ${srcIndex} 移动到 ${dstIndex}`);
+
+    // Notify external listeners of the page reorder
+    if (this.onPageReordered) {
+      this.onPageReordered(srcIndex, dstIndex);
+    }
   }
 
   /**

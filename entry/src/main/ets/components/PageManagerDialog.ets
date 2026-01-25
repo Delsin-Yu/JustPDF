@@ -3,8 +3,8 @@ import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './Pag
 import { ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, TopLeft, TopRight, toVisibility } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 
-const arrowColor = '#ffb1b1b1';
-const hoverColor = '#ffffffff';
+const arrowColor = '#ffffffff';
+const hoverColor = '#a8000000';
 
 @Reusable
 struct PageIcon {
@@ -30,8 +30,31 @@ struct PageIcon {
 
   @State leftHoverVisible: boolean = false;
   @State rightHoverVisible: boolean = false;
-  @State midX: number = 0;
+  private area: Area | undefined = undefined;
+  private midX: number = 0;
   @State isDraggingSource: boolean = false;
+
+  getScale(): ScaleOptions {
+    if (!this.leftHoverVisible && !this.rightHoverVisible) {
+      return { x: 1, y: 1 };
+    }
+    return { x: 1.05, y: 1.05 };
+  }
+
+  @Builder
+  DragPreview(area: Area) {
+    Button({ type: ButtonType.Normal }) {
+      Image(this.pageInfo.pageThumbnail)
+        .borderRadius(10)
+        .draggable(false)
+        .margin(0)
+        .padding(ContainerPadding)
+    }
+    .backgroundColor("#25ffffff")
+    .borderRadius(10)
+    .size({width: area.width as number * 0.6666, height: area.height as number * 0.6666})
+  }
+
 
   build() {
     Button({ type: ButtonType.Normal }) {
@@ -49,20 +72,14 @@ struct PageIcon {
               .fontWeight(FontWeight.Bolder)
               .fontColor([arrowColor])
           }
+          .opacity(this.leftHoverVisible ? 1 : 0)
+          .animation({ duration: 250, curve: Curve.EaseOut })
           .alignItems(HorizontalAlign.Center)
           .justifyContent(FlexAlign.Center)
           .width('50%')
           .height('100%')
-          .linearGradient({
-            direction: GradientDirection.Left,
-            colors: [
-              [Color.Transparent, 0],
-              [hoverColor, 1]
-            ],
-            repeating: false
-          })
+          .backgroundColor(hoverColor)
           .alignRules(TopLeft)
-          .visibility(toVisibility(this.leftHoverVisible))
 
           Column() {
             SymbolGlyph($r('sys.symbol.chevron_right'))
@@ -70,20 +87,14 @@ struct PageIcon {
               .fontWeight(FontWeight.Bolder)
               .fontColor([arrowColor])
           }
+          .opacity(this.rightHoverVisible ? 1 : 0)
+          .animation({ duration: 250, curve: Curve.EaseOut })
           .alignItems(HorizontalAlign.Center)
           .justifyContent(FlexAlign.Center)
           .width('50%')
           .height('100%')
-          .linearGradient({
-            direction: GradientDirection.Right,
-            colors: [
-              [Color.Transparent, 0],
-              [hoverColor, 1]
-            ],
-            repeating: false
-          })
+          .backgroundColor(hoverColor)
           .alignRules(TopRight)
-          .visibility(toVisibility(this.rightHoverVisible))
         }
         .width(LayoutPolicy.matchParent)
         .height(LayoutPolicy.matchParent)
@@ -91,6 +102,9 @@ struct PageIcon {
       .clip(true)
       .borderRadius(10)
     }
+    .scale(this.getScale())
+    .opacity(this.isDraggingSource ? 0.5 : 1)
+    .animation({ duration: 250, curve: Curve.EaseOut })
     .backgroundColor("#25ffffff")
     .borderRadius(10)
     .onClick(() => this.clicked())
@@ -103,6 +117,7 @@ struct PageIcon {
         )
       );
       event.setData(data);
+      return this.DragPreview(this.area!);
     })
     .onDragEnd(() => this.isDraggingSource = false)
     .onDragMove(event => {
@@ -146,6 +161,7 @@ struct PageIcon {
       this.rightHoverVisible = false;
     })
     .onAreaChange((_, area: Area) => {
+      this.area = area;
       this.midX = area.globalPosition.x as number + (area.width as number / 2);
     })
   }
@@ -185,7 +201,7 @@ export struct PageManagerDialogBuilder {
                   this.onPageSelected(pageInfo);
                 }
               })
-            })
+            }, (pageInfo: PageInfo) => pageInfo.pageId)
           }
           .backgroundColor('#1486e8ff')
           .borderColor('#3486e8ff')
@@ -193,7 +209,7 @@ export struct PageManagerDialogBuilder {
           .borderRadius(10)
           .margin(ContainerPadding)
           .padding(ContainerWidePadding)
-        })
+        }, (pageGroup: PageGroup) => pageGroup.groupId)
       }
       .lanes({ minLength: 100, maxLength: 100 }, ContainerWideSpacing)
       .listDirection(Axis.Vertical)
