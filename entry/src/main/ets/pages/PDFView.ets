@@ -190,6 +190,9 @@ struct PDFView {
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
 
+    // Register page reorder callback
+    this.pageGroups.onPageReordered = (oldIndex: number, newIndex: number) => this.handlePageReordered(oldIndex, newIndex);
+
     // Previous page / Go to first page
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.gotoPrevPage()));
     // Next page / Go to last page
@@ -1382,6 +1385,49 @@ struct PDFView {
     }
     this.controlsTransparency = 1;
     this.transparencyTimeoutId = setTimeout(() => this.controlsTransparency = 0.5, 1000 * 3);
+  }
+
+  handlePageReordered(oldIndex: number, newIndex: number): void {
+    hilog.info(0, 'PDFView', `处理页面重新排序: ${oldIndex} -> ${newIndex}`);
+
+    // Determine if the current page was affected by the reorder
+    const currentPage = this.currentPageIndex;
+    let newCurrentPage = currentPage;
+
+    if (currentPage === oldIndex) {
+      // The current page was moved
+      newCurrentPage = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    } else if (oldIndex < currentPage && newIndex >= currentPage) {
+      // A page before the current page was moved to after it
+      newCurrentPage = currentPage - 1;
+    } else if (oldIndex > currentPage && newIndex <= currentPage) {
+      // A page after the current page was moved to before or at it
+      newCurrentPage = currentPage + 1;
+    }
+
+    // If the current page index changed, navigate to the new position
+    if (newCurrentPage !== currentPage) {
+      this.gotoPage(newCurrentPage);
+    } else {
+      // Even if the current page didn't change, we might need to refresh
+      // if displayed pages were reordered (for dual/tri modes)
+      const affectedRange = [
+        Math.min(oldIndex, newIndex),
+        Math.max(oldIndex, newIndex)
+      ];
+      const currentDisplayRange = [
+        Math.min(...this.displayedPageIndices),
+        Math.max(...this.displayedPageIndices)
+      ];
+
+      // Check if reorder affected any displayed pages
+      const rangesOverlap = affectedRange[0] <= currentDisplayRange[1] && 
+                           affectedRange[1] >= currentDisplayRange[0];
+
+      if (rangesOverlap) {
+        this.gotoPage(this.currentPageIndex);
+      }
+    }
   }
 
   build() {
