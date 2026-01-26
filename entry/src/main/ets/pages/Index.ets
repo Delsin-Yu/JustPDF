@@ -42,6 +42,8 @@ struct Index {
     uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }
 
+  private documentViewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
+
   build() {
     Row() {
       Column({ space: '30lpx' }) {
@@ -59,8 +61,7 @@ struct Index {
               const documentSelectOptions = new picker.DocumentSelectOptions();
               documentSelectOptions.maxSelectNumber = 1;
               documentSelectOptions.fileSuffixFilters = ['.pdf'];
-              const documentViewPicker = new picker.DocumentViewPicker();
-              let uris = await documentViewPicker.select(documentSelectOptions);
+              let uris = await this.documentViewPicker.select(documentSelectOptions);
               let uri = uris[0];
               await this.loadAndViewFile(uri);
             } catch (err) {
