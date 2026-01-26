@@ -33,10 +33,18 @@ export function vpToPx(v: Vector2, uiContext: UIContext): Vector2 {
   return Vec2(uiContext.vp2px(v.x), uiContext.vp2px(v.y));
 }
 
-export function generateGUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+export function hslToColor(h: number, s: number, l: number, alpha: number): string {
+  s /= 100;
+  l /= 100;
+
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+
+  const r = Math.round(f(0) * 255);
+  const g = Math.round(f(8) * 255);
+  const b = Math.round(f(4) * 255);
+
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

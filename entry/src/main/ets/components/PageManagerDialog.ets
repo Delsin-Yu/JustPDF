@@ -1,7 +1,8 @@
-import { Vec2, vpToPx } from './Numbers';
+import { hslToColor, Vec2, vpToPx } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './PageInfo';
-import { ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, TopLeft, TopRight, toVisibility } from './UIComponents';
+import { ButtonColor, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
+import { LengthMetrics } from '@kit.ArkUI';
 
 const arrowColor = '#ffffffff';
 const hoverColor = '#a8000000';
@@ -52,9 +53,8 @@ struct PageIcon {
     }
     .backgroundColor("#25ffffff")
     .borderRadius(10)
-    .size({width: area.width as number * 0.6666, height: area.height as number * 0.6666})
+    .size({ width: area.width as number * 0.6666, height: area.height as number * 0.6666 })
   }
-
 
   build() {
     Button({ type: ButtonType.Normal }) {
@@ -121,7 +121,9 @@ struct PageIcon {
     })
     .onDragEnd(() => this.isDraggingSource = false)
     .onDragMove(event => {
-      if (this.isDraggingSource) return;
+      if (this.isDraggingSource) {
+        return;
+      }
       const globalX = event.getWindowX();
       this.leftHoverVisible = globalX < this.midX;
       this.rightHoverVisible = globalX > this.midX;
@@ -167,30 +169,103 @@ struct PageIcon {
   }
 }
 
+@CustomDialog
+struct PageRenameDialogBuilder {
+  controller: CustomDialogController;
+  @Require pageGroupAccessor: () => PageGroup;
+  @Require pageGroups: PageInfoDataSource;
+  @State newName: string | undefined = undefined;
+
+  build() {
+    Column(ContainerWideCfg) {
+      TextInput({
+        text: this.newName != undefined ? this.newName : this.pageGroupAccessor().groupName
+      })
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+        .height(50)
+        .borderRadius(8)
+        .backgroundColor('rgba(255, 255, 255, 0.1)')
+        .onChange(newText => {
+          this.newName = newText;
+        })
+      StyleButton({
+        text: '重命名',
+        style: '100%',
+        onClickCallback: () => {
+          const pageGroup = this.pageGroupAccessor();
+          if (this.newName != undefined && pageGroup.groupName !== this.newName) {
+            this.pageGroups.renameGroup(pageGroup, this.newName);
+          }
+          this.controller.close();
+        }
+      })
+    }
+    .padding(ContainerWidePadding)
+  }
+}
 
 @CustomDialog
 export struct PageManagerDialogBuilder {
-  private controller: CustomDialogController;
   @State @Require pageGroups: PageInfoDataSource;
   @Require onPageSelected: (pageInfo: ReadonlyPageInfo) => void;
+  private currentlyRenamingPageGroup: PageGroup | null = null;
+  private renameController: CustomDialogController = new CustomDialogController({
+    builder: PageRenameDialogBuilder({
+      pageGroupAccessor: () => this.currentlyRenamingPageGroup!,
+      pageGroups: this.pageGroups,
+    }),
+    autoCancel: false,
+    keyboardAvoidMode: KeyboardAvoidMode.DEFAULT,
+    keyboardAvoidDistance: LengthMetrics.vp(0)
+  });
+  private controller: CustomDialogController;
 
   @Builder
-  GroupHeader(text: string) {
-    Text(text)
-      .fontSize(15)
-      .fontWeight(FontWeight.Bold)
-      .padding(ContainerPadding)
-      .textAlign(TextAlign.Start)
-      .width('100%')
+  GroupHeader(pageGroup: PageGroup, source: PageInfoDataSource) {
+    RelativeContainer() {
+      Button() {
+        Text() {
+          SymbolSpan($r('sys.symbol.dot_grid_2x2'))
+          Span(pageGroup.groupName)
+        }
+        .fontWeight(FontWeight.Bold)
+        .fontSize(15)
+        .fontColor(Color.White)
+      }
+      .padding(ContainerWidePadding)
+      .type(ButtonType.Normal)
+      .borderRadius(5)
       .margin({ bottom: ContainerSpacing })
+      .alignSelf(ItemAlign.Start)
+      .width('100%')
+      .align(Alignment.Start)
+      .backgroundColor(ButtonColor)
+      .bindMenu([
+        {
+          value: '重命名组',
+          action: () => {
+            this.currentlyRenamingPageGroup = pageGroup;
+            this.renameController.open();
+          }
+        },
+        {
+          value: '删除组',
+          action: () => {
+            source.deleteGroup(pageGroup);
+          }
+        }
+      ])
+    }.width('100%').height('auto')
   }
 
   build() {
-    RelativeContainer() {
+    Column() {
       List(ContainerWideCfg) {
         LazyForEach(this.pageGroups, (pageGroup: PageGroup) => {
           ListItemGroup({
-            header: this.GroupHeader(pageGroup.groupName),
+            header: this.GroupHeader(pageGroup, this.pageGroups),
             space: ContainerWideSpacing
           }) {
             LazyForEach(pageGroup, (pageInfo: PageInfo) => {
@@ -201,24 +276,40 @@ export struct PageManagerDialogBuilder {
                   this.onPageSelected(pageInfo);
                 }
               })
-            }, (pageInfo: PageInfo) => pageInfo.pageId)
+            }, (pageInfo: PageInfo) => pageInfo.pageGuid)
           }
-          .backgroundColor('#1486e8ff')
-          .borderColor('#3486e8ff')
+          .backgroundColor(hslToColor(pageGroup.groupHue, 100, 70, 0.08))
+          .borderColor(hslToColor(pageGroup.groupHue, 100, 70, 0.2))
           .borderWidth(2)
           .borderRadius(10)
           .margin(ContainerPadding)
           .padding(ContainerWidePadding)
-        }, (pageGroup: PageGroup) => pageGroup.groupId)
+        }, (pageGroup: PageGroup) => pageGroup.groupGuid)
       }
       .lanes({ minLength: 100, maxLength: 100 }, ContainerWideSpacing)
       .listDirection(Axis.Vertical)
       .alignListItem(ListItemAlign.Center)
       .width('100%')
-      .height('100%')
-      .padding(ContainerWidePadding)
+      .height('auto')
+      .layoutWeight(1)
       .alignRules(FullRect)
 
+      Button('添加组')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .width('100%')
+        .backgroundColor(ButtonColor)
+        .bindMenu([
+          {
+            value: '空组',
+            action: () => this.pageGroups.push(new PageGroup("空组", []))
+          },
+          {
+            value: '导入文件',
+            action: () => {
+            }
+          }
+        ])
     }
     .padding(ContainerWidePadding)
   }

@@ -3,8 +3,9 @@ import { Stack } from '@kit.ArkTS';
 
 const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
-const ButtonSize: SizeOptions = { height: 40, width: 80 };
-const ButtonSizeWide: SizeOptions = { height: 40, width: 90 };
+const ButtonHeight: Length = '40vp';
+const ButtonSize: SizeOptions = { height: ButtonHeight, width: 80 };
+const ButtonSizeWide: SizeOptions = { height: ButtonHeight, width: 90 };
 
 export const ButtonColor: ResourceColor = `rgba(0, 0, 0, 0.4)`;
 
@@ -109,7 +110,7 @@ export struct StyleText {
 @ComponentV2
 export struct StyleButton {
   @Param text: string = '';
-  @Param style: 'normal' | 'wide' = 'normal';
+  @Param style: 'normal' | 'wide' | Length = 'normal';
   @Param symbol: string | undefined = undefined;
   @Param menuElement: MenuElement[] | undefined = undefined;
   @Param onClickCallback: () => void = () => {
@@ -127,7 +128,7 @@ export struct StyleButton {
     }
     .fontSize(ButtonFontSize)
     .fontWeight(FontWeight.Bold)
-    .size(this.style == 'normal' ? ButtonSize : ButtonSizeWide)
+    .size(this.style == 'normal' ? ButtonSize : this.style == 'wide' ? ButtonSizeWide : { width: this.style, height: ButtonHeight })
     .hitTestBehavior(HitTestMode.Block)
     .monopolizeEvents(true)
     .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)

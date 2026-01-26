@@ -2,8 +2,8 @@ import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding
 import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { taskpool } from '@kit.ArkTS';
-import { fromArea, generateGUID, mul, pxToVp, toSize, Vec2, Vector2 } from '../components/Numbers';
+import { taskpool, util } from '@kit.ArkTS';
+import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -15,6 +15,7 @@ import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource,
 import { InputAction } from '../components/Input';
 import { Stack } from '../components/Colletions';
 import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
+import utils from '@arkts.utils';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -752,7 +753,7 @@ struct PDFView {
         annotationInfo.modifiedTime = new Date(Date.now());
         annotationInfo.vertexes = transformedPoints;
         annotationInfo.lineColor = 3547621;
-        annotationInfo.uniqueId = generateGUID();
+        annotationInfo.uniqueId = util.generateRandomUUID(true);
         annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
         annotationsToAdd.push(annotationInfo);
       }

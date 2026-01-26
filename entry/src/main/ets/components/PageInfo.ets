@@ -97,7 +97,7 @@ interface PendingThumbnailTask {
 
 @ObservedV2
 export class PageInfo implements ReadonlyPageInfo {
-  public readonly pageId: string = util.generateRandomUUID(true);
+  public readonly pageGuid: string = util.generateRandomUUID(true);
   public globalPageIndex: number | undefined;
   public localPageIndex: number;
   public pdfPage: pdfService.PdfPage;
@@ -339,8 +339,9 @@ export interface ReadonlyPageGroup extends IDataSource {
 
 @ObservedV2
 export class PageGroup implements ReadonlyPageGroup {
-  public readonly groupId: string = util.generateRandomUUID(true);
-  public groupName: string;
+  public readonly groupGuid: string = util.generateRandomUUID(true);
+  public readonly groupHue: number = Math.random() * 360;
+  @Trace public groupName: string;
   public pages: PageInfo[];
   private listeners: DataChangeListener[] = [];
 
@@ -641,6 +642,47 @@ export class PageInfoDataSource implements IDataSource {
       }
       pageCounter += group.pages.length;
     }
+  }
+
+  public renameGroup(pageGroup: PageGroup, newName: string): void {
+    const groupIndex = this.pageGroups.indexOf(pageGroup);
+    if (groupIndex < 0) {
+      throw new Error(`PageGroup not found for renaming`);
+    }
+    this.pageGroups[groupIndex].groupName = newName;
+    this.notifyPageGroupChanged(groupIndex);
+    hilog.info(0, 'PDFView', `重命名 PageGroup ${groupIndex} 为 ${newName}`);
+  }
+
+  /**
+   * Deletes a page group from the data source.
+   * Removes all pages in the group, updates global page indices, and notifies listeners.
+   * @param pageGroup The PageGroup to delete
+   */
+  public deleteGroup(pageGroup: PageGroup): void {
+    const groupIndex = this.pageGroups.indexOf(pageGroup);
+    if (groupIndex < 0) {
+      throw new Error(`PageGroup not found for deletion`);
+    }
+
+    // Clean up resources for all pages in the group
+    for (const pageInfo of pageGroup.pages) {
+      pageInfo.evictViewerCache();
+      pageInfo.evictThumbnail();
+      pageInfo.associatedSource = undefined;
+      pageInfo.globalPageIndex = undefined;
+    }
+
+    // Remove the group from the array
+    this.pageGroups.splice(groupIndex, 1);
+
+    // Recalculate global page indices for remaining pages
+    this.recalculateGlobalIndices();
+
+    // Notify listeners about the deletion
+    this.listeners.forEach(listener => listener.onDataDelete(groupIndex));
+
+    hilog.info(0, 'PDFView', `删除 PageGroup ${groupIndex} (${pageGroup.groupName})`);
   }
 
   /**
