@@ -15,8 +15,12 @@ export function div(v: Vector2, scalar: number): Vector2 {
   return Vec2(v.x / scalar, v.y / scalar);
 }
 
-export function toSize(value: Vector2): SizeOptions {
+export function toSizePx(value: Vector2): SizeOptions {
   return { width: `${value.x}px`, height: `${value.y}px` };
+}
+
+export function toSizeVp(value: Vector2): SizeOptions {
+  return { width: `${value.x}vp`, height: `${value.y}vp` };
 }
 
 export function fromArea(area: Area, uiContext: UIContext): Vector2 {
