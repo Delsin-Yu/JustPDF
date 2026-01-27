@@ -95,7 +95,7 @@ interface PendingThumbnailTask {
   promise: Promise<void>;
 }
 
-@ObservedV2
+@Observed
 export class PageInfo implements ReadonlyPageInfo {
   public readonly pageGuid: string = util.generateRandomUUID(true);
   public globalPageIndex: number | undefined;
@@ -105,7 +105,7 @@ export class PageInfo implements ReadonlyPageInfo {
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, PendingCacheTask> = new Map();
   private pagePath: string;
-  @Trace public pageThumbnail: image.PixelMap | undefined = undefined;
+  public pageThumbnail: image.PixelMap | undefined = undefined;
   private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
   public associatedSource: PageInfoDataSource | undefined = undefined;
 

@@ -1,4 +1,4 @@
-import { hslToColor, Vec2, vpToPx } from './Numbers';
+import { hslToColor, mul, toSizeVp, Vec2, Vector2 } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './PageInfo';
 import { ButtonColor, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
@@ -7,18 +7,23 @@ import { LengthMetrics } from '@kit.ArkUI';
 const arrowColor = '#ffffffff';
 const hoverColor = '#a8000000';
 
+const thumbnailWidth: number = 75;
+const previewSize: Vector2 = Vec2(thumbnailWidth, thumbnailWidth * 1.414);
+
 @Reusable
+@Component
 struct PageIcon {
-  @Require pageInfo: PageInfo;
+  @Require @State pageInfo: PageInfo;
   @Require dataSource: PageInfoDataSource;
   @Require clicked: () => void;
 
   aboutToAppear(): void {
-    this.pageInfo.requestPageThumbnail(vpToPx(Vec2(400, 400), this.getUIContext()));
+    this.pageInfo.requestPageThumbnail(previewSize);
   }
 
   aboutToReuse(params: Record<string, Object | null | undefined>): void {
-    this.pageInfo.requestPageThumbnail(vpToPx(Vec2(400, 400), this.getUIContext()));
+    this.pageInfo = params.pageInfo as PageInfo;
+    this.pageInfo!.requestPageThumbnail(previewSize);
   }
 
   aboutToRecycle(): void {
@@ -31,7 +36,6 @@ struct PageIcon {
 
   @State leftHoverVisible: boolean = false;
   @State rightHoverVisible: boolean = false;
-  private area: Area | undefined = undefined;
   private midX: number = 0;
   @State isDraggingSource: boolean = false;
 
@@ -43,17 +47,19 @@ struct PageIcon {
   }
 
   @Builder
-  DragPreview(area: Area) {
+  DragPreview() {
     Button({ type: ButtonType.Normal }) {
       Image(this.pageInfo.pageThumbnail)
         .borderRadius(10)
         .draggable(false)
         .margin(0)
         .padding(ContainerPadding)
+        .autoResize(true)
+        .objectFit(ImageFit.Contain)
     }
     .backgroundColor("#25ffffff")
     .borderRadius(10)
-    .size({ width: area.width as number * 0.6666, height: area.height as number * 0.6666 })
+    .size(toSizeVp(mul(previewSize, 0.66666)))
   }
 
   build() {
@@ -64,6 +70,8 @@ struct PageIcon {
           .draggable(false)
           .margin(0)
           .padding(ContainerPadding)
+          .autoResize(true)
+          .size(toSizeVp(previewSize))
 
         RelativeContainer() {
           Column() {
@@ -117,7 +125,7 @@ struct PageIcon {
         )
       );
       event.setData(data);
-      return this.DragPreview(this.area!);
+      return this.DragPreview();
     })
     .onDragEnd(() => this.isDraggingSource = false)
     .onDragMove(event => {
@@ -162,10 +170,7 @@ struct PageIcon {
       this.leftHoverVisible = false;
       this.rightHoverVisible = false;
     })
-    .onAreaChange((_, area: Area) => {
-      this.area = area;
-      this.midX = area.globalPosition.x as number + (area.width as number / 2);
-    })
+    .onAreaChange((_, area: Area) => this.midX = area.globalPosition.x as number + (area.width as number / 2))
   }
 }
 
@@ -208,7 +213,7 @@ struct PageRenameDialogBuilder {
 
 @CustomDialog
 export struct PageManagerDialogBuilder {
-  @State @Require pageGroups: PageInfoDataSource;
+  @Require pageGroups: PageInfoDataSource;
   @Require onPageSelected: (pageInfo: ReadonlyPageInfo) => void;
   private currentlyRenamingPageGroup: PageGroup | null = null;
   private renameController: CustomDialogController = new CustomDialogController({
@@ -220,7 +225,6 @@ export struct PageManagerDialogBuilder {
     keyboardAvoidMode: KeyboardAvoidMode.DEFAULT,
     keyboardAvoidDistance: LengthMetrics.vp(0)
   });
-  private controller: CustomDialogController;
 
   @Builder
   GroupHeader(pageGroup: PageGroup, source: PageInfoDataSource) {
@@ -275,7 +279,7 @@ export struct PageManagerDialogBuilder {
                 clicked: () => {
                   this.onPageSelected(pageInfo);
                 }
-              })
+              }).size(toSizeVp(previewSize))
             }, (pageInfo: PageInfo) => pageInfo.pageGuid)
           }
           .backgroundColor(hslToColor(pageGroup.groupHue, 100, 70, 0.08))
@@ -286,7 +290,8 @@ export struct PageManagerDialogBuilder {
           .padding(ContainerWidePadding)
         }, (pageGroup: PageGroup) => pageGroup.groupGuid)
       }
-      .lanes({ minLength: 100, maxLength: 100 }, ContainerWideSpacing)
+      .cachedCount(1)
+      .lanes({ minLength: thumbnailWidth, maxLength: thumbnailWidth }, ContainerSpacing)
       .listDirection(Axis.Vertical)
       .alignListItem(ListItemAlign.Center)
       .width('100%')

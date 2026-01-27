@@ -3,7 +3,7 @@ import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool, util } from '@kit.ArkTS';
-import { fromArea, mul, pxToVp, toSize, Vec2, Vector2 } from '../components/Numbers';
+import { fromArea, mul, pxToVp, toSizePx, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -15,7 +15,6 @@ import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource,
 import { InputAction } from '../components/Input';
 import { Stack } from '../components/Colletions';
 import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
-import utils from '@arkts.utils';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -1439,11 +1438,11 @@ struct PDFView {
         RelativeContainer() {
           Image(this.view1PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view1Ctx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
             .scale(this.getCanvasScale(0))
             .hitTestBehavior(HitTestMode.None)
           Canvas(this.view1DrawCtx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
             .scale(this.getCanvasScale(0))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
@@ -1451,17 +1450,17 @@ struct PDFView {
             .onMouse(event => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
               event))
         }
-        .size(toSize(this.view1ViewSize))
+        .size(toSizePx(this.view1ViewSize))
         .visibility(toVisibility(true))
 
         RelativeContainer() {
           Image(this.view2PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view2Ctx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
             .scale(this.getCanvasScale(1))
             .hitTestBehavior(HitTestMode.None)
           Canvas(this.view2DrawCtx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
             .scale(this.getCanvasScale(1))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
@@ -1469,17 +1468,17 @@ struct PDFView {
             .onMouse(event => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
               event))
         }
-        .size(toSize(this.view2ViewSize))
+        .size(toSizePx(this.view2ViewSize))
         .visibility(toVisibility(this.view2Visible))
 
         RelativeContainer() {
           Image(this.view3PixelMap).alignRules(FullRect).draggable(false)
           Canvas(this.view3Ctx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
             .scale(this.getCanvasScale(2))
             .hitTestBehavior(HitTestMode.None)
           Canvas(this.view3DrawCtx)
-            .size(toSize(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
             .scale(this.getCanvasScale(2))
             .visibility(toVisibility(this.annotateMode !== 'drag'))
             .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
@@ -1487,12 +1486,12 @@ struct PDFView {
             .onMouse(event => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
               event))
         }
-        .size(toSize(this.view3ViewSize))
+        .size(toSizePx(this.view3ViewSize))
         .visibility(toVisibility(this.view3Visible))
       }
       .alignRules(TopLeft)
       .offset(this.viewPan)
-      .size(toSize(this.viewSize))
+      .size(toSizePx(this.viewSize))
       .scale({
         x: this.viewScale,
         y: this.viewScale,
