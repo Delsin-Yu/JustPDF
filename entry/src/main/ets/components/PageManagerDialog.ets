@@ -1,8 +1,9 @@
 import { add, hslToColor, mul, toSizeVp, Vec2, Vector2 } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './PageInfo';
-import { ButtonColor, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
+import { ButtonColor, ButtonColorSemiTransparent, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { LengthMetrics } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const arrowColor = '#ffffffff';
 const hoverColor = '#a8000000';
@@ -13,26 +14,77 @@ const itemSize = add(previewSize, Vec2(ContainerSpacing + ContainerSpacing, Cont
 
 @Reusable
 @Component
+struct AppendPageTarget {
+  @Require dataSource: PageInfoDataSource;
+  @Require pageGroup: PageGroup;
+  @State isHovering: boolean = false;
+
+  aboutToReuse(params: Record<string, Object | null | undefined>): void {
+    this.pageGroup = params.pageGroup as PageGroup;
+  }
+
+  build() {
+    Button() {
+      SymbolGlyph(this.isHovering ? $r('sys.symbol.chevron_down') : $r('sys.symbol.plus'))
+        .fontWeight(FontWeight.Bolder)
+        .fontSize(30)
+        .fontColor([Color.White])
+        .animation({ duration: 250, curve: Curve.EaseOut })
+    }
+    .size(toSizeVp(itemSize))
+    .type(ButtonType.Normal)
+    .backgroundColor(this.isHovering ? hoverColor : ButtonColorSemiTransparent)
+    .animation({ duration: 250, curve: Curve.EaseOut })
+    .border({ width: 5, dashGap: LengthMetrics.vp(3), dashWidth: LengthMetrics.vp(2), radius: 10, color: ButtonColor })
+    .onDragEnter(() => {
+      this.isHovering = true;
+    })
+    .onDragLeave(() => {
+      this.isHovering = false;
+    })
+    .onDrop(event => {
+      this.isHovering = false;
+
+      let draggedItemIndex = 0;
+      try {
+        draggedItemIndex = event.getData().getRecords()[0].getValue() as number;
+      } catch (error) {
+        event.setResult(DragResult.DRAG_FAILED);
+        return;
+      }
+
+      event.setResult(DragResult.DRAG_SUCCESSFUL);
+      this.dataSource.movePageToGroupEnd(draggedItemIndex, this.pageGroup);
+    })
+  }
+}
+
+@Reusable
+@Component
 struct PageIcon {
   @Require @State pageInfo: PageInfo;
   @Require dataSource: PageInfoDataSource;
   @Require clicked: () => void;
 
   aboutToAppear(): void {
-    this.pageInfo.requestPageThumbnail(previewSize);
+    hilog.warn(0, 'PDFView', `aboutToAppear: Requesting thumbnail for page index ${this.pageInfo.globalPageIndex}`);
+    this.pageInfo.retainThumbnail(previewSize);
   }
 
   aboutToReuse(params: Record<string, Object | null | undefined>): void {
+    hilog.warn(0, 'PDFView', `aboutToReuse: Requesting thumbnail for page index ${(params.pageInfo as PageInfo).globalPageIndex}`);
     this.pageInfo = params.pageInfo as PageInfo;
-    this.pageInfo!.requestPageThumbnail(previewSize);
+    this.pageInfo!.retainThumbnail(previewSize);
   }
 
   aboutToRecycle(): void {
-    this.pageInfo.evictThumbnail();
+    hilog.warn(0, 'PDFView', `aboutToRecycle: Evicting thumbnail for page index ${this.pageInfo.globalPageIndex}`);
+    this.pageInfo.releaseThumbnail();
   }
 
   aboutToDisappear(): void {
-    this.pageInfo.evictThumbnail();
+    hilog.warn(0, 'PDFView', `aboutToDisappear: Evicting thumbnail for page index ${this.pageInfo.globalPageIndex}`);
+    this.pageInfo.releaseThumbnail();
   }
 
   @State leftHoverVisible: boolean = false;
@@ -57,6 +109,7 @@ struct PageIcon {
         .padding(ContainerPadding)
         .autoResize(true)
         .objectFit(ImageFit.Contain)
+        .syncLoad(true)
     }
     .backgroundColor("#25ffffff")
     .borderRadius(10)
@@ -111,6 +164,7 @@ struct PageIcon {
       .clip(true)
       .borderRadius(10)
     }
+    .size(toSizeVp(itemSize))
     .scale(this.getScale())
     .opacity(this.isDraggingSource ? 0.5 : 1)
     .animation({ duration: 250, curve: Curve.EaseOut })
@@ -282,6 +336,11 @@ export struct PageManagerDialogBuilder {
                 }
               }).size(toSizeVp(itemSize))
             }, (pageInfo: PageInfo) => pageInfo.pageGuid)
+
+            AppendPageTarget({
+              dataSource: this.pageGroups,
+              pageGroup: pageGroup
+            }).size(toSizeVp(itemSize))
           }
           .backgroundColor(hslToColor(pageGroup.groupHue, 100, 70, 0.08))
           .borderColor(hslToColor(pageGroup.groupHue, 100, 70, 0.2))
