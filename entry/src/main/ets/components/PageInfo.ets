@@ -80,7 +80,7 @@ export interface ReadonlyPageInfo {
   readonly pdfPage: pdfService.PdfPage;
   readonly strokes: readonly ReadonlyStroke[];
   readonly pageThumbnail: image.PixelMap | undefined;
-  requestPageThumbnail(preferredSize: Vector2): void;
+  retainThumbnail(preferredSize: Vector2): void;
 }
 
 export const MIN_RENDER_SCALE: number = 4;
@@ -107,6 +107,7 @@ export class PageInfo implements ReadonlyPageInfo {
   private pagePath: string;
   public pageThumbnail: image.PixelMap | undefined = undefined;
   private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
+  private thumbnailRefCount: number = 0;
   public associatedSource: PageInfoDataSource | undefined = undefined;
 
   constructor(localPageIndex: number, pdfPage: pdfService.PdfPage, pagePath: string) {
@@ -115,8 +116,12 @@ export class PageInfo implements ReadonlyPageInfo {
     this.pagePath = pagePath;
   }
 
-  public requestPageThumbnail(preferredSize: Vector2): void {
+  public retainThumbnail(preferredSize: Vector2): void {
     hilog.warn(0, 'PDFView', `请求页面 ${this.localPageIndex} 缩略图，首选大小: ${preferredSize.x}x${preferredSize.y}`);
+
+    // Increment reference count for this thumbnail request
+    this.thumbnailRefCount++;
+    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图引用计数增加到 ${this.thumbnailRefCount}`);
 
     if (this.pageThumbnail) return;
     if (this.pageThumbnailTask) return;
@@ -126,11 +131,11 @@ export class PageInfo implements ReadonlyPageInfo {
     const scaleY = preferredSize.y / pageSize.y;
     const scale = Math.min(scaleX, scaleY);
     const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale);
-    hilog.info(0, 'PDFView', `开始生成页面 ${this.localPageIndex} 缩略图，缩放比例: ${scale}`);
+    hilog.warn(0, 'PDFView', `开始生成页面 ${this.localPageIndex} 缩略图，缩放比例: ${scale}`);
     const promise = taskpool.execute(task, taskpool.Priority.LOW)
       .then(result => {
         const pageCache = result as PageCache;
-        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已生成 ${scale.toFixed(2)}`);
+        hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已生成 ${scale.toFixed(2)}`);
         this.pageThumbnail = pageCache.pixelMap;
         this.pageThumbnailTask = undefined;
         if (!this.associatedSource || !this.globalPageIndex) return;
@@ -206,7 +211,7 @@ export class PageInfo implements ReadonlyPageInfo {
       try {
         cache.pixelMap.release();
       } catch (error) {
-        hilog.debug(0, 'PDFView', `释放 PixelMap 时出错: ${error}`);
+        hilog.warn(0, 'PDFView', `释放 PixelMap 时出错: ${error}`);
       }
     }
     this.caches.clear();
@@ -214,20 +219,33 @@ export class PageInfo implements ReadonlyPageInfo {
     // Cancel pending cache tasks
     this.cancelPendingTasks();
     
-    hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 查看器缓存已清除`);
+    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 查看器缓存已清除`);
   }
 
   /**
-   * Evicts the thumbnail, releasing the PixelMap and cancelling any pending thumbnail task.
+   * Releases a reference to the thumbnail. When the reference count reaches zero,
+   * the PixelMap is released and any pending thumbnail task is cancelled.
    * Used to free memory when the thumbnail scrolls out of view.
    */
-  public evictThumbnail(): void {
+  public releaseThumbnail(): void {
+    // Decrement reference count
+    this.thumbnailRefCount--;
+    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图引用计数减少到 ${this.thumbnailRefCount}`);
+
+    // Only evict when no more references
+    if (this.thumbnailRefCount > 0) {
+      return;
+    }
+
+    // Ensure ref count doesn't go negative
+    this.thumbnailRefCount = 0;
+
     // Cancel pending thumbnail task if any
     if (this.pageThumbnailTask) {
       try {
         taskpool.cancel(this.pageThumbnailTask.task);
       } catch (error) {
-        hilog.debug(0, 'PDFView', `取消缩略图任务时出错: ${error}`);
+        hilog.error(0, 'PDFView', `取消缩略图任务时出错: ${error}`);
       }
       this.pageThumbnailTask = undefined;
     }
@@ -237,12 +255,12 @@ export class PageInfo implements ReadonlyPageInfo {
       try {
         this.pageThumbnail.release();
       } catch (error) {
-        hilog.debug(0, 'PDFView', `释放缩略图 PixelMap 时出错: ${error}`);
+        hilog.error(0, 'PDFView', `释放缩略图 PixelMap 时出错: ${error}`);
       }
       this.pageThumbnail = undefined;
     }
     
-    hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已清除`);
+    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已清除`);
   }
 
   private getLowestRenderScaleCache(): PageCache | undefined {
@@ -376,6 +394,14 @@ export class PageGroup implements ReadonlyPageGroup {
     }
   }
 
+  public notifyPageAdded(index: number): void {
+    this.listeners.forEach(listener => listener.onDataAdd(index));
+  }
+
+  public notifyPageDeleted(index: number): void {
+    this.listeners.forEach(listener => listener.onDataDelete(index));
+  }
+
   public markChanged(pageInfo: ReadonlyPageInfo): void {
     const pageIndex = this.pages.indexOf(pageInfo as PageInfo);
     // hilog.error(0, "PDFView", `标记 PageGroup ${this.groupName} 页面 ${pageIndex} 为已更改 ${this.listeners.length}`);
@@ -485,7 +511,7 @@ export class PageInfoDataSource implements IDataSource {
     }
     
     // Evict viewer caches for pages outside eviction range
-    // Note: Thumbnails are managed separately via evictThumbnail() in PageManagerDialog
+    // Note: Thumbnails are managed separately via releaseThumbnail() in PageManagerDialog
     let pageCounter = 0;
     for (const group of this.pageGroups) {
       for (const pageInfo of group.pages) {
@@ -668,7 +694,7 @@ export class PageInfoDataSource implements IDataSource {
     // Clean up resources for all pages in the group
     for (const pageInfo of pageGroup.pages) {
       pageInfo.evictViewerCache();
-      pageInfo.evictThumbnail();
+      pageInfo.releaseThumbnail();
       pageInfo.associatedSource = undefined;
       pageInfo.globalPageIndex = undefined;
     }
@@ -753,14 +779,17 @@ export class PageInfoDataSource implements IDataSource {
     // Update global page indices for all pages
     this.recalculateGlobalIndices();
 
-    // Notify affected groups
-    const affectedGroupIndices = new Set<number>();
-    affectedGroupIndices.add(srcGroupIndex);
-    affectedGroupIndices.add(dstGroupIndex);
+    // Notify source group about deletion
+    srcGroup.notifyPageDeleted(srcLocalIndex);
+    this.notifyPageGroupChanged(srcGroupIndex);
 
-    for (const groupIndex of affectedGroupIndices) {
-      this.pageGroups[groupIndex].markAllPagesChanged();
-      this.notifyPageGroupChanged(groupIndex);
+    // Notify target group about addition (if different from source)
+    if (srcGroup !== dstGroup) {
+      dstGroup.notifyPageAdded(dstLocalIndex);
+      this.notifyPageGroupChanged(dstGroupIndex);
+    } else {
+      // Same group: notify about the move as a change
+      srcGroup.markAllPagesChanged();
     }
 
     hilog.info(0, 'PDFView', `页面从 ${srcIndex} 移动到 ${dstIndex}`);
@@ -768,6 +797,64 @@ export class PageInfoDataSource implements IDataSource {
     // Notify external listeners of the page reorder
     if (this.onPageReordered) {
       this.onPageReordered(srcIndex, dstIndex);
+    }
+  }
+
+  /**
+   * Moves a page to the end of a specific group.
+   * This method explicitly targets a group, making it suitable for cross-group moves
+   * including moves to empty groups.
+   * @param srcGlobalIndex The global index of the page to move
+   * @param targetGroup The group to append the page to
+   */
+  public movePageToGroupEnd(srcGlobalIndex: number, targetGroup: PageGroup): void {
+    const totalPages = this.totalPageCount();
+    if (srcGlobalIndex < 0 || srcGlobalIndex >= totalPages) {
+      throw new Error(`Source index ${srcGlobalIndex} out of bounds`);
+    }
+
+    const targetGroupIndex = this.pageGroups.indexOf(targetGroup);
+    if (targetGroupIndex < 0) {
+      throw new Error(`Target group not found in data source`);
+    }
+
+    // Find source page info
+    const pageInfoResult = this.getPageInfo(srcGlobalIndex);
+    const srcGroup = pageInfoResult[0];
+    const srcPageInfo = pageInfoResult[1];
+    const srcGroupIndex = pageInfoResult[2];
+
+    // Check if page is already the last in the target group
+    if (srcGroup === targetGroup &&
+        srcGroup.pages.indexOf(srcPageInfo) === srcGroup.pages.length - 1) {
+      return; // Already at the end of this group, nothing to do
+    }
+
+    // Remove from source group
+    const srcLocalIndex = srcGroup.pages.indexOf(srcPageInfo);
+    srcGroup.pages.splice(srcLocalIndex, 1);
+
+    // Append to target group
+    targetGroup.pages.push(srcPageInfo);
+    const dstLocalIndex = targetGroup.pages.length - 1;
+
+    // Update global page indices for all pages
+    this.recalculateGlobalIndices();
+
+    // Notify source group about deletion
+    srcGroup.notifyPageDeleted(srcLocalIndex);
+    this.notifyPageGroupChanged(srcGroupIndex);
+
+    // Notify target group about addition
+    targetGroup.notifyPageAdded(dstLocalIndex);
+    this.notifyPageGroupChanged(targetGroupIndex);
+
+    hilog.info(0, 'PDFView', `页面 ${srcGlobalIndex} 移动到组 "${targetGroup.groupName}" 末尾`);
+
+    // Notify external listeners of the page reorder
+    if (this.onPageReordered) {
+      const newGlobalIndex = srcPageInfo.globalPageIndex!;
+      this.onPageReordered(srcGlobalIndex, newGlobalIndex);
     }
   }
 
