@@ -1,4 +1,4 @@
-import { hslToColor, mul, toSizeVp, Vec2, Vector2 } from './Numbers';
+import { add, hslToColor, mul, toSizeVp, Vec2, Vector2 } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './PageInfo';
 import { ButtonColor, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
@@ -9,6 +9,7 @@ const hoverColor = '#a8000000';
 
 const thumbnailWidth: number = 75;
 const previewSize: Vector2 = Vec2(thumbnailWidth, thumbnailWidth * 1.414);
+const itemSize = add(previewSize, Vec2(ContainerSpacing + ContainerSpacing, ContainerSpacing + ContainerSpacing));
 
 @Reusable
 @Component
@@ -59,7 +60,7 @@ struct PageIcon {
     }
     .backgroundColor("#25ffffff")
     .borderRadius(10)
-    .size(toSizeVp(mul(previewSize, 0.66666)))
+    .size(toSizeVp(mul(itemSize, 0.66666)))
   }
 
   build() {
@@ -71,7 +72,7 @@ struct PageIcon {
           .margin(0)
           .padding(ContainerPadding)
           .autoResize(true)
-          .size(toSizeVp(previewSize))
+          .size(toSizeVp(itemSize))
 
         RelativeContainer() {
           Column() {
@@ -279,7 +280,7 @@ export struct PageManagerDialogBuilder {
                 clicked: () => {
                   this.onPageSelected(pageInfo);
                 }
-              }).size(toSizeVp(previewSize))
+              }).size(toSizeVp(itemSize))
             }, (pageInfo: PageInfo) => pageInfo.pageGuid)
           }
           .backgroundColor(hslToColor(pageGroup.groupHue, 100, 70, 0.08))
@@ -291,7 +292,7 @@ export struct PageManagerDialogBuilder {
         }, (pageGroup: PageGroup) => pageGroup.groupGuid)
       }
       .cachedCount(1)
-      .lanes({ minLength: thumbnailWidth, maxLength: thumbnailWidth }, ContainerSpacing)
+      .lanes({ minLength: itemSize.x, maxLength: itemSize.x }, ContainerSpacing)
       .listDirection(Axis.Vertical)
       .alignListItem(ListItemAlign.Center)
       .width('100%')

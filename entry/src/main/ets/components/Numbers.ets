@@ -7,6 +7,10 @@ export function Vec2(x: number, y: number): Vector2 {
   return { x: x, y: y };
 }
 
+export function add(v1: Vector2, v2: Vector2): Vector2 {
+  return Vec2(v1.x + v2.x, v1.y + v2.y);
+}
+
 export function mul(v: Vector2, scalar: number): Vector2 {
   return Vec2(v.x * scalar, v.y * scalar);
 }
