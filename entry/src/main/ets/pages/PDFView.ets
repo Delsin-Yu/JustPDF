@@ -14,7 +14,6 @@ import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { Stack } from '../components/Colletions';
-import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -94,15 +93,6 @@ struct PDFView {
     width: '60%',
     height: '90%'
   });
-  pageManagerDialogController: CustomDialogController = new CustomDialogController({
-    builder: PageManagerDialogBuilder({
-      pageGroups: this.pageGroups,
-      onPageSelected: page => this.gotoPage(page.globalPageIndex!)
-    }),
-    width: '80%',
-    height: '90%',
-    autoCancel: false
-  })
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
@@ -1602,11 +1592,6 @@ struct PDFView {
                 action: () => this.setPageFlipMode('extern'),
                 symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
               }]
-          }).visibility(toVisibility(this.showControls))
-          StyleButton({
-            text: '页面', onClickCallback: () => {
-              this.pageManagerDialogController.open()
-            }
           }).visibility(toVisibility(this.showControls))
 
           Blank()
