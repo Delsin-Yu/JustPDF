@@ -10,6 +10,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
+import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
@@ -79,6 +80,7 @@ struct PDFView {
   view1DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
+  placeholderPixelMap: PixelMap | undefined = undefined;
   activeDrawPath: Stroke = NewStroke();
   pathsToErase: Set<ReadonlyStroke> = new Set();
   undoHistory: Stack<History> = new Stack<History>();
@@ -200,7 +202,9 @@ struct PDFView {
     // Go to last page (Ctrl+Down/Right/Space)
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
 
-    this.gotoPage(0);
+    this.createPlaceholderPixelMap().then(() => {
+      this.gotoPage(0);
+    });
     this.startTransparencyTimeout();
   }
 
@@ -393,38 +397,92 @@ struct PDFView {
     }
   }
 
+  // 创建 1x1 白色像素图作为页面加载时的占位符
+  private async createPlaceholderPixelMap(): Promise<void> {
+    const buffer = new ArrayBuffer(4);
+    const view = new Uint8Array(buffer);
+    view[0] = 255; // R
+    view[1] = 255; // G
+    view[2] = 255; // B
+    view[3] = 255; // A
+    const opts: image.InitializationOptions = {
+      size: { width: 1, height: 1 },
+      pixelFormat: image.PixelMapFormat.RGBA_8888
+    };
+    this.placeholderPixelMap = await image.createPixelMap(buffer, opts);
+  }
+
+  // 根据页面原始大小计算显示大小（与 cachePage 中的 displaySize 计算一致）
+  private getPageDisplaySize(pageIndex: number): Vector2 {
+    const rawSize = this.pageGroups.getPageRawSize(pageIndex);
+    return mul(rawSize, 2);
+  }
+
   // 加载页面缓存并更新视图状态
   private async loadAndDisplayPages(indices: number[]): Promise<void> {
-    // 加载第一个页面
+    // 立即设置占位白色矩形并预计算目标页面尺寸
+    this.view2Visible = false;
+    this.view3Visible = false;
+
     if (indices.length > 0) {
-      const cache = await this.getPageCache(indices[0], this.currentRenderScale);
-      this.view1PixelMap = cache.pixelMap;
-      this.view1ViewSize = cache.displaySize;
+      this.view1PixelMap = this.placeholderPixelMap;
+      this.view1ViewSize = this.getPageDisplaySize(indices[0]);
     } else {
       this.view1PixelMap = undefined;
     }
 
-    // 加载第二个页面
     if (indices.length > 1) {
-      const cache = await this.getPageCache(indices[1], this.currentRenderScale);
-      this.view2PixelMap = cache.pixelMap;
-      this.view2ViewSize = cache.displaySize;
+      this.view2PixelMap = this.placeholderPixelMap;
+      this.view2ViewSize = this.getPageDisplaySize(indices[1]);
       this.view2Visible = true;
     } else {
       this.view2PixelMap = undefined;
-      this.view2Visible = false;
     }
 
-    // 加载第三个页面
     if (indices.length > 2) {
-      const cache = await this.getPageCache(indices[2], this.currentRenderScale);
-      this.view3PixelMap = cache.pixelMap;
-      this.view3ViewSize = cache.displaySize;
+      this.view3PixelMap = this.placeholderPixelMap;
+      this.view3ViewSize = this.getPageDisplaySize(indices[2]);
       this.view3Visible = true;
     } else {
       this.view3PixelMap = undefined;
-      this.view3Visible = false;
     }
+
+    // 使用占位符尺寸立即更新总体视图大小
+    this.updateViewSize();
+
+    const tasks: Array<Promise<void>> = [];
+
+    // 异步加载第一个页面
+    if (indices.length > 0) {
+      tasks.push(this.getPageCache(indices[0], this.currentRenderScale)
+        .then(cache => {
+          this.view1PixelMap = cache.pixelMap;
+          this.view1ViewSize = cache.displaySize;
+        })
+      )
+    }
+
+    // 异步加载第二个页面
+    if (indices.length > 1) {
+      tasks.push(this.getPageCache(indices[1], this.currentRenderScale)
+        .then(cache => {
+          this.view2PixelMap = cache.pixelMap;
+          this.view2ViewSize = cache.displaySize;
+        })
+      )
+    }
+
+    // 异步加载第三个页面
+    if (indices.length > 2) {
+      tasks.push(this.getPageCache(indices[2], this.currentRenderScale)
+        .then(cache => {
+          this.view3PixelMap = cache.pixelMap;
+          this.view3ViewSize = cache.displaySize;
+        })
+      )
+    }
+
+    await Promise.all(tasks);
 
     // 更新总体视图大小
     this.updateViewSize();
