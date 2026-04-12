@@ -14,7 +14,7 @@ import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
-import { Stack } from '../components/Colletions';
+import { Stack as DataStack } from '../components/Colletions';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -53,6 +53,7 @@ struct PDFView {
   @State view3ViewSize: Vector2 = Vec2(0, 0);
   @State viewSize: Vector2 = Vec2(0, 0);
   @State currentPageIndex: number = 0;
+  @State isDocumentLoading: boolean = true;
   @State totalPageCount: number = 0;
   @State pageDisplayMode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' = 'single';
   @State pageFlipMode: 'side' | 'button' | 'extern' = 'side';
@@ -63,6 +64,7 @@ struct PDFView {
   @State showControls: boolean = true;
   @State controlsTransparency: number = 0.5;
   transparencyTimeoutId: number | undefined = undefined;
+  windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
   lastTouchPoint: Vector2 | undefined = undefined;
   lastPinchDistance: number | undefined = undefined;
   lastPinchCenter: Vector2 | undefined = undefined;
@@ -83,8 +85,8 @@ struct PDFView {
   placeholderPixelMap: PixelMap | undefined = undefined;
   activeDrawPath: Stroke = NewStroke();
   pathsToErase: Set<ReadonlyStroke> = new Set();
-  undoHistory: Stack<History> = new Stack<History>();
-  redoHistory: Stack<History> = new Stack<History>();
+  undoHistory: DataStack<History> = new DataStack<History>();
+  redoHistory: DataStack<History> = new DataStack<History>();
   @State hasUnsavedStrokes: boolean = false;
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
@@ -121,6 +123,44 @@ struct PDFView {
     this.sandBoxPath = args['sandboxPath'];
     this.saveTempPath = args['saveTempPath'];
     this.fileName = args['fileName'];
+
+    // Lightweight setup that won't block the UI
+    try {
+      this.showControls = this.preferences.getSync('showControls', true) as boolean;
+      this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+      this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
+      this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
+    } catch (e) {
+      hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
+    }
+
+    try {
+      this.windowStatusCallback = (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN;
+      this.mainWindow.on('windowStatusChange', this.windowStatusCallback);
+      this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
+    }
+
+    this.immersiveListening();
+    const context = this.getUIContext().getHostContext() as Context;
+    context.eventHub.on('onBackGround', this.onBackGround);
+
+    // Register hotkeys
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.gotoPrevPage()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.gotoNextPage()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => this.executeUndo()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => this.executeRedo()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.executeRedo()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.executeSave()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
+
+    // Defer heavy document loading so UI can render the loading indicator first
+    this.initializeDocument();
+  }
+
+  private async initializeDocument(): Promise<void> {
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
 
@@ -144,6 +184,7 @@ struct PDFView {
       }
 
       hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`)
+      this.isDocumentLoading = false;
       this.showAlertDialog('加载错误', `无法加载 PDF 文件: ${resultText}`)
         .then(() => {
           this.backToMainMenu();
@@ -160,51 +201,12 @@ struct PDFView {
     }
     this.pageGroups.push(pageGroup);
 
-    // 加载首选项
-
-    try {
-      this.showControls = this.preferences.getSync('showControls', true) as boolean;
-      this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
-      this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
-      this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
-    } catch (e) {
-      hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
-    }
-
-    try {
-      this.mainWindow.on('windowStatusChange', (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN);
-      this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
-    } catch (error) {
-      hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
-    }
-
-    this.immersiveListening();
-    const context = this.getUIContext().getHostContext() as Context;
-    context.eventHub.on('onBackGround', this.onBackGround);
-
     // Register page reorder callback
     this.pageGroups.onPageReordered = (oldIndex: number, newIndex: number) => this.handlePageReordered(oldIndex, newIndex);
 
-    // Previous page / Go to first page
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.gotoPrevPage()));
-    // Next page / Go to last page
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.gotoNextPage()));
-    // Undo (Ctrl+Z)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => this.executeUndo()));
-    // Redo (Ctrl+Shift+Z)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => this.executeRedo()));
-    // Redo (Ctrl+Y)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.executeRedo()));
-    // Save (Ctrl+S)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.executeSave()));
-    // Go to first page (Ctrl+Up/Left)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
-    // Go to last page (Ctrl+Down/Right/Space)
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
-
-    this.createPlaceholderPixelMap().then(() => {
-      this.gotoPage(0);
-    });
+    await this.createPlaceholderPixelMap();
+    await this.gotoPage(0);
+    this.isDocumentLoading = false;
     this.startTransparencyTimeout();
   }
 
@@ -212,6 +214,39 @@ struct PDFView {
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
+
+    // 取消注册窗口状态监听
+    if (this.windowStatusCallback) {
+      try {
+        this.mainWindow.off('windowStatusChange', this.windowStatusCallback);
+      } catch (_e) { /* ignore */ }
+    }
+
+    // 清除透明度定时器
+    if (this.transparencyTimeoutId) {
+      clearTimeout(this.transparencyTimeoutId);
+      this.transparencyTimeoutId = undefined;
+    }
+
+    // 释放所有页面缓存和缩略图
+    const totalGroups = this.pageGroups.totalCount();
+    for (let i = 0; i < totalGroups; i++) {
+      const group = this.pageGroups.getData(i);
+      for (const page of group.pages) {
+        page.evictViewerCache();
+        page.releaseThumbnail();
+      }
+    }
+
+    // 释放占位符 PixelMap
+    if (this.placeholderPixelMap) {
+      this.placeholderPixelMap.release();
+      this.placeholderPixelMap = undefined;
+    }
+
+    // 释放主文档
+    this.document.releaseDocument();
+    hilog.info(0, 'PDFView', '页面销毁，已释放所有资源');
   }
 
   onPageHide(): void {
@@ -501,7 +536,7 @@ struct PDFView {
     this.displayedPageIndices = this.calculateDisplayIndices(targetIndex);
 
     // Prefetch adjacent pages and evict distant page caches
-    this.pageGroups.prefetchPagesAround(targetIndex, 3, 5);
+    this.pageGroups.prefetchPagesAround(targetIndex, 3, 5, this.displayedPageIndices);
 
     // 加载并显示页面
     await this.loadAndDisplayPages(this.displayedPageIndices);
@@ -1479,7 +1514,8 @@ struct PDFView {
   }
 
   build() {
-    RelativeContainer() {
+    Stack() {
+      RelativeContainer() {
 
       Row(ContainerCfg) {
 
@@ -1798,5 +1834,24 @@ struct PDFView {
       }
     })
     .onTouchTestDone(() => this.startTransparencyTimeout())
+
+      if (this.isDocumentLoading) {
+        Column() {
+          LoadingProgress()
+            .width(64)
+            .height(64)
+          Text(`正在加载 ${this.fileName}`)
+            .fontSize(16)
+            .fontColor(Color.Gray)
+            .margin({ top: 12 })
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('sys.color.white'))
+      }
+    }
+    .width('100%')
+    .height('100%')
   }
 }
