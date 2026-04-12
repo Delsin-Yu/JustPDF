@@ -34,7 +34,6 @@ export interface History {
 }
 
 export interface PageCache {
-  page: pdfService.PdfPage;
   pixelMap: PixelMap;
   renderScale: number;
   baseSize: Vector2; // 原始页面大小（无缩放）
@@ -50,28 +49,32 @@ function cachePage(documentPath: string, documentIndex: number, renderScale: num
     throw new Error(`加载文档失败: ${result}`);
   }
 
-  const page = document.getPage(documentIndex);
+  try {
+    const page = document.getPage(documentIndex);
 
-  const baseSize = Vec2(page.getWidth(), page.getHeight());
-  const renderSize = mul(baseSize, renderScale);
-  const matrix = new pdfService.PdfMatrix();
-  matrix.x = 0;
-  matrix.y = 0;
-  matrix.width = renderSize.x;
-  matrix.height = renderSize.y;
-  matrix.rotate = 0;
-  const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
+    const baseSize = Vec2(page.getWidth(), page.getHeight());
+    const renderSize = mul(baseSize, renderScale);
+    const matrix = new pdfService.PdfMatrix();
+    matrix.x = 0;
+    matrix.y = 0;
+    matrix.width = renderSize.x;
+    matrix.height = renderSize.y;
+    matrix.rotate = 0;
+    const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
 
-  // 显示大小始终为 MIN_RENDER_SCALE (2)，以保持一致的 UI 缩放
-  const displaySize = mul(baseSize, 2);
+    // 显示大小始终为 MIN_RENDER_SCALE (2)，以保持一致的 UI 缩放
+    const displaySize = mul(baseSize, 2);
 
-  return {
-    page: page,
-    pixelMap: pixelMap,
-    renderScale: renderScale,
-    baseSize: baseSize,
-    displaySize: displaySize
-  };
+    return {
+      pixelMap: pixelMap,
+      renderScale: renderScale,
+      baseSize: baseSize,
+      displaySize: displaySize
+    };
+  } finally {
+    // 释放文档以避免内存泄漏 - 每次 cachePage 调用都会创建新的 PdfDocument
+    document.releaseDocument();
+  }
 }
 
 export interface ReadonlyPageInfo {
@@ -278,8 +281,18 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 
   public invalidateCaches(): void {
+    // Release all cached PixelMaps before clearing
+    for (const cache of this.caches.values()) {
+      try {
+        cache.pixelMap.release();
+      } catch (error) {
+        hilog.warn(0, 'PDFView', `invalidateCaches 释放 PixelMap 时出错: ${error}`);
+      }
+    }
     this.caches.clear();
-    this.pendingTasks.clear();
+
+    // Cancel pending cache tasks
+    this.cancelPendingTasks();
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
@@ -488,7 +501,8 @@ export class PageInfoDataSource implements IDataSource {
   public prefetchPagesAround(
     centerIndex: number,
     prefetchRange: number = 3,
-    evictionRange: number = 5
+    evictionRange: number = 5,
+    displayedPageIndices: number[] = []
   ): void {
     const totalPages = this.totalPageCount();
     
@@ -518,7 +532,7 @@ export class PageInfoDataSource implements IDataSource {
         const globalIndex = pageCounter;
         const distance = Math.abs(globalIndex - centerIndex);
         
-        if (distance > evictionRange) {
+        if (distance > evictionRange && !displayedPageIndices.includes(globalIndex)) {
           pageInfo.evictViewerCache();
         }
         
