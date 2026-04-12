@@ -1,13 +1,27 @@
 {
   "app": {
     "signingConfigs": [
+      {
+        "name": "default",
+        "material": {
+          "storeFile": "./certs/HarmonyOS.1.p12",
+          "storePassword": "0000001B3BE37E2128A3D4ADB4E0AAD2240B51A4F28F96EA3EBFD54BE6CD17BA913D1CC5BA5A78C44125A1",
+          "keyAlias": "Debug",
+          "keyPassword": "0000001BBEDBE4C103BC1E16E5AFAFEE03DCB0C4F0AB301520BEFD3ABCD0518D05587B3463C6412F665EE7",
+          "signAlg": "SHA256withECDSA",
+          "profile": "./certs/DebugDebug.p7b",
+          "certpath": "./certs/Debug.cer",
+//          "profile": "./certs/ReleaseRelease.p7b",
+//          "certpath": "./certs/Just PDF Release.cer"
+        }
+      }
     ],
     "products": [
       {
         "name": "default",
         "signingConfig": "default",
-        "targetSdkVersion": "6.0.0(20)",
-        "compatibleSdkVersion": "6.0.0(20)",
+        "targetSdkVersion": "6.0.1(21)",
+        "compatibleSdkVersion": "6.0.1(21)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {
