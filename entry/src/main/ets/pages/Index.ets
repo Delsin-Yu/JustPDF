@@ -7,6 +7,9 @@ const TAG = 'JustPDFIndex';
 @Entry
 @Component
 struct Index {
+  @State isLoading: boolean = false;
+  @State loadingFileName: string = '';
+
   aboutToAppear(): void {
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
@@ -25,12 +28,18 @@ struct Index {
   async loadAndViewFile(uri: string) {
     let uiContext = this.getUIContext();
     let dir = uiContext.getHostContext()!.tempDir;
-    let sourceFile = fs.openSync(uri, fs.OpenMode.READ_WRITE);
+    let sourceFile = await fs.open(uri, fs.OpenMode.READ_ONLY);
     let fileName = sourceFile.name;
+    this.loadingFileName = fileName;
+    this.isLoading = true;
     let file = dir + "/" + fileName;
     let tempFile = dir + "/saveTemp_" + fileName;
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
-    await fs.copyFile(sourceFile.fd, file);
+    try {
+      await fs.copyFile(sourceFile.fd, file);
+    } finally {
+      await fs.close(sourceFile);
+    }
     hilog.info(0x0000, TAG, "copyFile succeed");
 
     let args: Record<string, string> = {
@@ -50,25 +59,35 @@ struct Index {
         Text("Just PDF")
           .fontSize('70lpx')
           .fontWeight(FontWeight.Bold)
-        Button("选择文件")
-          .type(ButtonType.Capsule)
-          .fontSize('30lpx')
-          .fontWeight(FontWeight.Bold)
-          .width('200lpx')
-          .height('50lpx')
-          .onClick(async () => {
-            try {
-              const documentSelectOptions = new picker.DocumentSelectOptions();
-              documentSelectOptions.maxSelectNumber = 1;
-              documentSelectOptions.fileSuffixFilters = ['.pdf'];
-              let uris = await this.documentViewPicker.select(documentSelectOptions);
-              let uri = uris[0];
-              await this.loadAndViewFile(uri);
-            } catch (err) {
-              let businessErr = err as BusinessError;
-              hilog.info(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
-            }
-          })
+        if (this.isLoading) {
+          LoadingProgress()
+            .width('60lpx')
+            .height('60lpx')
+          Text(`正在加载 ${this.loadingFileName}`)
+            .fontSize('24lpx')
+            .fontColor(Color.Gray)
+        } else {
+          Button("选择文件")
+            .type(ButtonType.Capsule)
+            .fontSize('30lpx')
+            .fontWeight(FontWeight.Bold)
+            .width('200lpx')
+            .height('50lpx')
+            .onClick(async () => {
+              try {
+                const documentSelectOptions = new picker.DocumentSelectOptions();
+                documentSelectOptions.maxSelectNumber = 1;
+                documentSelectOptions.fileSuffixFilters = ['.pdf'];
+                let uris = await this.documentViewPicker.select(documentSelectOptions);
+                let uri = uris[0];
+                await this.loadAndViewFile(uri);
+              } catch (err) {
+                let businessErr = err as BusinessError;
+                hilog.info(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+                this.isLoading = false;
+              }
+            })
+        }
       }
       .width('100%')
     }
