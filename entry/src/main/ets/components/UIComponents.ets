@@ -91,7 +91,8 @@ export struct StyleText {
 
   build() {
     Text(this.text)
-      .size(ButtonSize)
+      .height(ButtonHeight)
+      .constraintSize({ minWidth: 80 })
       .hitTestBehavior(HitTestMode.Block)
       .monopolizeEvents(true)
       .fontSize(ButtonFontSize)
@@ -103,6 +104,7 @@ export struct StyleText {
         offsetY: 5
       })
       .textAlign(TextAlign.Center)
+      .maxLines(1)
       .alignSelf(ItemAlign.End)
   }
 }
