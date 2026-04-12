@@ -1,9 +1,11 @@
 import { add, hslToColor, mul, toSizeVp, Vec2, Vector2 } from './Numbers';
 import { PageGroup, PageInfo, PageInfoDataSource, ReadonlyPageInfo } from './PageInfo';
-import { ButtonColor, ButtonColorSemiTransparent, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, StyleButton, TopLeft, TopRight } from './UIComponents';
+import { ButtonColor, ButtonColorSemiTransparent, ContainerPadding, ContainerSpacing, ContainerWideCfg, ContainerWidePadding, ContainerWideSpacing, FullRect, showAlertDialog, StyleButton, TopLeft, TopRight, toResultCode } from './UIComponents';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { pickFilePathAsync } from './GUIO';
+import { pdfService } from '@kit.PDFKit';
 
 const arrowColor = '#ffffffff';
 const hoverColor = '#a8000000';
@@ -56,6 +58,35 @@ struct AppendPageTarget {
       event.setResult(DragResult.DRAG_SUCCESSFUL);
       this.dataSource.movePageToGroupEnd(draggedItemIndex, this.pageGroup);
     })
+    .bindMenu([
+      {
+        value: '从文件导入页面',
+        action: () => {
+          pickFilePathAsync(['.pdf']).then(uri => {
+            if (!uri) {
+              return;
+            }
+            const document = new pdfService.PdfDocument();
+            const result = document.loadDocument(uri);
+            if (!result) {
+              showAlertDialog('加载错误', `无法加载 PDF 文件: ${toResultCode(result)}`, this.getUIContext());
+              hilog.error(0, 'PDFView', `Failed to load PDF document from ${uri}`);
+              return;
+            }
+            const pages = new Array<PageInfo>();
+            // TODO: 完成从外部 PDF 导入页面的功能
+            document.releaseDocument();
+
+          });
+        }
+      },
+      {
+        value: '拖放以添加页面',
+        enabled: false,
+        action: () => {
+        }
+      }
+    ])
   }
 }
 
