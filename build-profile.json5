@@ -9,8 +9,8 @@
           "keyAlias": "Debug",
           "keyPassword": "0000001BBEDBE4C103BC1E16E5AFAFEE03DCB0C4F0AB301520BEFD3ABCD0518D05587B3463C6412F665EE7",
           "signAlg": "SHA256withECDSA",
-          "profile": "./certs/DebugDebug.p7b",
-          "certpath": "./certs/Debug.cer",
+          "profile": "./certs/Debug2Debug.p7b",
+          "certpath": "./certs/Debug2.cer",
 //          "profile": "./certs/ReleaseRelease.p7b",
 //          "certpath": "./certs/Just PDF Release.cer"
         }
