@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
+import { fileIo as fs } from '@kit.CoreFileKit';
 
 export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
@@ -32,9 +33,7 @@ export default class EntryAbility extends UIAbility {
       return;
     }
     AppStorage.setOrCreate('launchUri', uri);
-    this.currentRouter.replaceUrl({ url: 'pages/Index' }).catch(() => {
-      hilog.error(0, 'PDFView', 'Failed to navigate to Index page on new want.');
-    });
+    this.tryDirectLaunch();
   }
 
   onDestroy(): void {
@@ -74,8 +73,41 @@ export default class EntryAbility extends UIAbility {
       }
       this.restoreWindowState();
 
+      // If a launch URI is already set, skip Index and go directly to PDFView
+      this.tryDirectLaunch();
+
       hilog.info(0, 'PDFView', 'Succeeded in loading the content.');
     });
+  }
+
+  private async tryDirectLaunch(): Promise<void> {
+    const launchUri = AppStorage.get<string>('launchUri');
+    if (!launchUri || !this.currentRouter) {
+      return;
+    }
+    // Clear launchUri so Index won't also try to load it
+    AppStorage.setOrCreate('launchUri', '');
+    try {
+      const dir = this.context.tempDir;
+      const sourceFile = await fs.open(launchUri, fs.OpenMode.READ_ONLY);
+      const fileName = sourceFile.name;
+      const file = dir + '/' + fileName;
+      const tempFile = dir + '/saveTemp_' + fileName;
+      try {
+        await fs.copyFile(sourceFile.fd, file);
+      } finally {
+        await fs.close(sourceFile);
+      }
+      const args: Record<string, string> = {
+        'systemPath': launchUri,
+        'sandboxPath': file,
+        'saveTempPath': tempFile,
+        'fileName': fileName
+      };
+      this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
+    } catch (error) {
+      hilog.error(0, 'PDFView', `Direct launch failed: ${error}`);
+    }
   }
 
   onMemoryLevel(level: AbilityConstant.MemoryLevel): void {
