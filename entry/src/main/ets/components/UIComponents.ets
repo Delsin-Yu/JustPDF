@@ -1,5 +1,6 @@
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { Stack } from '@kit.ArkTS';
+import { pdfService } from '@kit.PDFKit';
 
 const HalfButtonFontSize: Length = '10vp';
 const ButtonFontSize: Length = '20vp';
@@ -32,10 +33,10 @@ export const ContainerSpacing: number = 8;
 export const ContainerCfg: RowOptions | ColumnOptions = { space: `${ContainerSpacing}px` };
 
 export const ContainerPadding: Padding = {
-  left: `${ContainerSpacing}px`,
-  right: `${ContainerSpacing}px`,
-  top: `${ContainerSpacing}px`,
-  bottom: `${ContainerSpacing}px`
+  left: '16px',
+  right: '16px',
+  top: '16px',
+  bottom: '16px'
 }
 
 
@@ -85,6 +86,39 @@ export function getCheckIconName(checked: boolean): string {
   return 'sys.symbol.square';
 }
 
+export function toResultCode(parseResult: pdfService.ParseResult): string {
+  switch (parseResult) {
+    case pdfService.ParseResult.PARSE_SUCCESS:
+      return '成功';
+    case pdfService.ParseResult.PARSE_ERROR_FILE:
+      return '文件错误';
+    case pdfService.ParseResult.PARSE_ERROR_FORMAT:
+      return '格式错误';
+    case pdfService.ParseResult.PARSE_ERROR_PASSWORD:
+      return '暂不支持加密的 PDF 文件';
+    case pdfService.ParseResult.PARSE_ERROR_HANDLER:
+      return '处理程序错误';
+    case pdfService.ParseResult.PARSE_ERROR_CERT:
+      return '证书错误';
+    default:
+      return '未知错误';
+  }
+}
+
+export function showAlertDialog(title: string, message: string, uiContext: UIContext): Promise<void> {
+  return new Promise<void>((resolve) => {
+    uiContext.showAlertDialog({
+    title: title,
+    message: message,
+    confirm: {
+      defaultFocus: true,
+      action: () => resolve(),
+      value: $r('sys.string.general_confirm')
+    }
+  });
+});
+}
+
 @ComponentV2
 export struct StyleText {
   @Param text: string = '';
@@ -118,6 +152,7 @@ export struct StyleButton {
   @Param onClickCallback: () => void = () => {
   };
   @Param alternateColor: ResourceColor | undefined = undefined;
+  @Param menuPlacement: Placement = Placement.Bottom;
 
   build() {
     Button() {
@@ -136,9 +171,94 @@ export struct StyleButton {
     .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
     .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
       backgroundColor: ButtonColor,
-      outlineColor: Color.Transparent
+      outlineColor: Color.Transparent,
+      placement: this.menuPlacement
     })
     .onClick(() => this.onClickCallback())
+  }
+}
+
+const IconButtonSize: number = 44;
+const IconFontSize: number = 20;
+
+@ComponentV2
+export struct StyleIconButton {
+  @Param icon: Resource = $r('sys.symbol.more');
+  @Param iconSize: number = IconFontSize;
+  @Param label: string = '';
+  @Param onClickCallback: () => void = () => {
+  };
+  @Param alternateColor: ResourceColor | undefined = undefined;
+  @Param menuElement: MenuElement[] | undefined = undefined;
+  @Param menuPlacement: Placement = Placement.Bottom;
+
+  @Builder
+  iconButton() {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(this.icon)
+        .fontSize(this.iconSize)
+        .fontColor([Color.White])
+        .fontWeight(FontWeight.Bold)
+    }
+    .width(IconButtonSize)
+    .height(IconButtonSize)
+    .hitTestBehavior(HitTestMode.Block)
+    .monopolizeEvents(true)
+    .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
+    .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
+      backgroundColor: ButtonColor,
+      outlineColor: Color.Transparent,
+      placement: this.menuPlacement
+    })
+    .onClick(() => this.onClickCallback())
+  }
+
+  build() {
+    if (this.label != '') {
+      Row({ space: 8 }) {
+        this.iconButton()
+        Text(this.label)
+          .fontSize(13)
+          .fontColor(Color.White)
+          .fontWeight(FontWeight.Bold)
+          .textShadow({
+            type: ShadowType.BLUR,
+            radius: 3,
+            offsetX: 0,
+            offsetY: 1
+          })
+      }
+      .alignItems(VerticalAlign.Center)
+    } else {
+      this.iconButton()
+    }
+  }
+}
+
+@ComponentV2
+export struct StyleIconBadgeButton {
+  @Param icon: Resource = $r('sys.symbol.more');
+  @Param iconSize: number = IconFontSize;
+  @Param count: number = 0;
+  @Param maxCount: number = 99;
+  @Param onClickCallback: () => void = () => {
+  };
+
+  build() {
+    Badge({
+      count: this.count,
+      maxCount: this.maxCount,
+      position: BadgePosition.RightTop,
+      style: StyleBadgeStyle
+    }) {
+      StyleIconButton({
+        icon: this.icon,
+        iconSize: this.iconSize,
+        onClickCallback: this.onClickCallback
+      })
+    }
+    .width(IconButtonSize)
+    .height(IconButtonSize)
   }
 }
 
