@@ -1,245 +1,280 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ContainerWideCfg, ContainerWidePadding } from './UIComponents';
 
-const level2Color = '#4DA6FF';
-const level3Color = '#66FF99';
-const level4Color = '#99FFCC';
-const level5Color = '#FFA500';
-const level6Color = '#FFD700';
+const h2 = '#4DA6FF';
+const h3 = '#66FF99';
+const h4 = '#99FFCC';
+const highlight = '#FFA500';
+const kbd = '#FFD700';
+const bodySize = 16;
+const lineGap = LengthMetrics.vp(5);
 
 @CustomDialog
 export struct TutorialDialogBuilder {
   private controller: CustomDialogController;
+  @State currentTab: number = 0;
+
+  @Builder
+  tabBar(title: string, index: number) {
+    Column() {
+      Text(title)
+        .fontSize(15)
+        .fontWeight(this.currentTab == index ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor(this.currentTab == index ? h2 : '#888888')
+        .padding({ left: 14, right: 14, top: 10, bottom: 8 })
+      Divider()
+        .width(this.currentTab == index ? '60%' : '0%')
+        .strokeWidth(2)
+        .color(h2)
+        .animation({ duration: 200, curve: Curve.EaseOut })
+    }
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  tabBasics() {
+    Scroll() {
+      Text() {
+        Span('Just PDF 是为音乐演奏从业者设计的 PDF 阅读器，提供简洁、流畅的阅读及标注体验，以及对常见翻谱器的支持。\n\n')
+
+        Span('打开文件\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('从文件管理器打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 在文件管理器中找到 PDF 文件，点击即可使用 Just PDF 打开\n')
+        Span('• 应用将直接进入阅读界面，无需额外操作\n\n')
+
+        Span('从应用内打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 启动 Just PDF，点击"选择文件"按钮\n')
+        Span('• 从文件选择器中选择要查看的 PDF 文件\n\n')
+
+        Span('菜单按钮\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('屏幕左下角的圆形按钮是菜单开关。点击展开后可见以下功能按钮：\n\n')
+
+        Span('操作').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 切换拖动、绘制、擦除模式\n')
+        Span('跳转').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 重置视口、跳转首页 / 尾页\n')
+        Span('页面').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 打开页面管理器（缩略图浏览，拖动排序）\n')
+        Span('设置').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 显示模式、翻页模式、进度滑块开关\n')
+        Span('分享').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 通过系统分享面板分享 PDF 文件\n')
+        Span('全屏').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 切换全屏 / 窗口模式（仅限平板和二合一设备）\n')
+        Span('教程').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 打开本教程\n\n')
+
+        Span('设置选项\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('显示模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 单页 — 仅显示一页\n')
+        Span('• 双页 — 按对显示（1-2, 3-4, …）\n')
+        Span('• 双页连续 — 连续显示当前页与下一页（1-2, 2-3, …）\n')
+        Span('• 三页 — 按组显示（1-3, 4-6, …）\n')
+        Span('• 三页连续 — 连续显示当前页与后两页（1-3, 2-4, …）\n\n')
+
+        Span('翻页模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 屏侧翻页 — 点击屏幕左侧 30% 上一页，右侧 30% 下一页\n')
+        Span('• 按钮翻页 — 使用屏幕右下角的 < > 按钮翻页\n')
+        Span('• 外设翻页 — 仅通过键盘或蓝牙翻谱器翻页，隐藏屏幕翻页控件\n\n')
+
+        Span('进度滑块\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 开启后在屏幕右侧显示垂直滑块，拖动可快速跳转到任意页面\n')
+      }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
+    }.layoutWeight(1).width('100%')
+  }
+
+  @Builder
+  tabNavigation() {
+    Scroll() {
+      Text() {
+        Span('缩放与平移\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('双指缩放\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 两根手指捏合或展开来缩放页面\n')
+        Span('• 缩放范围：0.5x ~ 9x\n')
+        Span('• 在绘制或擦除模式下，双指缩放会自动暂停注释操作\n\n')
+
+        Span('单指拖动\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 在"拖动"模式下，单指滑动来移动页面\n\n')
+
+        Span('重置视口\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 通过菜单的"跳转"→"重置视口"将页面恢复为适应屏幕大小\n\n')
+
+        Span('快速导航\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('• 通过菜单的"跳转"按钮，可以跳转首页或尾页\n')
+        Span('• 拖动右侧进度滑块（需在设置中开启）快速定位到任意页面\n')
+        Span('• 右下角显示当前页码/总页数\n\n')
+
+        Span('页面管理器\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('• 通过菜单的"页面"按钮打开\n')
+        Span('• 以缩略图网格形式浏览所有页面\n')
+        Span('• 点击缩略图可直接跳转到该页\n')
+        Span('• 长按并拖动缩略图可重新排序页面\n')
+      }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
+    }.layoutWeight(1).width('100%')
+  }
+
+  @Builder
+  tabAnnotation() {
+    Scroll() {
+      Text() {
+        Span('注释模式\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('通过菜单的"操作"按钮切换以下模式：\n\n')
+
+        Span('拖动模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 默认模式，用于浏览和导航\n')
+        Span('• 单指拖动页面，双指缩放\n\n')
+
+        Span('绘制模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 在页面上绘制橙色标记\n')
+        Span('• 单指滑动即可绘制\n')
+        Span('• 双指仍可缩放和拖动页面\n\n')
+
+        Span('擦除模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 触摸或滑过笔画即可擦除\n')
+        Span('• 擦除范围会高亮显示\n')
+        Span('• 仅擦除本次添加的注释（橙色），不影响已保存的注释\n\n')
+
+        Span('撤销与重做\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('当存在注释操作时，屏幕右下角会出现撤销、重做和保存按钮。\n\n')
+
+        Span('• ')
+        Span('撤销').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 撤销上一次操作，按钮显示可撤销次数\n')
+        Span('• ')
+        Span('重做').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 恢复已撤销的操作\n')
+        Span('• 执行新的绘制或擦除会清空重做历史\n')
+        Span('• 撤销/重做会自动导航到相关页面\n')
+        Span('• 三指同时触摸屏幕可快速撤销（仅在绘制/擦除模式下）\n\n')
+
+        Span('保存注释\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('1. 点击保存按钮\n')
+        Span('2. 选择保存位置和文件名\n')
+        Span('3. 所有注释将嵌入 PDF 文件\n')
+        Span('4. 保存成功后，注释历史将清空\n\n')
+
+        Span('提示：\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('• 注释保存为 PDF 标准格式，可在其他阅读器中查看\n')
+        Span('• 按钮变暗（半透明）表示当前无法使用\n')
+      }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
+    }.layoutWeight(1).width('100%')
+  }
+
+  @Builder
+  tabShortcuts() {
+    Scroll() {
+      Text() {
+        Span('键盘快捷键\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+        Span('适用于平板和二合一设备的外接键盘。\n\n')
+
+        Span('导航\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• ')
+        Span('↑ / ←').fontFamily('monospace').fontColor(kbd)
+        Span('  上一页\n')
+        Span('• ')
+        Span('↓ / → / 空格').fontFamily('monospace').fontColor(kbd)
+        Span('  下一页\n')
+        Span('• ')
+        Span('Ctrl + ↑ / ←').fontFamily('monospace').fontColor(kbd)
+        Span('  跳转首页\n')
+        Span('• ')
+        Span('Ctrl + ↓ / →').fontFamily('monospace').fontColor(kbd)
+        Span('  跳转尾页\n\n')
+
+        Span('编辑\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• ')
+        Span('Ctrl + Z').fontFamily('monospace').fontColor(kbd)
+        Span('  撤销\n')
+        Span('• ')
+        Span('Ctrl + Shift + Z / Ctrl + Y').fontFamily('monospace').fontColor(kbd)
+        Span('  重做\n')
+        Span('• ')
+        Span('Ctrl + S').fontFamily('monospace').fontColor(kbd)
+        Span('  保存\n\n')
+
+        Span('手势\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('• ')
+        Span('三指触摸').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 快速撤销（仅在绘制/擦除模式下）\n')
+        Span('• ')
+        Span('双指捏合').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 缩放页面\n')
+        Span('• ')
+        Span('单指拖动').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 拖动模式下平移页面，绘制模式下绘制标记\n')
+      }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
+    }.layoutWeight(1).width('100%')
+  }
+
+  @Builder
+  tabFaq() {
+    Scroll() {
+      Text() {
+        Span('Q: 为什么我的注释没有保存？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 请确保点击保存按钮并选择保存位置。注释只有在保存后才会永久嵌入 PDF 文件。\n\n')
+
+        Span('Q: 如何删除错误的标注？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 切换到"擦除"模式，触摸要删除的笔画。或使用撤销按钮撤销最近的操作。\n\n')
+
+        Span('Q: 全屏按钮在哪里？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 全屏按钮仅在平板和二合一设备上显示，在菜单展开后可见。\n\n')
+
+        Span('Q: 保存的注释能在其他应用中看到吗？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 是的，注释保存为 PDF 标准格式（Polyline Annotation），可在任何 PDF 阅读器中查看。\n\n')
+
+        Span('Q: 如何使用蓝牙翻谱器？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 在设置中将翻页模式切换为"外设翻页"，然后使用蓝牙翻谱器的方向键翻页。\n\n')
+
+        Span('感谢使用 Just PDF！').fontStyle(FontStyle.Italic).fontColor('#CCCCCC')
+      }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
+    }.layoutWeight(1).width('100%')
+  }
 
   build() {
-
     Column(ContainerWideCfg) {
 
       Text('Just PDF 使用教程')
         .fontSize(26)
         .fontWeight(FontWeight.Bold)
-        .height(60);
+        .height(60)
 
-      Scroll() {
-        Text() {
-          Span('Just PDF 是为音乐演奏从业者设计的 PDF 阅读器，提供简洁、流畅的阅读及标注体验，以及对常见翻谱器的支持。\n\n')
+      Tabs({ index: this.currentTab }) {
+        TabContent() {
+          this.tabBasics()
+        }.tabBar(this.tabBar('基础', 0))
 
-          Span('打开 PDF 文件\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
+        TabContent() {
+          this.tabNavigation()
+        }.tabBar(this.tabBar('导航', 1))
 
-          Span('从应用内打开\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('1. 启动 Just PDF 应用\n')
-          Span('2. 点击"选择文件"按钮\n')
-          Span('3. 从文件选择器中选择您要查看的 PDF 文件\n\n')
+        TabContent() {
+          this.tabAnnotation()
+        }.tabBar(this.tabBar('注释', 2))
 
-          Span('从文件管理器打开\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 在文件管理器中找到 PDF 文件\n')
-          Span('• 点击文件并选择使用 Just PDF 打开\n\n')
+        TabContent() {
+          this.tabShortcuts()
+        }.tabBar(this.tabBar('快捷键', 3))
 
-          Span('界面控制\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('显示/隐藏控件\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"收起"按钮可隐藏大部分控制按钮\n')
-          Span('• 点击"展开"按钮可重新显示控制按钮\n')
-          Span('• 隐藏控件可获得更大的阅读区域\n\n')
-
-          Span('全屏模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"全屏"按钮进入全屏模式（仅限平板的智慧多窗模式和二合一设备）\n')
-          Span('• 点击"窗口"按钮退出全屏模式\n')
-          Span('• 全屏模式下获得最大的阅读空间\n\n')
-
-          Span('页面显示模式\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('Just PDF 提供五种页面显示模式，您可以通过点击"显示"按钮选择：\n\n')
-
-          Span('单页模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 仅显示一页\n\n')
-
-          Span('双页模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 同时显示两页（类似打开的书本）\n')
-          Span('• 页面按对分组（第 1-2 页，第 3-4 页，等等）\n\n')
-
-          Span('双页连续模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 在显示当前页的同时，同时显示下一页\n')
-          Span('• 连续浏览，不按对分组（第 1-2 页，第 2-3 页，等等）\n\n')
-
-          Span('三页模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 同时显示三页\n')
-          Span('• 页面按组分组（第 1-3 页，第 4-6 页，等等）\n\n')
-
-          Span('三页连续模式\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 在显示当前页的同时，同时显示下两页\n')
-          Span('• 连续浏览，不按组分组（第 1-3 页，第 2-4 页，等等）\n\n')
-
-          Span('页面导航\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('翻页模式\n\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-
-          Span('Just PDF 提供三种翻页方式，通过"模式"按钮选择：\n\n')
-
-          Span('屏侧翻页\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 点击屏幕左侧 30% 区域：上一页\n')
-          Span('• 点击屏幕右侧 30% 区域：下一页\n')
-          Span('• 屏幕边缘会显示渐变提示\n\n')
-
-          Span('按钮翻页\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 使用屏幕右下角的 < 和 > 按钮翻页\n\n')
-
-          Span('外设翻页\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 仅使用键盘方向键，蓝牙或外接或设备翻页\n')
-          Span('• 隐藏屏幕翻页控件，获得更清爽的阅读体验\n\n')
-
-          Span('快速导航\n\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-
-          Span('• ')
-          Span('首页按钮').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('：立即跳转到第一页\n')
-          Span('• ')
-          Span('尾页按钮').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('：立即跳转到最后一页\n')
-          Span('• ')
-          Span('页面滑块').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('：拖动右侧的垂直滑块快速跳转到任意页面\n\n')
-
-          Span('缩放和平移\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('双指缩放\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 使用两根手指在屏幕上捏合或展开来缩放页面\n\n')
-
-          Span('拖动平移\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 在"拖动"模式下，使用单指拖动来移动页面\n\n')
-
-          Span('视口重置\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"视口"按钮可将页面重置为适应屏幕的大小和位置\n\n')
-
-          Span('注释功能\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('Just PDF 提供基础、仅添加的PDF的注释工具，让您可以迅速的在 PDF 上做标记。\n\n')
-
-          Span('注释模式\n\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-
-          Span('通过右侧的模式按钮切换：\n\n')
-
-          Span('拖动模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 默认模式，用于浏览和导航\n')
-          Span('• 可以使用单指或双指拖动移动页面\n')
-          Span('• 可以使用双指缩放\n\n')
-
-          Span('绘制模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 在 PDF 页面上绘制橙色标记\n')
-          Span('• 使用单指在屏幕上滑动即可绘制\n')
-          Span('• 使用双指来缩放以及拖动页面\n\n')
-
-          Span('擦除模式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(level4Color)
-          Span('• 擦除之前绘制的标记\n')
-          Span('• 触摸或滑过笔画即可擦除\n')
-          Span('• 擦除范围会高亮显示\n')
-          Span('• 仅能够擦除此次添加的注释（橙色），不会影响到已经保存的注释\n\n')
-
-          Span('注释提示\n\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-
-          Span('• 在绘制或擦除模式下，双指缩放会自动暂停注释操作\n')
-          Span('• 使用三指同时触摸屏幕可快速撤销上一次操作\n')
-          Span('• 切换页面时，注释会自动保存到对应页面\n')
-          Span('• 未保存的注释会在"保存"按钮上显示提醒标记（!）\n\n')
-
-          Span('撤销和重做\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('撤销操作\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"撤回"按钮撤销上一次绘制或擦除操作\n')
-          Span('• 按钮上的数字显示可撤销的操作数量\n')
-          Span('• 支持跨页面撤销\n')
-          Span('• 快捷键：')
-          Span('Ctrl + Z').fontFamily("monospace").fontColor(level6Color)
-          Span('\n')
-          Span('• 手势：三指同时触摸屏幕\n\n')
-
-          Span('重做操作\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"重做"按钮恢复已撤销的操作\n')
-          Span('• 按钮上的数字显示可重做的操作数量\n')
-          Span('• 快捷键：')
-          Span('Ctrl + Shift + Z').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('Ctrl + Y').fontFamily("monospace").fontColor(level6Color)
-          Span('\n\n')
-
-          Span('注意事项\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 执行新的绘制或擦除操作会清空重做历史\n')
-          Span('• 撤销/重做会自动导航到相关页面\n\n')
-
-          Span('保存和分享\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('保存注释\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('1. 点击"保存"按钮\n')
-          Span('2. 选择保存位置和文件名\n')
-          Span('3. 应用会将所有注释嵌入到 PDF 文件中\n')
-          Span('4. 保存成功后，注释历史会被清空\n\n')
-
-          Span('注意：\n').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('• 保存按钮上的感叹号（!）表示有未保存的注释\n')
-          Span('• 保存的注释会作为 PDF 标准注释，可在其他 PDF 阅读器中查看\n')
-          Span('• 快捷键：')
-          Span('Ctrl + S').fontFamily("monospace").fontColor(level6Color)
-          Span('\n\n')
-
-          Span('分享文件\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• 点击"分享"按钮打开系统分享面板\n')
-          Span('• 支持通过各种方式分享当前 PDF 文件\n')
-          Span('• 支持 HarmonyOS 特有的碰一碰分享和手势分享功能\n\n')
-
-          Span('键盘快捷键\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('Just PDF 支持以下键盘快捷键（适用于平板和二合一设备）：\n\n')
-
-          Span('导航\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• ')
-          Span('↑').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('←').fontFamily("monospace").fontColor(level6Color)
-          Span('：上一页\n')
-          Span('• ')
-          Span('↓').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('→').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('空格').fontFamily("monospace").fontColor(level6Color)
-          Span('：下一页\n')
-          Span('• ')
-          Span('Ctrl + ↑').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('Ctrl + ←').fontFamily("monospace").fontColor(level6Color)
-          Span('：跳转到首页\n')
-          Span('• ')
-          Span('Ctrl + ↓').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('Ctrl + →').fontFamily("monospace").fontColor(level6Color)
-          Span('：跳转到尾页\n\n')
-
-          Span('编辑\n').fontSize(20).fontWeight(FontWeight.Medium).fontColor(level3Color)
-          Span('• ')
-          Span('Ctrl + Z').fontFamily("monospace").fontColor(level6Color)
-          Span('：撤销\n')
-          Span('• ')
-          Span('Ctrl + Shift + Z').fontFamily("monospace").fontColor(level6Color)
-          Span(' 或 ')
-          Span('Ctrl + Y').fontFamily("monospace").fontColor(level6Color)
-          Span('：重做\n')
-          Span('• ')
-          Span('Ctrl + S').fontFamily("monospace").fontColor(level6Color)
-          Span('：保存\n\n')
-
-          Span('常见问题\n\n').fontSize(24).fontWeight(FontWeight.Bold).fontColor(level2Color)
-
-          Span('Q: 为什么我的注释没有保存？\n').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('A: 请确保点击"保存"按钮并选择保存位置。注释只有在保存后才会永久嵌入 PDF 文件。\n\n')
-
-          Span('Q: 如何删除错误的标注？\n').fontWeight(FontWeight.Bold).fontColor(level5Color)
-          Span('A: 切换到"擦除"模式，然后触摸要删除的笔画。或者使用"撤回"按钮撤销最近的操作。\n\n')
-
-          Span('感谢使用 Just PDF！如有任何问题或建议，欢迎反馈。').fontStyle(FontStyle.Italic).fontColor('#CCCCCC')
-        }.fontSize(10 + 6)
-        .lineSpacing(LengthMetrics.vp(5))
-        .padding(20)
-      }.layoutWeight(1).width('100%')
+        TabContent() {
+          this.tabFaq()
+        }.tabBar(this.tabBar('FAQ', 4))
+      }
+      .barMode(BarMode.Fixed)
+      .barBackgroundColor(Color.Transparent)
+      .divider({ strokeWidth: 0.5, color: '#333333' })
+      .onChange(index => this.currentTab = index)
+      .layoutWeight(1)
+      .width('100%')
 
     }
     .margin(ContainerWidePadding)
