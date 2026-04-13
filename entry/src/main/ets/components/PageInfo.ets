@@ -80,7 +80,6 @@ function cachePage(documentPath: string, documentIndex: number, renderScale: num
 export interface ReadonlyPageInfo {
   readonly globalPageIndex: number | undefined;
   readonly localPageIndex: number;
-  readonly pdfPage: pdfService.PdfPage;
   readonly strokes: readonly ReadonlyStroke[];
   readonly pageThumbnail: image.PixelMap | undefined;
   retainThumbnail(preferredSize: Vector2): void;
@@ -103,7 +102,8 @@ export class PageInfo implements ReadonlyPageInfo {
   public readonly pageGuid: string = util.generateRandomUUID(true);
   public globalPageIndex: number | undefined;
   public localPageIndex: number;
-  public pdfPage: pdfService.PdfPage;
+  private _pdfPage: pdfService.PdfPage | undefined = undefined;
+  private pdfDocument: pdfService.PdfDocument;
   public strokes: Stroke[] = [];
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, PendingCacheTask> = new Map();
@@ -113,9 +113,16 @@ export class PageInfo implements ReadonlyPageInfo {
   private thumbnailRefCount: number = 0;
   public associatedSource: PageInfoDataSource | undefined = undefined;
 
-  constructor(localPageIndex: number, pdfPage: pdfService.PdfPage, pagePath: string) {
+  public get pdfPage(): pdfService.PdfPage {
+    if (!this._pdfPage) {
+      this._pdfPage = this.pdfDocument.getPage(this.localPageIndex);
+    }
+    return this._pdfPage;
+  }
+
+  constructor(localPageIndex: number, pdfDocument: pdfService.PdfDocument, pagePath: string) {
     this.localPageIndex = localPageIndex;
-    this.pdfPage = pdfPage;
+    this.pdfDocument = pdfDocument;
     this.pagePath = pagePath;
   }
 
@@ -278,6 +285,18 @@ export class PageInfo implements ReadonlyPageInfo {
       }
     }
     return lowestCache;
+  }
+
+  /**
+   * Returns an existing preview PixelMap (lowest-res cache or thumbnail) without triggering new work.
+   * Used as a placeholder during page transitions to avoid white flashes.
+   */
+  public getExistingPreview(): PixelMap | undefined {
+    const cache = this.getLowestRenderScaleCache();
+    if (cache !== undefined) {
+      return cache.pixelMap;
+    }
+    return this.pageThumbnail;
   }
 
   public invalidateCaches(): void {
@@ -563,6 +582,14 @@ export class PageInfoDataSource implements IDataSource {
   public getPageRawSize(index: number): Vector2 {
     const result = this.getPageInfo(index);
     return Vec2(result[1].pdfPage.getWidth(), result[1].pdfPage.getHeight());
+  }
+
+  /**
+   * Returns an existing preview PixelMap for the page without triggering new work.
+   */
+  public getExistingPreview(index: number): PixelMap | undefined {
+    const result = this.getPageInfo(index);
+    return result[1].getExistingPreview();
   }
 
   public iteratePageStrokes(index: number): Iterable<ReadonlyStroke> {
