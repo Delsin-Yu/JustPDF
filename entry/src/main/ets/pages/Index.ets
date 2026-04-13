@@ -1,6 +1,7 @@
-import { fileIo as fs, picker } from '@kit.CoreFileKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { pickFilePathAsync } from '../components/GUIO';
 
 const TAG = 'JustPDFIndex';
 
@@ -51,7 +52,6 @@ struct Index {
     uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
   }
 
-  private documentViewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker();
 
   build() {
     Row() {
@@ -75,12 +75,10 @@ struct Index {
             .height('50lpx')
             .onClick(async () => {
               try {
-                const documentSelectOptions = new picker.DocumentSelectOptions();
-                documentSelectOptions.maxSelectNumber = 1;
-                documentSelectOptions.fileSuffixFilters = ['.pdf'];
-                let uris = await this.documentViewPicker.select(documentSelectOptions);
-                let uri = uris[0];
-                await this.loadAndViewFile(uri);
+                let uri = await pickFilePathAsync(['.pdf']);
+                if (uri) {
+                  await this.loadAndViewFile(uri);
+                }
               } catch (err) {
                 let businessErr = err as BusinessError;
                 hilog.info(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
