@@ -1,4 +1,4 @@
-import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, StyleButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toVisibility } from '../components/UIComponents';
+import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, showAlertDialog, StyleButton, StyleIconBadgeButton, StyleIconButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
 import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -16,6 +16,7 @@ import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource,
 import { InputAction } from '../components/Input';
 import { Stack as DataStack } from '../components/Colletions';
 import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
+import { SettingsDialogBuilder } from '../components/SettingsDialog';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -49,12 +50,16 @@ struct PDFView {
   @State view3PixelMap: PixelMap | undefined = undefined;
   @State view2Visible: boolean = false;
   @State view3Visible: boolean = false;
+  @State view1Loading: boolean = false;
+  @State view2Loading: boolean = false;
+  @State view3Loading: boolean = false;
   @State view1ViewSize: Vector2 = Vec2(0, 0);
   @State view2ViewSize: Vector2 = Vec2(0, 0);
   @State view3ViewSize: Vector2 = Vec2(0, 0);
   @State viewSize: Vector2 = Vec2(0, 0);
   @State currentPageIndex: number = 0;
   @State isDocumentLoading: boolean = true;
+  @State loadError: string = '';
   @State totalPageCount: number = 0;
   @State pageDisplayMode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' = 'single';
   @State pageFlipMode: 'side' | 'button' | 'extern' = 'side';
@@ -63,6 +68,7 @@ struct PDFView {
   @State viewScale: number = 1.0;
   @State viewportSize: Vector2 = Vec2(0, 0);
   @State showControls: boolean = true;
+  @State showSlider: boolean = true;
   @State controlsTransparency: number = 0.5;
   transparencyTimeoutId: number | undefined = undefined;
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
@@ -92,11 +98,33 @@ struct PDFView {
   @State undoHistoryCount: number = 0;
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
+  @State menuExpanded: boolean = false;
   hotkeys: InputAction[] = [];
+  prefetchDebounceId: number | undefined = undefined;
+  private documentLoadVersion: number = 0;
   tutorialDialogController: CustomDialogController = new CustomDialogController({
     builder: TutorialDialogBuilder(),
     width: '60%',
     height: '90%'
+  });
+  settingsDialogController: CustomDialogController = new CustomDialogController({
+    builder: SettingsDialogBuilder({
+      pageDisplayMode: this.pageDisplayMode,
+      pageFlipMode: this.pageFlipMode,
+      showSlider: this.showSlider,
+      onPageDisplayModeChanged: (mode) => this.setPageDisplayMode(mode),
+      onPageFlipModeChanged: (mode) => this.setPageFlipMode(mode),
+      onSliderToggled: (show: boolean) => {
+        this.showSlider = show;
+        try {
+          this.preferences.putSync('showSlider', show);
+          this.preferences.flushSync();
+        } catch (error) {
+          hilog.error(0, 'PDFView', `保存滑块偏好出错: ${error}.`);
+        }
+      }
+    }),
+    width: '40%',
   });
   pageManagerDialogController: CustomDialogController = new CustomDialogController({
     builder: PageManagerDialogBuilder({
@@ -113,20 +141,6 @@ struct PDFView {
     });
   }
 
-  showAlertDialog(title: string, message: string): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.getUIContext().showAlertDialog({
-        title: title,
-        message: message,
-        confirm: {
-          defaultFocus: true,
-          action: () => resolve(),
-          value: $r('sys.string.general_confirm')
-        }
-      });
-    });
-  }
-
   aboutToAppear(): void {
     const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     this.systemPath = args['systemPath'];
@@ -137,6 +151,7 @@ struct PDFView {
     // Lightweight setup that won't block the UI
     try {
       this.showControls = this.preferences.getSync('showControls', true) as boolean;
+      this.showSlider = this.preferences.getSync('showSlider', true) as boolean;
       this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
       this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
       this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
@@ -171,43 +186,23 @@ struct PDFView {
   }
 
   private async initializeDocument(): Promise<void> {
+    this.loadError = '';
+    const loadVersion = ++this.documentLoadVersion;
     const result = this.document.loadDocument(this.sandBoxPath);
     if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-
-      let resultText: string = "";
-      switch (result) {
-        case pdfService.ParseResult.PARSE_ERROR_FILE:
-          resultText = '文件错误';
-          break;
-        case pdfService.ParseResult.PARSE_ERROR_FORMAT:
-          resultText = '格式错误';
-          break;
-        case pdfService.ParseResult.PARSE_ERROR_PASSWORD:
-          resultText = '暂不支持加密的 PDF 文件';
-          break;
-        case pdfService.ParseResult.PARSE_ERROR_HANDLER:
-          resultText = '处理程序错误';
-          break;
-        case pdfService.ParseResult.PARSE_ERROR_CERT:
-          resultText = '证书错误';
-          break;
+      let resultText = toResultCode(result);
+      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`);
+      if (this.documentLoadVersion == loadVersion) {
+        this.loadError = `无法加载 PDF 文件: ${resultText}`;
+        this.isDocumentLoading = false;
       }
-
-      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`)
-      this.isDocumentLoading = false;
-      this.showAlertDialog('加载错误', `无法加载 PDF 文件: ${resultText}`)
-        .then(() => {
-          this.backToMainMenu();
-        });
       return;
     }
     this.totalPageCount = this.document.getPageCount();
-
     const pages = new Array<PageInfo>();
     const pageGroup = new PageGroup(this.fileName, pages);
     for (let i = 0; i < this.totalPageCount; i++) {
-      const pdfPage = this.document.getPage(i);
-      pages.push(new PageInfo(i, pdfPage, this.sandBoxPath));
+      pages.push(new PageInfo(i, this.document, this.sandBoxPath));
     }
     this.pageGroups.push(pageGroup);
 
@@ -236,6 +231,12 @@ struct PDFView {
     if (this.transparencyTimeoutId) {
       clearTimeout(this.transparencyTimeoutId);
       this.transparencyTimeoutId = undefined;
+    }
+
+    // 清除预取防抖定时器
+    if (this.prefetchDebounceId) {
+      clearTimeout(this.prefetchDebounceId);
+      this.prefetchDebounceId = undefined;
     }
 
     // 释放所有页面缓存和缩略图
@@ -468,10 +469,14 @@ struct PDFView {
     // 立即设置占位白色矩形并预计算目标页面尺寸
     this.view2Visible = false;
     this.view3Visible = false;
+    this.view1Loading = false;
+    this.view2Loading = false;
+    this.view3Loading = false;
 
     if (indices.length > 0) {
       this.view1PixelMap = this.placeholderPixelMap;
       this.view1ViewSize = this.getPageDisplaySize(indices[0]);
+      this.view1Loading = true;
     } else {
       this.view1PixelMap = undefined;
     }
@@ -480,6 +485,7 @@ struct PDFView {
       this.view2PixelMap = this.placeholderPixelMap;
       this.view2ViewSize = this.getPageDisplaySize(indices[1]);
       this.view2Visible = true;
+      this.view2Loading = true;
     } else {
       this.view2PixelMap = undefined;
     }
@@ -488,6 +494,7 @@ struct PDFView {
       this.view3PixelMap = this.placeholderPixelMap;
       this.view3ViewSize = this.getPageDisplaySize(indices[2]);
       this.view3Visible = true;
+      this.view3Loading = true;
     } else {
       this.view3PixelMap = undefined;
     }
@@ -503,6 +510,7 @@ struct PDFView {
         .then(cache => {
           this.view1PixelMap = cache.pixelMap;
           this.view1ViewSize = cache.displaySize;
+          this.view1Loading = false;
         })
       )
     }
@@ -513,6 +521,7 @@ struct PDFView {
         .then(cache => {
           this.view2PixelMap = cache.pixelMap;
           this.view2ViewSize = cache.displaySize;
+          this.view2Loading = false;
         })
       )
     }
@@ -523,6 +532,7 @@ struct PDFView {
         .then(cache => {
           this.view3PixelMap = cache.pixelMap;
           this.view3ViewSize = cache.displaySize;
+          this.view3Loading = false;
         })
       )
     }
@@ -545,8 +555,14 @@ struct PDFView {
     // 计算要显示的页面索引
     this.displayedPageIndices = this.calculateDisplayIndices(targetIndex);
 
-    // Prefetch adjacent pages and evict distant page caches
-    this.pageGroups.prefetchPagesAround(targetIndex, 3, 5, this.displayedPageIndices);
+    // Debounce prefetch/eviction to avoid cache churn during rapid scrolling
+    if (this.prefetchDebounceId !== undefined) {
+      clearTimeout(this.prefetchDebounceId);
+    }
+    this.prefetchDebounceId = setTimeout(() => {
+      this.prefetchDebounceId = undefined;
+      this.pageGroups.prefetchPagesAround(targetIndex, 5, 15, this.displayedPageIndices);
+    }, 300);
 
     // 加载并显示页面
     await this.loadAndDisplayPages(this.displayedPageIndices);
@@ -913,7 +929,7 @@ struct PDFView {
       await fs.close(dstFile);
     } catch (err) {
       hilog.error(0, 'PDFView', `保存 PDF 文件到选定位置 ${saveUri} 时出错: ${err}`);
-      await this.showAlertDialog('保存失败', '无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。');
+      await showAlertDialog('保存失败', '无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。', this.getUIContext());
       this.revertChanges(affectedPage);
       return;
     }
@@ -1514,8 +1530,8 @@ struct PDFView {
       ];
 
       // Check if reorder affected any displayed pages
-      const rangesOverlap = affectedRange[0] <= currentDisplayRange[1] && 
-                           affectedRange[1] >= currentDisplayRange[0];
+      const rangesOverlap = affectedRange[0] <= currentDisplayRange[1] &&
+        affectedRange[1] >= currentDisplayRange[0];
 
       if (rangesOverlap) {
         this.gotoPage(this.currentPageIndex);
@@ -1543,6 +1559,20 @@ struct PDFView {
               event))
             .onMouse(event => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
               event))
+          if (this.view1Loading) {
+            Column() {
+              LoadingProgress()
+                .width(36)
+                .height(36)
+            }
+            .width('100%')
+            .height(120)
+            .justifyContent(FlexAlign.End)
+            .padding({ bottom: 12 })
+            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+            .hitTestBehavior(HitTestMode.None)
+          }
         }
         .size(toSizePx(this.view1ViewSize))
         .visibility(toVisibility(true))
@@ -1561,6 +1591,20 @@ struct PDFView {
               event))
             .onMouse(event => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
               event))
+          if (this.view2Loading) {
+            Column() {
+              LoadingProgress()
+                .width(36)
+                .height(36)
+            }
+            .width('100%')
+            .height(120)
+            .justifyContent(FlexAlign.End)
+            .padding({ bottom: 12 })
+            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+            .hitTestBehavior(HitTestMode.None)
+          }
         }
         .size(toSizePx(this.view2ViewSize))
         .visibility(toVisibility(this.view2Visible))
@@ -1579,6 +1623,20 @@ struct PDFView {
               event))
             .onMouse(event => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
               event))
+          if (this.view3Loading) {
+            Column() {
+              LoadingProgress()
+                .width(36)
+                .height(36)
+            }
+            .width('100%')
+            .height(120)
+            .justifyContent(FlexAlign.End)
+            .padding({ bottom: 12 })
+            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+            .hitTestBehavior(HitTestMode.None)
+          }
         }
         .size(toSizePx(this.view3ViewSize))
         .visibility(toVisibility(this.view3Visible))
@@ -1649,172 +1707,174 @@ struct PDFView {
         })
 
 
-      Column(ContainerCfg) {
-        Row(ContainerCfg) {
-          StyleButton({
-            text: '显示', menuElement: [
-              {
-                value: "单页",
-                action: () => this.setPageDisplayMode('single'),
-                symbolIcon: getCheckIcon(this.pageDisplayMode == 'single')
-              },
-              {
-                value: "双页",
-                action: () => this.setPageDisplayMode('dual'),
-                symbolIcon: getCheckIcon(this.pageDisplayMode == 'dual')
-              },
-              {
-                value: "双页连续",
-                action: () => this.setPageDisplayMode('dualContinuous'),
-                symbolIcon: getCheckIcon(this.pageDisplayMode == 'dualContinuous')
-              },
-              {
-                value: "三页",
-                action: () => this.setPageDisplayMode('tri'),
-                symbolIcon: getCheckIcon(this.pageDisplayMode == 'tri')
-              },
-              {
-                value: "三页连续",
-                action: () => this.setPageDisplayMode('triContinuous'),
-                symbolIcon: getCheckIcon(this.pageDisplayMode == 'triContinuous')
-              }]
-          }).visibility(toVisibility(this.showControls))
-          StyleButton({
-            text: '模式', menuElement: [
-              {
-                value: "屏侧翻页",
-                action: () => this.setPageFlipMode('side'),
-                symbolIcon: getCheckIcon(this.pageFlipMode == 'side')
-              },
-              {
-                value: "按钮翻页",
-                action: () => this.setPageFlipMode('button'),
-                symbolIcon: getCheckIcon(this.pageFlipMode == 'button')
-              },
-              {
-                value: "外设翻页",
-                action: () => this.setPageFlipMode('extern'),
-                symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
-              }]
-          }).visibility(toVisibility(this.showControls))
-          StyleButton({
-            text: '页面', onClickCallback: () => {
-              this.pageManagerDialogController.open()
+      Stack() {
+        // Slider - positioned at right, vertically centered, independent of bottom bar
+        Column(ContainerCfg) {
+          Blank().layoutWeight(1)
+          MakeSlider(
+            {
+              value: this.currentPageIndex,
+              min: 0,
+              max: this.totalPageCount - 1,
+              onChangeCallback: newValue => this.gotoPage(newValue)
             }
-          }).visibility(toVisibility(this.showControls))
+          ).visibility(toVisibility(this.showControls && this.showSlider))
+          Blank().height(60)
+        }
+        .width('100%')
+        .height('100%')
+        .alignItems(HorizontalAlign.End)
+        .hitTestBehavior(HitTestMode.Transparent)
 
-          Blank()
+        // Bottom bar
+        Column() {
+          Blank().layoutWeight(1)
+          Row(ContainerCfg) {
+          // Bottom-left: expandable menu
+          Column({ space: ContainerSpacing }) {
+            if (this.menuExpanded) {
+              StyleIconButton({
+                icon: $r('sys.symbol.questionmark_circle'),
+                label: '教程',
+                onClickCallback: () => {
+                  this.menuExpanded = false;
+                  this.tutorialDialogController.open();
+                }
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
 
-          StyleButton({
-            text: this.isExclusiveFullScreen ? '窗口' : '全屏',
-            onClickCallback: () => {
-              this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
-              if (this.isExclusiveFullScreen) {
-                this.mainWindow.maximize().catch();
-              } else {
-                this.mainWindow.recover().catch();
+              if (deviceInfo.deviceType != 'phone') {
+                StyleIconButton({
+                  icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
+                  label: this.isExclusiveFullScreen ? '窗口' : '全屏',
+                  onClickCallback: () => {
+                    this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
+                    if (this.isExclusiveFullScreen) {
+                      this.mainWindow.maximize().catch();
+                    } else {
+                      this.mainWindow.recover().catch();
+                    }
+                  }
+                }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
               }
-            }
-          }).visibility(toVisibility(this.showControls && deviceInfo.deviceType != "phone"))
-          StyleButton({
-            text: '分享',
-            onClickCallback: () => this.executeShare()
-          }).visibility(toVisibility(this.showControls)).id(ShareButtonId)
-          StyleButton({
-            text: '教程',
-            onClickCallback: () => {
-              this.tutorialDialogController.open();
-            }
-          }).visibility(toVisibility(this.showControls))
 
-        }.width('100%')
+              StyleIconButton({
+                icon: $r('sys.symbol.share'),
+                label: '分享',
+                onClickCallback: () => {
+                  animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                    this.menuExpanded = false;
+                  });
+                  this.executeShare();
+                }
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
 
-        Row(ContainerCfg) {
-          Blank()
-          Column(ContainerCfg) {
-            Blank().layoutWeight(1)
-            MakeSlider(
-              {
-                value: this.currentPageIndex,
-                min: 0,
-                max: this.totalPageCount - 1,
-                onChangeCallback: newValue => this.gotoPage(newValue)
+              StyleIconButton({
+                icon: $r('sys.symbol.gearshape'),
+                label: '设置',
+                onClickCallback: () => {
+                  this.menuExpanded = false;
+                  this.settingsDialogController.open();
+                }
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+              StyleIconButton({
+                icon: $r('sys.symbol.doc_plaintext'),
+                label: '页面',
+                onClickCallback: () => {
+                  this.menuExpanded = false;
+                  this.pageManagerDialogController.open();
+                }
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+              StyleIconButton({
+                icon: $r('sys.symbol.arrow_right'),
+                label: '跳转',
+                menuElement: [
+                  {
+                    value: "重置视口",
+                    action: () => this.resetViewToFit(),
+                  },
+                  {
+                    value: "跳转首页",
+                    action: () => this.gotoPage(0),
+                  },
+                  {
+                    value: "跳转尾页",
+                    action: () => this.gotoPage(this.totalPageCount - 1),
+                  }],
+                menuPlacement: Placement.RightBottom
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+              StyleIconButton({
+                icon: $r('sys.symbol.pencil_waveform'),
+                label: this.getShowControlsText(),
+                menuElement: [
+                  {
+                    value: "拖动",
+                    action: () => this.setAnnotateMode('drag'),
+                    symbolIcon: getCheckIcon(this.annotateMode == 'drag')
+                  },
+                  {
+                    value: "绘制",
+                    action: () => this.setAnnotateMode('draw'),
+                    symbolIcon: getCheckIcon(this.annotateMode == 'draw')
+                  },
+                  {
+                    value: "擦除",
+                    action: () => this.setAnnotateMode('erase'),
+                    symbolIcon: getCheckIcon(this.annotateMode == 'erase')
+                  }],
+                menuPlacement: Placement.RightBottom
+              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+            }
+
+            StyleIconButton({
+              icon: this.menuExpanded ? $r('sys.symbol.xmark') : $r('sys.symbol.more'),
+              alternateColor: this.menuExpanded ? ButtonColor : ButtonColorSemiTransparent,
+              onClickCallback: () => {
+                animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                  this.menuExpanded = !this.menuExpanded;
+                });
               }
-            ).visibility(toVisibility(this.showControls))
-            StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` })
-              .visibility(toVisibility(this.showControls || this.pageFlipMode == 'button'))
+            }).id(ShareButtonId)
           }
-        }.layoutWeight(1).width('100%')
-
-        Row(ContainerCfg) {
-          StyleButton({
-            text: this.showControls ? '收起' : '展开',
-            alternateColor: this.showControls ? ButtonColor : ButtonColorSemiTransparent,
-            onClickCallback: () => {
-              this.setShowControls(!this.showControls);
-            }
-          })
-          StyleButton({
-            text: '导航', menuElement: [
-              {
-                value: "重置视口",
-                action: () => this.resetViewToFit(),
-              },
-              {
-                value: "跳转首页",
-                action: () => this.gotoPage(0),
-              },
-              {
-                value: "跳转尾页",
-                action: () => this.gotoPage(this.totalPageCount - 1),
-              }]
-          }).visibility(toVisibility(this.showControls))
-          StyleButton({
-            text: this.getShowControlsText(), menuElement: [
-              {
-                value: "拖动",
-                action: () => this.setAnnotateMode('drag'),
-                symbolIcon: getCheckIcon(this.annotateMode == 'drag')
-              },
-              {
-                value: "绘制",
-                action: () => this.setAnnotateMode('draw'),
-                symbolIcon: getCheckIcon(this.annotateMode == 'draw')
-              },
-              {
-                value: "擦除",
-                action: () => this.setAnnotateMode('erase'),
-                symbolIcon: getCheckIcon(this.annotateMode == 'erase')
-              }]
-          }).visibility(toVisibility(this.showControls))
+          .alignItems(HorizontalAlign.Start)
 
           Blank()
 
-          StyleNumBadgeButton({
-            text: '撤回',
+          StyleIconBadgeButton({
+            icon: $r('sys.symbol.undo'),
             count: this.undoHistoryCount,
             onClickCallback: () => this.executeUndo()
-          }).visibility(toVisibility(this.showControls))
-          StyleNumBadgeButton({
-            text: '重做',
+          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+            .enabled(this.undoHistoryCount > 0)
+            .opacity(this.undoHistoryCount > 0 ? 1.0 : 0.4)
+          StyleIconBadgeButton({
+            icon: $r('sys.symbol.redo'),
             count: this.redoHistoryCount,
             onClickCallback: () => this.executeRedo()
-          }).visibility(toVisibility(this.showControls))
-          StyleStrBadgeButton({
-            text: '保存',
-            badgeText: '!',
-            badgeVisibility: this.hasUnsavedStrokes,
+          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+            .enabled(this.redoHistoryCount > 0)
+            .opacity(this.redoHistoryCount > 0 ? 1.0 : 0.4)
+          StyleIconButton({
+            icon: $r('sys.symbol.save'),
             onClickCallback: () => this.executeSave()
-          }).visibility(toVisibility(this.showControls))
+          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+            .enabled(this.hasUnsavedStrokes)
+            .opacity(this.hasUnsavedStrokes ? 1.0 : 0.4)
           StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
           StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
             .visibility(toVisibility(this.pageFlipMode == 'button'))
-          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(!this.showControls && this.pageFlipMode != 'button'))
+          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(this.pageFlipMode != 'button'))
 
-        }.width('100%')
+        }.width('100%').alignItems(VerticalAlign.Bottom)
+        }
+        .width('100%')
+        .height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
       }
-      .layoutWeight(1)
+      .alignContent(Alignment.BottomStart)
       .alignRules(FullRect)
       .margin(ContainerPadding)
       .hitTestBehavior(HitTestMode.Transparent)
@@ -1823,6 +1883,9 @@ struct PDFView {
     .hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
     .backgroundColor($r('sys.color.white'))
+    .focusable(true)
+    .defaultFocus(true)
+    .focusOnTouch(true)
     .onKeyEvent(keyEvent => {
       if (keyEvent.type != KeyType.Down) {
         return;
@@ -1859,6 +1922,40 @@ struct PDFView {
             .fontSize(16)
             .fontColor(Color.Gray)
             .margin({ top: 12 })
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('sys.color.white'))
+      }
+
+      if (this.loadError != '') {
+        Column() {
+          Column({ space: 20 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+              .fontSize(48)
+              .fontColor([Color.Red])
+            Text('加载失败')
+              .fontSize(24)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#333333')
+            Text(this.loadError)
+              .fontSize(14)
+              .fontColor('#999999')
+              .textAlign(TextAlign.Center)
+              .constraintSize({ maxWidth: 260 })
+            Button('返回')
+              .type(ButtonType.Capsule)
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .width(120)
+              .margin({ top: 4 })
+              .onClick(() => this.backToMainMenu())
+          }
+          .padding(32)
+          .borderRadius(16)
+          .backgroundColor('#F5F5F5')
+          .shadow({ radius: 8, color: 'rgba(0, 0, 0, 0.1)', offsetY: 2 })
         }
         .width('100%')
         .height('100%')
