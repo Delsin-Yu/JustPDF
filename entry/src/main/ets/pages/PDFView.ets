@@ -15,7 +15,6 @@ import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { Stack as DataStack } from '../components/Colletions';
-import { PageManagerDialogBuilder } from '../components/PageManagerDialog';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
@@ -126,15 +125,6 @@ struct PDFView {
     }),
     width: '40%',
   });
-  pageManagerDialogController: CustomDialogController = new CustomDialogController({
-    builder: PageManagerDialogBuilder({
-      pageGroups: this.pageGroups,
-      onPageSelected: page => this.gotoPage(page.globalPageIndex!)
-    }),
-    width: '80%',
-    height: '90%',
-    autoCancel: false
-  })
 
   backToMainMenu(): void {
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
@@ -1774,15 +1764,6 @@ struct PDFView {
                 onClickCallback: () => {
                   this.menuExpanded = false;
                   this.settingsDialogController.open();
-                }
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-              StyleIconButton({
-                icon: $r('sys.symbol.doc_plaintext'),
-                label: '页面',
-                onClickCallback: () => {
-                  this.menuExpanded = false;
-                  this.pageManagerDialogController.open();
                 }
               }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
 
