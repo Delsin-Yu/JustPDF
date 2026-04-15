@@ -18,6 +18,7 @@ import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource,
 import { InputAction } from '../components/Input';
 import { Stack as DataStack } from '../components/Colletions';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
+import { ScrollSpinBox } from '../components/ScrollSpinBox';
 
 // 渲染缩放级别 - 最小为4以获得更清晰的显示，最多2个级别
 const RENDER_SCALE_LEVELS: number[] = [4, 8];
@@ -2105,117 +2106,59 @@ struct PDFView {
 
                 // Row 1: Tempo Spin Controls
                 GridItem() {
-                  Row({ space: 8 }) {
-                    Button({ type: ButtonType.Capsule }) {
-                      Text('-')
-                        .fontSize(20)
-                        .fontWeight(FontWeight.Medium)
-                        .fontColor(Color.White)
-                    }
-                    .width(34)
-                    .height(40)
-                    .backgroundColor('rgba(255, 255, 255, 0.1)')
-                    .onClick(() => this.adjustMetronomeBpm(-1))
-
-                    Text(`${this.metronomeBpm}`)
-                      .fontSize(30)
-                      .fontWeight(FontWeight.Bold)
-                      .fontColor(Color.White)
-                      .layoutWeight(1)
-                      .textAlign(TextAlign.Center)
-
-                    Button({ type: ButtonType.Capsule }) {
-                        Text('+')
-                          .fontSize(20)
-                          .fontWeight(FontWeight.Medium)
-                          .fontColor(Color.White)
-                      }
-                      .width(34)
-                      .height(40)
-                      .backgroundColor('rgba(255, 255, 255, 0.1)')
-                      .onClick(() => this.adjustMetronomeBpm(1))
-                  }
+                  ScrollSpinBox({
+                    value: this.metronomeBpm,
+                    min: 1,
+                    max: 600,
+                    step: 1,
+                    valueFontSize: 30,
+                    onValueChange: (value: number) => this.setMetronomeBpm(value),
+                    itemHeight: 30,
+                    gradientHeight: 35
+                  })
                   .width('100%')
-                  .height(90)
+                  .height(120)
                   .padding({ left: 10, right: 10, top: 8, bottom: 8 })
                   .borderRadius(16)
-                  .backgroundColor('rgba(255, 255, 255, 0.05)')
+                  .backgroundColor('rgba(255, 255, 255, 0.2)')
                 }
 
                 // Row 1: Time Signature Controls
                 GridItem() {
-                  Column({ space: 6 }) {
-                    Row({ space: 6 }) {
-                      Button({ type: ButtonType.Capsule }) {
-                        Text('-')
-                          .fontSize(18)
-                          .fontWeight(FontWeight.Medium)
-                          .fontColor(Color.White)
-                      }
-                      .width(30)
-                      .height(30)
-                      .backgroundColor('rgba(255, 255, 255, 0.1)')
-                      .onClick(() => this.adjustMetronomeNumerator(-1))
-
-                      Text(`${this.metronomeNumerator}`)
-                        .fontSize(24)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(Color.White)
-                        .layoutWeight(1)
-                        .textAlign(TextAlign.Center)
-                      Button({ type: ButtonType.Capsule }) {
-                        Text('+')
-                          .fontSize(18)
-                          .fontWeight(FontWeight.Medium)
-                          .fontColor(Color.White)
-                      }
-                      .width(30)
-                      .height(30)
-                      .backgroundColor('rgba(255, 255, 255, 0.1)')
-                      .onClick(() => this.adjustMetronomeNumerator(1))
-                    }
-                    .width('100%')
+                  Row({ space: 6 }) {
+                    ScrollSpinBox({
+                      value: this.metronomeNumerator,
+                      min: 1,
+                      max: 16,
+                      step: 1,
+                      valueFontSize: 28,
+                      onValueChange: (value: number) => this.setMetronomeNumerator(value),
+                      itemHeight: 28,
+                      gradientHeight: 35
+                    })
+                    .layoutWeight(1)
 
                     Divider()
-                      .strokeWidth(1)
+                      .strokeWidth(2)
+                      .vertical(true)
                       .color('rgba(255, 255, 255, 0.16)')
+                      .rotate({ angleZ: 20 })
 
-                    Row({ space: 6 }) {
-                      Button({ type: ButtonType.Capsule }) {
-                        Text('<')
-                          .fontSize(14)
-                          .fontWeight(FontWeight.Medium)
-                          .fontColor(Color.White)
-                      }
-                      .width(30)
-                      .height(30)
-                      .backgroundColor('rgba(255, 255, 255, 0.1)')
-                      .onClick(() => this.cycleMetronomeDenominator(-1))
-
-                      Text(`${this.metronomeDenominator}`)
-                        .fontSize(22)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(Color.White)
-                        .layoutWeight(1)
-                        .textAlign(TextAlign.Center)
-                      Button({ type: ButtonType.Capsule }) {
-                        Text('>')
-                          .fontSize(14)
-                          .fontWeight(FontWeight.Medium)
-                          .fontColor(Color.White)
-                      }
-                      .width(30)
-                      .height(30)
-                      .backgroundColor('rgba(255, 255, 255, 0.1)')
-                      .onClick(() => this.cycleMetronomeDenominator(1))
-                    }
-                    .width('100%')
+                    ScrollSpinBox({
+                      value: this.metronomeDenominator,
+                      values: [2, 4, 8, 16],
+                      valueFontSize: 28,
+                      onValueChange: (value: number) => this.setMetronomeDenominator(value),
+                      itemHeight: 28,
+                      gradientHeight: 35
+                    })
+                    .layoutWeight(1)
                   }
                   .width('100%')
-                  .height(90)
+                  .height(120)
                   .padding({ left: 10, right: 10, top: 8, bottom: 8 })
                   .borderRadius(16)
-                  .backgroundColor('rgba(255, 255, 255, 0.05)')
+                  .backgroundColor('rgba(255, 255, 255, 0.2)')
                 }
 
                 // Row 2: Preset Buttons
