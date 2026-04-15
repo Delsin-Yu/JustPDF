@@ -1,16 +1,18 @@
-import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, showAlertDialog, StyleButton, StyleIconBadgeButton, StyleIconButton, StyleNumBadgeButton, StyleStrBadgeButton, StyleText, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
-import { LengthMetricsUnit, window } from '@kit.ArkUI';
+import { ButtonColor, ButtonColorSemiTransparent, ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, getCheckIcon, MakeSlider, showAlertDialog, StyleButton, StyleIconBadgeButton, StyleIconButton, StyleText, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
+import { LengthMetrics, LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool, util } from '@kit.ArkTS';
 import { fromArea, mul, pxToVp, toSizePx, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { fileUri, fileIo as fs, picker } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
+import { media } from '@kit.MediaKit';
+import { audio } from '@kit.AudioKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { History, NewStroke, PageCache, PageGroup, PageInfo, PageInfoDataSource, ReadonlyStroke, Stroke } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
@@ -30,6 +32,26 @@ const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
+const MetronomeDenominatorOptions: number[] = [2, 4, 8, 16];
+const MetronomeBpmPresets: number[] = [40, 60, 80, 100, 120, 140, 160, 180, 200];
+const MetronomeBeatSpacing: LengthMetrics = LengthMetrics.vp(10);
+const MetronomeWindowWidth: number = 400;
+const MetronomeBpmPreferenceKey: string = 'metronomeBpm';
+const MetronomeNumeratorPreferenceKey: string = 'metronomeNumerator';
+const MetronomeDenominatorPreferenceKey: string = 'metronomeDenominator';
+const MetronomeAccentRawFile: string = 'metronome_accent.wav';
+const MetronomeWeakRawFile: string = 'metronome_beat.wav';
+const MetronomeTimeSignaturePresets: Array<[number, number]> = [
+  [2, 4],
+  [3, 4],
+  [4, 4],
+  [5, 4],
+  [5, 8],
+  [6, 8],
+  [7, 8],
+  [9, 8],
+  [12, 8]
+];
 
 @Entry
 @Component
@@ -98,8 +120,31 @@ struct PDFView {
   @State redoHistoryCount: number = 0;
   @State isExclusiveFullScreen: boolean = false;
   @State menuExpanded: boolean = false;
+  @State showMetronomeWindow: boolean = false;
+  @State metronomeBpm: number = 120;
+  @State metronomeNumerator: number = 4;
+  @State metronomeDenominator: number = 4;
+  @State currentBeat: number = -1;
+  @State isMetronomePlaying: boolean = false;
+  @State metronomePulseToken: number = 0;
+  @State metronomeFloatingButtonPulseScale: number = 1;
+  @State metronomeFloatingButtonColor: string = 'rgba(35, 42, 53, 0.62)';
+  metronomeSoundPool: media.SoundPool | undefined = undefined;
+  metronomeAccentSoundId: number = -1;
+  metronomeWeakSoundId: number = -1;
+  metronomeSoundPoolLoading: boolean = false;
+  metronomeSoundPoolReady: boolean = false;
+  metronomeLoadedSoundIds: Set<number> = new Set<number>();
+  metronomeGridLayout: GridLayoutOptions = {
+    regularSize: [1, 1],
+    irregularIndexes: [6, 7, 8],
+    onGetIrregularSizeByIndex: (): [number, number] => [1, 2]
+  };
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
+  metronomeTimerId: number | undefined = undefined;
+  metronomeNextTickAt: number = 0;
+  metronomePulseTimer: number | undefined = undefined;
   private documentLoadVersion: number = 0;
   tutorialDialogController: CustomDialogController = new CustomDialogController({
     builder: TutorialDialogBuilder(),
@@ -145,6 +190,10 @@ struct PDFView {
       this.pageDisplayMode = this.preferences.getSync('pageDisplayMode', 'single') as 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
       this.pageFlipMode = this.preferences.getSync('pageFlipMode', 'side') as 'side' | 'button' | 'extern';
       this.annotateMode = this.preferences.getSync('annotateMode', 'drag') as 'drag' | 'draw' | 'erase';
+      this.metronomeBpm = this.clampMetronomeBpm(this.preferences.getSync(MetronomeBpmPreferenceKey, 120) as number);
+      this.metronomeNumerator = this.clampMetronomeNumerator(this.preferences.getSync(MetronomeNumeratorPreferenceKey, 4) as number);
+      const savedDenominator = this.preferences.getSync(MetronomeDenominatorPreferenceKey, 4) as number;
+      this.metronomeDenominator = MetronomeDenominatorOptions.includes(savedDenominator) ? savedDenominator : 4;
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -173,6 +222,7 @@ struct PDFView {
 
     // Defer heavy document loading so UI can render the loading indicator first
     this.initializeDocument();
+    this.initializeMetronomeAudio();
   }
 
   private async initializeDocument(): Promise<void> {
@@ -206,6 +256,8 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
+    this.stopMetronome();
+    this.releaseMetronomeAudio();
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
@@ -214,7 +266,8 @@ struct PDFView {
     if (this.windowStatusCallback) {
       try {
         this.mainWindow.off('windowStatusChange', this.windowStatusCallback);
-      } catch (_e) { /* ignore */ }
+      } catch (_e) { /* ignore */
+      }
     }
 
     // 清除透明度定时器
@@ -256,6 +309,7 @@ struct PDFView {
   }
 
   onBackGround = () => {
+    this.stopMetronome();
     this.immersiveDisablingListening();
   }
 
@@ -1486,6 +1540,320 @@ struct PDFView {
     this.transparencyTimeoutId = setTimeout(() => this.controlsTransparency = 0.5, 1000 * 3);
   }
 
+  saveMetronomePreferences(): void {
+    try {
+      this.preferences.putSync(MetronomeBpmPreferenceKey, this.metronomeBpm);
+      this.preferences.putSync(MetronomeNumeratorPreferenceKey, this.metronomeNumerator);
+      this.preferences.putSync(MetronomeDenominatorPreferenceKey, this.metronomeDenominator);
+      this.preferences.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `保存节拍器偏好出错: ${error}.`);
+    }
+  }
+
+  initializeMetronomeAudio(): void {
+    if (this.metronomeSoundPoolLoading || this.metronomeSoundPool) {
+      return;
+    }
+    this.metronomeSoundPoolLoading = true;
+    this.createMetronomeSoundPool().finally(() => {
+      this.metronomeSoundPoolLoading = false;
+    });
+  }
+
+  private async createMetronomeSoundPool(): Promise<void> {
+    try {
+      const audioRendererInfo: audio.AudioRendererInfo = {
+        usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+        rendererFlags: 1
+      };
+      const soundPool = await media.createSoundPool(4, audioRendererInfo);
+      soundPool.on('loadComplete', (soundId: number) => {
+        this.metronomeLoadedSoundIds.add(soundId);
+        this.metronomeSoundPoolReady = this.metronomeLoadedSoundIds.has(this.metronomeAccentSoundId) &&
+        this.metronomeLoadedSoundIds.has(this.metronomeWeakSoundId);
+      });
+      soundPool.on('error', (error: BusinessError) => {
+        hilog.error(0, 'PDFView', `节拍器音频错误: ${error.code} ${error.message}`);
+      });
+
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const accentDescriptor = await context.resourceManager.getRawFd(MetronomeAccentRawFile);
+      const weakDescriptor = await context.resourceManager.getRawFd(MetronomeWeakRawFile);
+
+      this.metronomeSoundPool = soundPool;
+      this.metronomeAccentSoundId = await soundPool.load(accentDescriptor.fd, accentDescriptor.offset, accentDescriptor.length);
+      this.metronomeWeakSoundId = await soundPool.load(weakDescriptor.fd, weakDescriptor.offset, weakDescriptor.length);
+      hilog.info(0, 'PDFView', '节拍器音频资源已开始加载');
+    } catch (error) {
+      hilog.error(0, 'PDFView', `初始化节拍器音频失败: ${JSON.stringify(error)}`);
+      this.metronomeSoundPoolReady = false;
+      this.metronomeLoadedSoundIds.clear();
+      this.metronomeAccentSoundId = -1;
+      this.metronomeWeakSoundId = -1;
+      this.metronomeSoundPool = undefined;
+    }
+  }
+
+  releaseMetronomeAudio(): void {
+    const soundPool = this.metronomeSoundPool;
+    this.metronomeSoundPool = undefined;
+    this.metronomeSoundPoolReady = false;
+    this.metronomeLoadedSoundIds.clear();
+    this.metronomeAccentSoundId = -1;
+    this.metronomeWeakSoundId = -1;
+    if (!soundPool) {
+      return;
+    }
+    soundPool.off('loadComplete');
+    soundPool.off('error');
+    soundPool.release().catch((error: BusinessError) => {
+      hilog.error(0, 'PDFView', `释放节拍器音频失败: ${error.code} ${error.message}`);
+    });
+  }
+
+  playMetronomeBeatSound(beat: number): void {
+    if (!this.metronomeSoundPool || !this.metronomeSoundPoolReady) {
+      return;
+    }
+    const soundId = beat === 0 ? this.metronomeAccentSoundId : this.metronomeWeakSoundId;
+    if (soundId < 0) {
+      return;
+    }
+    const playParameters: media.PlayParameters = {
+      loop: 0,
+      rate: audio.AudioRendererRate.RENDER_RATE_NORMAL,
+      leftVolume: 1,
+      rightVolume: 1,
+      priority: 1
+    };
+    this.metronomeSoundPool.play(soundId, playParameters).catch((error: BusinessError) => {
+      hilog.error(0, 'PDFView', `播放节拍器音频失败: ${error.code} ${error.message}`);
+    });
+  }
+
+  clampMetronomeBpm(value: number): number {
+    return Math.max(1, Math.min(600, Math.round(value)));
+  }
+
+  clampMetronomeNumerator(value: number): number {
+    return Math.max(1, Math.min(16, Math.round(value)));
+  }
+
+  getMetronomeIntervalMs(): number {
+    return Math.round((60000 / this.metronomeBpm) * (4 / this.metronomeDenominator));
+  }
+
+  getMetronomeBeatIndices(): number[] {
+    const beats: number[] = [];
+    for (let i = 0; i < this.metronomeNumerator; i++) {
+      beats.push(i);
+    }
+    return beats;
+  }
+
+  getMetronomeBeatColor(beat: number): string {
+    if (beat === this.currentBeat) {
+      return beat === 0 ? '#FF9F43' : '#4DA6FF';
+    }
+    return 'rgba(255, 255, 255, 0.12)';
+  }
+
+  getMetronomeFloatingButtonScale(): number {
+    if (!this.isMetronomePlaying || this.currentBeat < 0) {
+      return 1;
+    }
+    return this.metronomeFloatingButtonPulseScale;
+  }
+
+  private startFloatingButtonPulse(): void {
+    const uiContext = this.getUIContext();
+    if (!uiContext) {
+      return;
+    }
+
+    // Start pulse animation: scale up and down continuously
+    const pulse = () => {
+      if (!this.isMetronomePlaying) {
+        return;
+      }
+      this.metronomeFloatingButtonPulseScale = 1.12;
+      this.metronomeFloatingButtonColor = this.currentBeat === 0 ? 'rgba(255, 159, 67, 0.78)' : 'rgba(77, 166, 255, 0.76)';
+
+      uiContext.keyframeAnimateTo({ iterations: 1 }, [
+        {
+          duration: 500,
+          curve: Curve.EaseOut,
+          event: () => {
+            this.metronomeFloatingButtonPulseScale = 1;
+            this.metronomeFloatingButtonColor = 'rgba(35, 42, 53, 0.62)';
+          }
+        }
+      ]);
+    };
+
+    // Trigger pulse on every beat
+    pulse();
+    this.metronomePulseTimer = setInterval(() => {
+      if (!this.isMetronomePlaying) {
+        clearInterval(this.metronomePulseTimer);
+        this.metronomePulseTimer = undefined;
+        return;
+      }
+      pulse();
+    }, this.getMetronomeIntervalMs());
+  }
+
+  private stopFloatingButtonPulse(): void {
+    if (this.metronomePulseTimer !== undefined) {
+      clearInterval(this.metronomePulseTimer);
+      this.metronomePulseTimer = undefined;
+    }
+    this.metronomeFloatingButtonPulseScale = 1;
+  }
+
+  getMetronomeBpmMenu(): MenuElement[] {
+    return MetronomeBpmPresets.map((preset: number): MenuElement => ({
+      value: `${preset}`,
+      action: () => this.setMetronomeBpm(preset)
+    }));
+  }
+
+  getMetronomeTimeSignatureMenu(): MenuElement[] {
+    return MetronomeTimeSignaturePresets.map((preset: [number, number]): MenuElement => ({
+      value: `${preset[0]}/${preset[1]}`,
+      action: () => this.setMetronomeTimeSignature(preset[0], preset[1])
+    }));
+  }
+
+  setMetronomeBpm(value: number): void {
+    const nextValue = this.clampMetronomeBpm(value);
+    if (this.metronomeBpm === nextValue) {
+      return;
+    }
+    this.metronomeBpm = nextValue;
+    this.saveMetronomePreferences();
+    this.restartMetronomeIfPlaying();
+  }
+
+  adjustMetronomeBpm(delta: number): void {
+    this.setMetronomeBpm(this.metronomeBpm + delta);
+  }
+
+  setMetronomeNumerator(value: number): void {
+    const nextValue = this.clampMetronomeNumerator(value);
+    if (this.metronomeNumerator === nextValue) {
+      return;
+    }
+    this.metronomeNumerator = nextValue;
+    if (this.currentBeat >= this.metronomeNumerator) {
+      this.currentBeat = 0;
+    }
+    this.saveMetronomePreferences();
+    this.restartMetronomeIfPlaying();
+  }
+
+  adjustMetronomeNumerator(delta: number): void {
+    this.setMetronomeNumerator(this.metronomeNumerator + delta);
+  }
+
+  setMetronomeDenominator(value: number): void {
+    if (!MetronomeDenominatorOptions.includes(value)) {
+      return;
+    }
+    if (this.metronomeDenominator === value) {
+      return;
+    }
+    this.metronomeDenominator = value;
+    this.saveMetronomePreferences();
+    this.restartMetronomeIfPlaying();
+  }
+
+  cycleMetronomeDenominator(step: number): void {
+    const currentIndex = Math.max(0, MetronomeDenominatorOptions.indexOf(this.metronomeDenominator));
+    const optionCount = MetronomeDenominatorOptions.length;
+    const nextIndex = (currentIndex + step + optionCount) % optionCount;
+    this.setMetronomeDenominator(MetronomeDenominatorOptions[nextIndex]);
+  }
+
+  setMetronomeTimeSignature(numerator: number, denominator: number): void {
+    this.metronomeNumerator = this.clampMetronomeNumerator(numerator);
+    this.metronomeDenominator = MetronomeDenominatorOptions.includes(denominator) ? denominator : 4;
+    if (this.currentBeat >= this.metronomeNumerator) {
+      this.currentBeat = 0;
+    }
+    this.saveMetronomePreferences();
+    this.restartMetronomeIfPlaying();
+  }
+
+  advanceMetronomeBeat(): void {
+    if (this.currentBeat < 0 || this.currentBeat >= this.metronomeNumerator - 1) {
+      this.currentBeat = 0;
+    } else {
+      this.currentBeat += 1;
+    }
+    this.metronomePulseToken += 1;
+    this.playMetronomeBeatSound(this.currentBeat);
+  }
+
+  scheduleMetronomeTick(delayMs: number): void {
+    if (this.metronomeTimerId !== undefined) {
+      clearTimeout(this.metronomeTimerId);
+      this.metronomeTimerId = undefined;
+    }
+    this.metronomeTimerId = setTimeout(() => {
+      if (!this.isMetronomePlaying) {
+        return;
+      }
+      this.advanceMetronomeBeat();
+      const intervalMs = this.getMetronomeIntervalMs();
+      const now = Date.now();
+      this.metronomeNextTickAt += intervalMs;
+      const nextDelay = Math.max(12, this.metronomeNextTickAt - now);
+      this.scheduleMetronomeTick(nextDelay);
+    }, Math.max(12, delayMs));
+  }
+
+  startMetronome(): void {
+    this.stopMetronome(false);
+    this.isMetronomePlaying = true;
+    this.currentBeat = -1;
+    this.advanceMetronomeBeat();
+    const intervalMs = this.getMetronomeIntervalMs();
+    this.metronomeNextTickAt = Date.now() + intervalMs;
+    this.scheduleMetronomeTick(intervalMs);
+    this.startFloatingButtonPulse();
+  }
+
+  stopMetronome(resetBeat: boolean = true): void {
+    this.isMetronomePlaying = false;
+    this.metronomeNextTickAt = 0;
+    if (this.metronomeTimerId !== undefined) {
+      clearTimeout(this.metronomeTimerId);
+      this.metronomeTimerId = undefined;
+    }
+    if (resetBeat) {
+      this.currentBeat = -1;
+    }
+    this.metronomePulseToken = 0;
+    this.stopFloatingButtonPulse();
+  }
+
+  toggleMetronomePlayback(): void {
+    if (this.isMetronomePlaying) {
+      this.stopMetronome();
+      return;
+    }
+    this.startMetronome();
+  }
+
+  restartMetronomeIfPlaying(): void {
+    if (!this.isMetronomePlaying) {
+      return;
+    }
+    this.startMetronome();
+  }
+
   handlePageReordered(oldIndex: number, newIndex: number): void {
     hilog.info(0, 'PDFView', `处理页面重新排序: ${oldIndex} -> ${newIndex}`);
 
@@ -1533,366 +1901,612 @@ struct PDFView {
     Stack() {
       RelativeContainer() {
 
-      Row(ContainerCfg) {
+        Row(ContainerCfg) {
 
-        RelativeContainer() {
-          Image(this.view1PixelMap).alignRules(FullRect).draggable(false)
-          Canvas(this.view1Ctx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
-            .scale(this.getCanvasScale(0))
-            .hitTestBehavior(HitTestMode.None)
-          Canvas(this.view1DrawCtx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
-            .scale(this.getCanvasScale(0))
-            .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
-              event))
-            .onMouse(event => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
-              event))
-          if (this.view1Loading) {
-            Column() {
-              LoadingProgress()
-                .width(36)
-                .height(36)
+          RelativeContainer() {
+            Image(this.view1PixelMap).alignRules(FullRect).draggable(false)
+            Canvas(this.view1Ctx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+              .scale(this.getCanvasScale(0))
+              .hitTestBehavior(HitTestMode.None)
+            Canvas(this.view1DrawCtx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[0] ?? 0)))
+              .scale(this.getCanvasScale(0))
+              .visibility(toVisibility(this.annotateMode !== 'drag'))
+              .onTouch(event => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
+                event))
+              .onMouse(event => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.displayedPageIndices[0] ?? 0,
+                event))
+            if (this.view1Loading) {
+              Column() {
+                LoadingProgress()
+                  .width(36)
+                  .height(36)
+              }
+              .width('100%')
+              .height(120)
+              .justifyContent(FlexAlign.End)
+              .padding({ bottom: 12 })
+              .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+              .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+              .hitTestBehavior(HitTestMode.None)
             }
-            .width('100%')
-            .height(120)
-            .justifyContent(FlexAlign.End)
-            .padding({ bottom: 12 })
-            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
-            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
-            .hitTestBehavior(HitTestMode.None)
           }
-        }
-        .size(toSizePx(this.view1ViewSize))
-        .visibility(toVisibility(true))
+          .size(toSizePx(this.view1ViewSize))
+          .visibility(toVisibility(true))
 
-        RelativeContainer() {
-          Image(this.view2PixelMap).alignRules(FullRect).draggable(false)
-          Canvas(this.view2Ctx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
-            .scale(this.getCanvasScale(1))
-            .hitTestBehavior(HitTestMode.None)
-          Canvas(this.view2DrawCtx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
-            .scale(this.getCanvasScale(1))
-            .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
-              event))
-            .onMouse(event => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
-              event))
-          if (this.view2Loading) {
-            Column() {
-              LoadingProgress()
-                .width(36)
-                .height(36)
+          RelativeContainer() {
+            Image(this.view2PixelMap).alignRules(FullRect).draggable(false)
+            Canvas(this.view2Ctx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+              .scale(this.getCanvasScale(1))
+              .hitTestBehavior(HitTestMode.None)
+            Canvas(this.view2DrawCtx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[1] ?? 0)))
+              .scale(this.getCanvasScale(1))
+              .visibility(toVisibility(this.annotateMode !== 'drag'))
+              .onTouch(event => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
+                event))
+              .onMouse(event => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.displayedPageIndices[1] ?? 0,
+                event))
+            if (this.view2Loading) {
+              Column() {
+                LoadingProgress()
+                  .width(36)
+                  .height(36)
+              }
+              .width('100%')
+              .height(120)
+              .justifyContent(FlexAlign.End)
+              .padding({ bottom: 12 })
+              .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+              .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+              .hitTestBehavior(HitTestMode.None)
             }
-            .width('100%')
-            .height(120)
-            .justifyContent(FlexAlign.End)
-            .padding({ bottom: 12 })
-            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
-            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
-            .hitTestBehavior(HitTestMode.None)
           }
-        }
-        .size(toSizePx(this.view2ViewSize))
-        .visibility(toVisibility(this.view2Visible))
+          .size(toSizePx(this.view2ViewSize))
+          .visibility(toVisibility(this.view2Visible))
 
-        RelativeContainer() {
-          Image(this.view3PixelMap).alignRules(FullRect).draggable(false)
-          Canvas(this.view3Ctx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
-            .scale(this.getCanvasScale(2))
-            .hitTestBehavior(HitTestMode.None)
-          Canvas(this.view3DrawCtx)
-            .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
-            .scale(this.getCanvasScale(2))
-            .visibility(toVisibility(this.annotateMode !== 'drag'))
-            .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
-              event))
-            .onMouse(event => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
-              event))
-          if (this.view3Loading) {
-            Column() {
-              LoadingProgress()
-                .width(36)
-                .height(36)
+          RelativeContainer() {
+            Image(this.view3PixelMap).alignRules(FullRect).draggable(false)
+            Canvas(this.view3Ctx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+              .scale(this.getCanvasScale(2))
+              .hitTestBehavior(HitTestMode.None)
+            Canvas(this.view3DrawCtx)
+              .size(toSizePx(this.getCanvasSize(this.displayedPageIndices[2] ?? 0)))
+              .scale(this.getCanvasScale(2))
+              .visibility(toVisibility(this.annotateMode !== 'drag'))
+              .onTouch(event => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
+                event))
+              .onMouse(event => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.displayedPageIndices[2] ?? 0,
+                event))
+            if (this.view3Loading) {
+              Column() {
+                LoadingProgress()
+                  .width(36)
+                  .height(36)
+              }
+              .width('100%')
+              .height(120)
+              .justifyContent(FlexAlign.End)
+              .padding({ bottom: 12 })
+              .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
+              .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
+              .hitTestBehavior(HitTestMode.None)
             }
-            .width('100%')
-            .height(120)
-            .justifyContent(FlexAlign.End)
-            .padding({ bottom: 12 })
-            .linearGradient({ direction: GradientDirection.Bottom, colors: [['#00000000', 0.0], ['#33000000', 1.0]] })
-            .alignRules({ bottom: { anchor: '__container__', align: VerticalAlign.Bottom } })
-            .hitTestBehavior(HitTestMode.None)
           }
+          .size(toSizePx(this.view3ViewSize))
+          .visibility(toVisibility(this.view3Visible))
         }
-        .size(toSizePx(this.view3ViewSize))
-        .visibility(toVisibility(this.view3Visible))
-      }
-      .alignRules(TopLeft)
-      .offset(this.viewPan)
-      .size(toSizePx(this.viewSize))
-      .scale({
-        x: this.viewScale,
-        y: this.viewScale,
-        centerX: 0,
-        centerY: 0
-      })
-
-      Flex()
-        .size({ width: '100%', height: '100%' })
-        .onAreaChange((_, newVal) => {
-          this.viewportSize = fromArea(newVal, this.getUIContext());
-          this.resetViewToFit();
-        })
-        .hitTestBehavior(HitTestMode.Transparent)
-        .onTouch(event => this.handleViewAction(event))
-        .onMouse(event => this.handleMouseEvent(event))
-        .onAxisEvent(event => this.handleMouseAxisEvent(event))
-
-      Button(PageFlipButtonOption)
-        .size(PageFlipButtonSize)
-        .onClick(() => this.gotoPrevPage())
         .alignRules(TopLeft)
-        .backgroundColor(Color.Transparent)
-        .hitTestBehavior(HitTestMode.Transparent)
-        .visibility(toVisibility(this.pageFlipMode == 'side'))
-
-      Button(PageFlipButtonOption)
-        .size(PageFlipButtonSize)
-        .onClick(() => this.gotoNextPage())
-        .alignRules(TopRight)
-        .backgroundColor(Color.Transparent)
-        .hitTestBehavior(HitTestMode.Transparent)
-        .visibility(toVisibility(this.pageFlipMode == 'side'))
-
-      Image('')
-        .size(PageFlipButtonSize)
-        .alignRules(TopLeft)
-        .visibility(toVisibility(this.pageFlipMode == 'side'))
-        .hitTestBehavior(HitTestMode.None)
-        .linearGradient({
-          direction: GradientDirection.Left,
-          colors: [
-            [Color.Transparent, 0],
-            ['rgba(0, 0, 0, 0.2)', 1]
-          ],
-          repeating: false
+        .offset(this.viewPan)
+        .size(toSizePx(this.viewSize))
+        .scale({
+          x: this.viewScale,
+          y: this.viewScale,
+          centerX: 0,
+          centerY: 0
         })
 
-      Image('')
-        .size(PageFlipButtonSize)
-        .alignRules(TopRight)
-        .visibility(toVisibility(this.pageFlipMode == 'side'))
-        .hitTestBehavior(HitTestMode.None)
-        .linearGradient({
-          direction: GradientDirection.Right,
-          colors: [
-            [Color.Transparent, 0],
-            ['rgba(0, 0, 0, 0.2)', 1]
-          ],
-          repeating: false
-        })
+        Flex()
+          .size({ width: '100%', height: '100%' })
+          .onAreaChange((_, newVal) => {
+            this.viewportSize = fromArea(newVal, this.getUIContext());
+            this.resetViewToFit();
+          })
+          .hitTestBehavior(HitTestMode.Transparent)
+          .onTouch(event => this.handleViewAction(event))
+          .onMouse(event => this.handleMouseEvent(event))
+          .onAxisEvent(event => this.handleMouseAxisEvent(event))
 
+        Button(PageFlipButtonOption)
+          .size(PageFlipButtonSize)
+          .onClick(() => this.gotoPrevPage())
+          .alignRules(TopLeft)
+          .backgroundColor(Color.Transparent)
+          .hitTestBehavior(HitTestMode.Transparent)
+          .visibility(toVisibility(this.pageFlipMode == 'side'))
 
-      Stack() {
-        // Slider - positioned at right, vertically centered, independent of bottom bar
-        Column(ContainerCfg) {
-          Blank().layoutWeight(1)
-          MakeSlider(
-            {
-              value: this.currentPageIndex,
-              min: 0,
-              max: this.totalPageCount - 1,
-              onChangeCallback: newValue => this.gotoPage(newValue)
-            }
-          ).visibility(toVisibility(this.showControls && this.showSlider))
-          Blank().height(60)
-        }
-        .width('100%')
-        .height('100%')
-        .alignItems(HorizontalAlign.End)
-        .hitTestBehavior(HitTestMode.Transparent)
+        Button(PageFlipButtonOption)
+          .size(PageFlipButtonSize)
+          .onClick(() => this.gotoNextPage())
+          .alignRules(TopRight)
+          .backgroundColor(Color.Transparent)
+          .hitTestBehavior(HitTestMode.Transparent)
+          .visibility(toVisibility(this.pageFlipMode == 'side'))
 
-        // Bottom bar
-        Column() {
-          Blank().layoutWeight(1)
-          Row(ContainerCfg) {
-          // Bottom-left: expandable menu
-          Column({ space: ContainerSpacing }) {
-            if (this.menuExpanded) {
-              StyleIconButton({
-                icon: $r('sys.symbol.questionmark_circle'),
-                label: '教程',
-                onClickCallback: () => {
-                  this.menuExpanded = false;
-                  this.tutorialDialogController.open();
+        Image('')
+          .size(PageFlipButtonSize)
+          .alignRules(TopLeft)
+          .visibility(toVisibility(this.pageFlipMode == 'side'))
+          .hitTestBehavior(HitTestMode.None)
+          .linearGradient({
+            direction: GradientDirection.Left,
+            colors: [
+              [Color.Transparent, 0],
+              ['rgba(0, 0, 0, 0.2)', 1]
+            ],
+            repeating: false
+          })
+
+        Image('')
+          .size(PageFlipButtonSize)
+          .alignRules(TopRight)
+          .visibility(toVisibility(this.pageFlipMode == 'side'))
+          .hitTestBehavior(HitTestMode.None)
+          .linearGradient({
+            direction: GradientDirection.Right,
+            colors: [
+              [Color.Transparent, 0],
+              ['rgba(0, 0, 0, 0.2)', 1]
+            ],
+            repeating: false
+          })
+        Stack() {
+          if (this.showMetronomeWindow) {
+            Column({ space: 14 }) {
+              Row() {
+                Text('节拍器')
+                  .fontSize(18)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Color.White)
+                Blank()
+                Button({ type: ButtonType.Capsule }) {
+                  SymbolGlyph($r('sys.symbol.xmark'))
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor([Color.White])
                 }
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                .width(60)
+                .height(28)
+                .backgroundColor('rgba(255, 255, 255, 0.16)')
+                .onClick(() => this.showMetronomeWindow = false)
+              }
+              .width('100%')
 
-              if (deviceInfo.deviceType != 'phone') {
-                StyleIconButton({
-                  icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
-                  label: this.isExclusiveFullScreen ? '窗口' : '全屏',
-                  onClickCallback: () => {
-                    this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
-                    if (this.isExclusiveFullScreen) {
-                      this.mainWindow.maximize().catch();
-                    } else {
-                      this.mainWindow.recover().catch();
+              Grid(undefined, this.metronomeGridLayout) {
+                // Row 0: Labels
+                GridItem() {
+                  Text('速度')
+                    .fontSize(12)
+                    .fontColor('rgba(255, 255, 255, 0.62)')
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                }
+
+                GridItem() {
+                  Text('拍号')
+                    .fontSize(12)
+                    .fontColor('rgba(255, 255, 255, 0.62)')
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                }
+
+                // Row 1: Tempo Spin Controls
+                GridItem() {
+                  Row({ space: 8 }) {
+                    Button({ type: ButtonType.Capsule }) {
+                      Text('-')
+                        .fontSize(20)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Color.White)
                     }
+                    .width(34)
+                    .height(40)
+                    .backgroundColor('rgba(255, 255, 255, 0.1)')
+                    .onClick(() => this.adjustMetronomeBpm(-1))
+
+                    Text(`${this.metronomeBpm}`)
+                      .fontSize(30)
+                      .fontWeight(FontWeight.Bold)
+                      .fontColor(Color.White)
+                      .layoutWeight(1)
+                      .textAlign(TextAlign.Center)
+
+                    Button({ type: ButtonType.Capsule }) {
+                        Text('+')
+                          .fontSize(20)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Color.White)
+                      }
+                      .width(34)
+                      .height(40)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.adjustMetronomeBpm(1))
                   }
-                }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                  .width('100%')
+                  .height(90)
+                  .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                  .borderRadius(16)
+                  .backgroundColor('rgba(255, 255, 255, 0.05)')
+                }
+
+                // Row 1: Time Signature Controls
+                GridItem() {
+                  Column({ space: 6 }) {
+                    Row({ space: 6 }) {
+                      Button({ type: ButtonType.Capsule }) {
+                        Text('-')
+                          .fontSize(18)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Color.White)
+                      }
+                      .width(30)
+                      .height(30)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.adjustMetronomeNumerator(-1))
+
+                      Text(`${this.metronomeNumerator}`)
+                        .fontSize(24)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor(Color.White)
+                        .layoutWeight(1)
+                        .textAlign(TextAlign.Center)
+                      Button({ type: ButtonType.Capsule }) {
+                        Text('+')
+                          .fontSize(18)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Color.White)
+                      }
+                      .width(30)
+                      .height(30)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.adjustMetronomeNumerator(1))
+                    }
+                    .width('100%')
+
+                    Divider()
+                      .strokeWidth(1)
+                      .color('rgba(255, 255, 255, 0.16)')
+
+                    Row({ space: 6 }) {
+                      Button({ type: ButtonType.Capsule }) {
+                        Text('<')
+                          .fontSize(14)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Color.White)
+                      }
+                      .width(30)
+                      .height(30)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.cycleMetronomeDenominator(-1))
+
+                      Text(`${this.metronomeDenominator}`)
+                        .fontSize(22)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor(Color.White)
+                        .layoutWeight(1)
+                        .textAlign(TextAlign.Center)
+                      Button({ type: ButtonType.Capsule }) {
+                        Text('>')
+                          .fontSize(14)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Color.White)
+                      }
+                      .width(30)
+                      .height(30)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.cycleMetronomeDenominator(1))
+                    }
+                    .width('100%')
+                  }
+                  .width('100%')
+                  .height(90)
+                  .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                  .borderRadius(16)
+                  .backgroundColor('rgba(255, 255, 255, 0.05)')
+                }
+
+                // Row 2: Preset Buttons
+                GridItem() {
+                  Button('预设')
+                    .type(ButtonType.Capsule)
+                    .width('100%')
+                    .height(34)
+                    .fontSize(13)
+                    .fontColor(Color.White)
+                    .backgroundColor('rgba(255, 255, 255, 0.1)')
+                    .bindMenu(this.getMetronomeBpmMenu(), {
+                      backgroundColor: ButtonColor,
+                      outlineColor: Color.Transparent,
+                      placement: Placement.BottomRight
+                    })
+                }
+
+                GridItem() {
+                  Button('预设')
+                    .type(ButtonType.Capsule)
+                    .width('100%')
+                    .height(34)
+                    .fontSize(13)
+                    .fontColor(Color.White)
+                    .backgroundColor('rgba(255, 255, 255, 0.1)')
+                    .bindMenu(this.getMetronomeTimeSignatureMenu(), {
+                      backgroundColor: ButtonColor,
+                      outlineColor: Color.Transparent,
+                      placement: Placement.BottomRight
+                    })
+                }
+
+                // Row 3: 拍点 Label (spans 2 columns)
+                GridItem() {
+                  Text('拍点')
+                    .fontSize(12)
+                    .fontColor('rgba(255, 255, 255, 0.62)')
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                }
+
+                // Row 4: Beat Controls (spans 2 columns)
+                GridItem() {
+                  Flex({ wrap: FlexWrap.Wrap, space: { main: MetronomeBeatSpacing, cross: MetronomeBeatSpacing } }) {
+                    ForEach(this.getMetronomeBeatIndices(), (beat: number) => {
+                      Stack() {
+                        Text(`${beat + 1}`)
+                          .fontSize(16)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor(Color.White)
+                      }
+                      .flexGrow(1)
+                      .height(44)
+                      .borderRadius(14)
+                      .backgroundColor(this.getMetronomeBeatColor(beat))
+                      .border({
+                        width: beat === 0 ? 2 : 1,
+                        color: beat === 0 ? 'rgba(255, 159, 67, 0.45)' : 'rgba(255, 255, 255, 0.06)'
+                      })
+                    }, (beat: number) => `${beat}`)
+                  }
+                  .width('100%')
+                  .padding(12)
+                  .borderRadius(16)
+                  .backgroundColor('rgba(255, 255, 255, 0.035)')
+                }
+
+                // Row 5: Play/Stop Button (spans 2 columns)
+                GridItem() {
+                  Button(this.isMetronomePlaying ? '停止' : '播放')
+                    .type(ButtonType.Capsule)
+                    .width('100%')
+                    .height(42)
+                    .fontSize(16)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Color.White)
+                    .backgroundColor(this.isMetronomePlaying ? 'rgba(211, 84, 0, 0.82)' : 'rgba(77, 166, 255, 0.88)')
+                    .onClick(() => this.toggleMetronomePlayback())
+                }
               }
-
-              StyleIconButton({
-                icon: $r('sys.symbol.share'),
-                label: '分享',
-                onClickCallback: () => {
-                  animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-                    this.menuExpanded = false;
-                  });
-                  this.executeShare();
-                }
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-              StyleIconButton({
-                icon: $r('sys.symbol.gearshape'),
-                label: '设置',
-                onClickCallback: () => {
-                  this.menuExpanded = false;
-                  this.settingsDialogController.open();
-                }
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-              StyleIconButton({
-                icon: $r('sys.symbol.arrow_right'),
-                label: '跳转',
-                menuElement: [
-                  {
-                    value: "重置视口",
-                    action: () => this.resetViewToFit(),
-                  },
-                  {
-                    value: "跳转首页",
-                    action: () => this.gotoPage(0),
-                  },
-                  {
-                    value: "跳转尾页",
-                    action: () => this.gotoPage(this.totalPageCount - 1),
-                  }],
-                menuPlacement: Placement.RightBottom
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-              StyleIconButton({
-                icon: $r('sys.symbol.pencil_waveform'),
-                label: this.getShowControlsText(),
-                menuElement: [
-                  {
-                    value: "拖动",
-                    action: () => this.setAnnotateMode('drag'),
-                    symbolIcon: getCheckIcon(this.annotateMode == 'drag')
-                  },
-                  {
-                    value: "绘制",
-                    action: () => this.setAnnotateMode('draw'),
-                    symbolIcon: getCheckIcon(this.annotateMode == 'draw')
-                  },
-                  {
-                    value: "擦除",
-                    action: () => this.setAnnotateMode('erase'),
-                    symbolIcon: getCheckIcon(this.annotateMode == 'erase')
-                  }],
-                menuPlacement: Placement.RightBottom
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+              .columnsTemplate('1fr 1fr')
+              .columnsGap(12)
+              .rowsGap(10)
+              .height(LayoutPolicy.wrapContent)
+              .width('100%')
             }
-
-            StyleIconButton({
-              icon: this.menuExpanded ? $r('sys.symbol.xmark') : $r('sys.symbol.more'),
-              alternateColor: this.menuExpanded ? ButtonColor : ButtonColorSemiTransparent,
-              onClickCallback: () => {
-                animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-                  this.menuExpanded = !this.menuExpanded;
-                });
-              }
-            }).id(ShareButtonId)
+            .width(MetronomeWindowWidth)
+            .padding(16)
+            .backgroundColor('rgba(8, 10, 14, 0.78)')
+            .borderRadius(18)
+            .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
+            .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
+            .align(Alignment.TopStart)
+            .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
           }
-          .alignItems(HorizontalAlign.Start)
 
-          Blank()
-
-          StyleIconBadgeButton({
-            icon: $r('sys.symbol.undo'),
-            count: this.undoHistoryCount,
-            onClickCallback: () => this.executeUndo()
-          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
-            .enabled(this.undoHistoryCount > 0)
-            .opacity(this.undoHistoryCount > 0 ? 1.0 : 0.4)
-          StyleIconBadgeButton({
-            icon: $r('sys.symbol.redo'),
-            count: this.redoHistoryCount,
-            onClickCallback: () => this.executeRedo()
-          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
-            .enabled(this.redoHistoryCount > 0)
-            .opacity(this.redoHistoryCount > 0 ? 1.0 : 0.4)
-          StyleIconButton({
-            icon: $r('sys.symbol.save'),
-            onClickCallback: () => this.executeSave()
-          }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
-            .enabled(this.hasUnsavedStrokes)
-            .opacity(this.hasUnsavedStrokes ? 1.0 : 0.4)
-          StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
-            .visibility(toVisibility(this.pageFlipMode == 'button'))
-          StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
-            .visibility(toVisibility(this.pageFlipMode == 'button'))
-          StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(this.pageFlipMode != 'button'))
-
-        }.width('100%').alignItems(VerticalAlign.Bottom)
+          if (!this.showMetronomeWindow && this.isMetronomePlaying) {
+            StyleIconButton({
+              icon: $r('sys.symbol.clock'),
+              alternateColor: !this.isMetronomePlaying || this.currentBeat < 0 ? 'rgba(35, 42, 53, 0.62)' : this.metronomeFloatingButtonColor,
+              onClickCallback: () => this.showMetronomeWindow = true
+            })
+              .scale({
+                x: this.getMetronomeFloatingButtonScale(),
+                y: this.getMetronomeFloatingButtonScale(),
+                centerX: 22,
+                centerY: 22
+              })
+              .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+          }
         }
+        .alignContent(Alignment.TopStart)
+        .alignRules(TopLeft)
+        .margin(ContainerPadding)
         .width('100%')
         .height('100%')
         .hitTestBehavior(HitTestMode.Transparent)
-      }
-      .alignContent(Alignment.BottomStart)
-      .alignRules(FullRect)
-      .margin(ContainerPadding)
-      .hitTestBehavior(HitTestMode.Transparent)
-      .opacity(this.controlsTransparency)
-    }
-    .hitTestBehavior(HitTestMode.Transparent)
-    .size({ width: '100%', height: '100%' })
-    .backgroundColor($r('sys.color.white'))
-    .focusable(true)
-    .defaultFocus(true)
-    .focusOnTouch(true)
-    .onKeyEvent(keyEvent => {
-      if (keyEvent.type != KeyType.Down) {
-        return;
-      }
-      if (this == null) {
-        return;
-      }
 
-      let isCtrlPressed = false;
-      let isShiftPressed = false;
+        Stack() {
+          // Slider - positioned at right, vertically centered, independent of bottom bar
+          Column(ContainerCfg) {
+            Blank().layoutWeight(1)
+            MakeSlider(
+              {
+                value: this.currentPageIndex,
+                min: 0,
+                max: this.totalPageCount - 1,
+                onChangeCallback: newValue => this.gotoPage(newValue)
+              }
+            ).visibility(toVisibility(this.showControls && this.showSlider))
+            Blank().height(60)
+          }
+          .width('100%')
+          .height('100%')
+          .alignItems(HorizontalAlign.End)
+          .hitTestBehavior(HitTestMode.Transparent)
 
-      if (keyEvent.getModifierKeyState != null) {
-        try {
-          isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
-          isShiftPressed = keyEvent.getModifierKeyState(['shift']);
-        } catch (error) {
+          // Bottom bar
+          Column() {
+            Blank().layoutWeight(1)
+            Row(ContainerCfg) {
+              // Bottom-left: expandable menu
+              Column({ space: ContainerSpacing }) {
+                if (this.menuExpanded) {
+                  StyleIconButton({
+                    icon: $r('sys.symbol.questionmark_circle'),
+                    label: '教程',
+                    onClickCallback: () => {
+                      this.menuExpanded = false;
+                      this.tutorialDialogController.open();
+                    }
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                  if (deviceInfo.deviceType != 'phone') {
+                    StyleIconButton({
+                      icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
+                      label: this.isExclusiveFullScreen ? '窗口' : '全屏',
+                      onClickCallback: () => {
+                        this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
+                        if (this.isExclusiveFullScreen) {
+                          this.mainWindow.maximize().catch();
+                        } else {
+                          this.mainWindow.recover().catch();
+                        }
+                      }
+                    }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                  }
+
+                  StyleIconButton({
+                    icon: $r('sys.symbol.share'),
+                    label: '分享',
+                    onClickCallback: () => {
+                      animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                        this.menuExpanded = false;
+                      });
+                      this.executeShare();
+                    }
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                  StyleIconButton({
+                    icon: $r('sys.symbol.gearshape'),
+                    label: '设置',
+                    onClickCallback: () => {
+                      this.menuExpanded = false;
+                      this.settingsDialogController.open();
+                    }
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                  StyleIconButton({
+                    icon: $r('sys.symbol.clock'),
+                    label: '节拍器',
+                    onClickCallback: () => {
+                      this.showMetronomeWindow = !this.showMetronomeWindow;
+                      this.menuExpanded = false;
+                    }
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                  StyleIconButton({
+                    icon: $r('sys.symbol.arrow_right'),
+                    label: '跳转',
+                    menuElement: [
+                      {
+                        value: "重置视口",
+                        action: () => this.resetViewToFit(),
+                      },
+                      {
+                        value: "跳转首页",
+                        action: () => this.gotoPage(0),
+                      },
+                      {
+                        value: "跳转尾页",
+                        action: () => this.gotoPage(this.totalPageCount - 1),
+                      }],
+                    menuPlacement: Placement.RightBottom
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                  StyleIconButton({
+                    icon: $r('sys.symbol.pencil_waveform'),
+                    label: this.getShowControlsText(),
+                    menuElement: [
+                      {
+                        value: "拖动",
+                        action: () => this.setAnnotateMode('drag'),
+                        symbolIcon: getCheckIcon(this.annotateMode == 'drag')
+                      },
+                      {
+                        value: "绘制",
+                        action: () => this.setAnnotateMode('draw'),
+                        symbolIcon: getCheckIcon(this.annotateMode == 'draw')
+                      },
+                      {
+                        value: "擦除",
+                        action: () => this.setAnnotateMode('erase'),
+                        symbolIcon: getCheckIcon(this.annotateMode == 'erase')
+                      }],
+                    menuPlacement: Placement.RightBottom
+                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                }
+
+                StyleIconButton({
+                  icon: this.menuExpanded ? $r('sys.symbol.xmark') : $r('sys.symbol.more'),
+                  alternateColor: this.menuExpanded ? ButtonColor : ButtonColorSemiTransparent,
+                  onClickCallback: () => {
+                    animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                      this.menuExpanded = !this.menuExpanded;
+                    });
+                  }
+                }).id(ShareButtonId)
+              }
+              .alignItems(HorizontalAlign.Start)
+
+              Blank()
+
+              StyleIconBadgeButton({
+                icon: $r('sys.symbol.undo'),
+                count: this.undoHistoryCount,
+                onClickCallback: () => this.executeUndo()
+              }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+                .enabled(this.undoHistoryCount > 0)
+                .opacity(this.undoHistoryCount > 0 ? 1.0 : 0.4)
+              StyleIconBadgeButton({
+                icon: $r('sys.symbol.redo'),
+                count: this.redoHistoryCount,
+                onClickCallback: () => this.executeRedo()
+              }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+                .enabled(this.redoHistoryCount > 0)
+                .opacity(this.redoHistoryCount > 0 ? 1.0 : 0.4)
+              StyleIconButton({
+                icon: $r('sys.symbol.save'),
+                onClickCallback: () => this.executeSave()
+              }).visibility(toVisibility(this.showControls && (this.undoHistoryCount > 0 || this.redoHistoryCount > 0 || this.hasUnsavedStrokes)))
+                .enabled(this.hasUnsavedStrokes)
+                .opacity(this.hasUnsavedStrokes ? 1.0 : 0.4)
+              StyleButton({ text: '<', onClickCallback: () => this.gotoPrevPage() })
+                .visibility(toVisibility(this.pageFlipMode == 'button'))
+              StyleButton({ text: '>', onClickCallback: () => this.gotoNextPage() })
+                .visibility(toVisibility(this.pageFlipMode == 'button'))
+              StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(this.pageFlipMode != 'button'))
+
+            }.width('100%').alignItems(VerticalAlign.Bottom)
+          }
+          .width('100%')
+          .height('100%')
+          .hitTestBehavior(HitTestMode.Transparent)
         }
+        .alignRules(FullRect)
+        .margin(ContainerPadding)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .opacity(this.controlsTransparency)
       }
-
-      const action = this.checkHotkey(keyEvent.keyCode, isCtrlPressed, isShiftPressed);
-      if (action !== null) {
-        keyEvent.stopPropagation();
-        action();
-      }
-    })
-    .onTouchTestDone(() => this.startTransparencyTimeout())
 
       if (this.isDocumentLoading) {
         Column() {
@@ -1944,6 +2558,38 @@ struct PDFView {
         .backgroundColor($r('sys.color.white'))
       }
     }
+    .hitTestBehavior(HitTestMode.Transparent)
+    .size({ width: '100%', height: '100%' })
+    .backgroundColor($r('sys.color.white'))
+    .focusable(true)
+    .defaultFocus(true)
+    .focusOnTouch(true)
+    .onKeyEvent(keyEvent => {
+      if (keyEvent.type != KeyType.Down) {
+        return;
+      }
+      if (this == null) {
+        return;
+      }
+
+      let isCtrlPressed = false;
+      let isShiftPressed = false;
+
+      if (keyEvent.getModifierKeyState != null) {
+        try {
+          isCtrlPressed = keyEvent.getModifierKeyState(['ctrl']);
+          isShiftPressed = keyEvent.getModifierKeyState(['shift']);
+        } catch (error) {
+        }
+      }
+
+      const action = this.checkHotkey(keyEvent.keyCode, isCtrlPressed, isShiftPressed);
+      if (action !== null) {
+        keyEvent.stopPropagation();
+        action();
+      }
+    })
+    .onTouchTestDone(() => this.startTransparencyTimeout())
     .width('100%')
     .height('100%')
   }

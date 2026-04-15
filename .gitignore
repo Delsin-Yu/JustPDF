@@ -13,5 +13,5 @@
 certs
 HarmonyOS-Developer-Docs
 entry/patch.json
-build-run.ps1
+build-deploy.ps1
 build.ps1
