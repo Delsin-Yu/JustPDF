@@ -1,5 +1,7 @@
-import { LengthMetrics } from '@kit.ArkUI';
+import { LengthMetrics, display } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import { ContainerWideCfg, ContainerWidePadding } from './UIComponents';
+import { WaterfallPreference } from '../common/WaterfallPreference';
 
 const AccentColor: ResourceColor = '#4DA6FF';
 const ChipSelected: ResourceColor = AccentColor;
@@ -13,9 +15,21 @@ export struct SettingsDialogBuilder {
   @State pageDisplayMode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' = 'single';
   @State pageFlipMode: 'side' | 'button' | 'extern' = 'side';
   @State showSlider: boolean = true;
+  @StorageLink('preferWaterfall') preferWaterfall: boolean = true;
   onPageDisplayModeChanged: (mode: 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous') => void = () => {};
   onPageFlipModeChanged: (mode: 'side' | 'button' | 'extern') => void = () => {};
   onSliderToggled: (show: boolean) => void = () => {};
+
+  private shouldShowWaterfallSetting(): boolean {
+    if (deviceInfo.deviceType != '2in1') {
+      return false;
+    }
+    try {
+      return display.isFoldable();
+    } catch (_) {
+      return false;
+    }
+  }
 
   build() {
     Column(ContainerWideCfg) {
@@ -115,6 +129,35 @@ export struct SettingsDialogBuilder {
             })
         }
         .width('100%')
+
+        if (this.shouldShowWaterfallSetting()) {
+          // 跨屏最大化 (瀑布流)：折叠屏 2in1 设备悬停态下让窗口最大化时横跨上下两半屏
+          Row() {
+            Column() {
+              Text('跨屏最大化')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(LabelColor)
+                .width('100%')
+              Text('折叠屏 2in1 设备悬停态下，最大化时横跨上下两半屏（瀑布流模式）')
+                .fontSize(12)
+                .fontColor(LabelColor)
+                .opacity(0.7)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+            Toggle({ type: ToggleType.Switch, isOn: this.preferWaterfall })
+              .onChange((isOn: boolean) => {
+                if (WaterfallPreference.setter) {
+                  WaterfallPreference.setter(isOn);
+                } else {
+                  this.preferWaterfall = isOn;
+                }
+              })
+          }
+          .width('100%')
+        }
 
       }
       .width('100%')
