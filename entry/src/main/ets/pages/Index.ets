@@ -20,11 +20,13 @@ struct Index {
     }
     let launchUriLink = AppStorage?.link<string>('launchUri');
     if (launchUriLink == null) {
-
       return;
     }
     let launchUri = launchUriLink.get();
     launchUriLink.set('');
+    if (launchUri == null || launchUri == '') {
+      return;
+    }
     this.loadAndViewFile(launchUri);
   }
 
