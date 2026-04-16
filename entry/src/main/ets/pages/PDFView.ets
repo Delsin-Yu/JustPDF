@@ -2163,18 +2163,38 @@ struct PDFView {
 
                 // Row 2: Preset Buttons
                 GridItem() {
-                  Button('预设')
-                    .type(ButtonType.Capsule)
-                    .width('100%')
-                    .height(34)
-                    .fontSize(13)
-                    .fontColor(Color.White)
-                    .backgroundColor('rgba(255, 255, 255, 0.1)')
-                    .bindMenu(this.getMetronomeBpmMenu(), {
-                      backgroundColor: ButtonColor,
-                      outlineColor: Color.Transparent,
-                      placement: Placement.BottomRight
-                    })
+                  Row({ space: 6 }) {
+                    Button('-10')
+                      .type(ButtonType.Capsule)
+                      .flexGrow(1)
+                      .height(34)
+                      .fontSize(13)
+                      .fontColor(Color.White)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.adjustMetronomeBpm(-10))
+
+                    Button('预设')
+                      .type(ButtonType.Capsule)
+                      .flexGrow(1)
+                      .height(34)
+                      .fontSize(13)
+                      .fontColor(Color.White)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .bindMenu(this.getMetronomeBpmMenu(), {
+                        backgroundColor: ButtonColor,
+                        outlineColor: Color.Transparent,
+                        placement: Placement.BottomRight
+                      })
+
+                    Button('+10')
+                      .type(ButtonType.Capsule)
+                      .flexGrow(1)
+                      .height(34)
+                      .fontSize(13)
+                      .fontColor(Color.White)
+                      .backgroundColor('rgba(255, 255, 255, 0.1)')
+                      .onClick(() => this.adjustMetronomeBpm(+10))
+                  }
                 }
 
                 GridItem() {
