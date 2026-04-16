@@ -958,10 +958,18 @@ struct PDFView {
       dstFile = await fs.open(saveUri, fs.OpenMode.WRITE_ONLY);
     } catch (error) {
       if (srcFile) {
-        await fs.close(srcFile);
+        try {
+          await fs.close(srcFile);
+        } catch (closeError) {
+          hilog.error(0, 'PDFView', `关闭源文件时出错: ${closeError}`);
+        }
       }
       if (dstFile) {
-        await fs.close(dstFile);
+        try {
+          await fs.close(dstFile);
+        } catch (closeError) {
+          hilog.error(0, 'PDFView', `关闭目标文件时出错: ${closeError}`);
+        }
       }
       hilog.error(0, 'PDFView', `打开文件时出错: ${error}`);
       this.revertChanges(affectedPage);
@@ -974,7 +982,7 @@ struct PDFView {
       await fs.close(dstFile);
     } catch (err) {
       hilog.error(0, 'PDFView', `保存 PDF 文件到选定位置 ${saveUri} 时出错: ${err}`);
-      await showAlertDialog('保存失败', '无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。', this.getUIContext());
+      await showAlertDialog('保存失败', `无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。\n错误信息: ${err}`, this.getUIContext());
       this.revertChanges(affectedPage);
       return;
     }
@@ -2352,7 +2360,7 @@ struct PDFView {
                     icon: $r('sys.symbol.share'),
                     label: '分享',
                     onClickCallback: () => {
-                      animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
                         this.menuExpanded = false;
                       });
                       this.executeShare();
@@ -2423,7 +2431,7 @@ struct PDFView {
                   icon: this.menuExpanded ? $r('sys.symbol.xmark') : $r('sys.symbol.more'),
                   alternateColor: this.menuExpanded ? ButtonColor : ButtonColorSemiTransparent,
                   onClickCallback: () => {
-                    animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                    this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
                       this.menuExpanded = !this.menuExpanded;
                     });
                   }

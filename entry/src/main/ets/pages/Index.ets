@@ -2,6 +2,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { pickFilePathAsync } from '../components/GUIO';
+import { showAlertDialog } from '../components/UIComponents';
 
 const TAG = 'JustPDFIndex';
 
@@ -30,7 +31,15 @@ struct Index {
   async loadAndViewFile(uri: string) {
     let uiContext = this.getUIContext();
     let dir = uiContext.getHostContext()!.tempDir;
-    let sourceFile = await fs.open(uri, fs.OpenMode.READ_ONLY);
+    let sourceFile: fs.File;
+    try {
+      sourceFile = await fs.open(uri, fs.OpenMode.READ_ONLY);
+    } catch (error) {
+      hilog.error(0x0000, TAG, `Error opening file: ${error}`);
+      await showAlertDialog('文件打开失败', `无法打开选定的PDF文件，请检查文件是否存在或已损坏。\n错误信息: ${error}`, uiContext);
+      this.isLoading = false;
+      return;
+    }
     let fileName = sourceFile.name;
     this.loadingFileName = fileName;
     this.isLoading = true;
@@ -39,8 +48,17 @@ struct Index {
     hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     try {
       await fs.copyFile(sourceFile.fd, file);
+    } catch (error) {
+      hilog.error(0x0000, TAG, `Error copying file: ${error}`);
+      await showAlertDialog('文件复制失败', `无法将PDF文件复制到临时目录。请检查存储空间是否充足。\n错误信息: ${error}`, uiContext);
+      this.isLoading = false;
+      return;
     } finally {
-      await fs.close(sourceFile);
+      try {
+        await fs.close(sourceFile);
+      } catch (error) {
+        hilog.error(0x0000, TAG, `Error closing file: ${error}`);
+      }
     }
     hilog.info(0x0000, TAG, "copyFile succeed");
 
@@ -50,7 +68,13 @@ struct Index {
       'saveTempPath': tempFile,
       'fileName': fileName
     }
-    uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
+    try {
+      uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
+    } catch (error) {
+      hilog.error(0x0000, TAG, `Error navigating to PDFView: ${error}`);
+      await showAlertDialog('页面跳转失败', `无法打开PDF预览页面，请重试。\n错误信息: ${error}`, uiContext);
+      this.isLoading = false;
+    }
   }
 
 
@@ -82,7 +106,9 @@ struct Index {
                 }
               } catch (err) {
                 let businessErr = err as BusinessError;
-                hilog.info(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+                hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+                let uiContext = this.getUIContext();
+                await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`, uiContext);
                 this.isLoading = false;
               }
             })
