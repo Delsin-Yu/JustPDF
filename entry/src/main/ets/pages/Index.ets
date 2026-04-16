@@ -19,6 +19,7 @@ struct Index {
     }
     let launchUriLink = AppStorage?.link<string>('launchUri');
     if (launchUriLink == null) {
+
       return;
     }
     let launchUri = launchUriLink.get();
@@ -55,24 +56,24 @@ struct Index {
 
   build() {
     Row() {
-      Column({ space: '30lpx' }) {
+      Column({ space: '50px' }) {
         Text("Just PDF")
-          .fontSize('70lpx')
+          .fontSize('180px')
           .fontWeight(FontWeight.Bold)
         if (this.isLoading) {
           LoadingProgress()
-            .width('60lpx')
-            .height('60lpx')
+            .width(60)
+            .height(60)
           Text(`正在加载 ${this.loadingFileName}`)
-            .fontSize('24lpx')
+            .fontSize(24)
             .fontColor(Color.Gray)
         } else {
           Button("选择文件")
             .type(ButtonType.Capsule)
-            .fontSize('30lpx')
+            .fontSize('100px')
             .fontWeight(FontWeight.Bold)
-            .width('200lpx')
-            .height('50lpx')
+            .width('650px')
+            .height('200px')
             .onClick(async () => {
               try {
                 let uri = await pickFilePathAsync(['.pdf']);
