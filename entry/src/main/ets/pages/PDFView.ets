@@ -143,6 +143,9 @@ struct PDFView {
   };
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
+  // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
+  // 避免快速翻页后显示内容与当前页码不符。
+  private pageLoadVersion: number = 0;
   metronomeTimerId: number | undefined = undefined;
   metronomeNextTickAt: number = 0;
   metronomePulseTimer: number | undefined = undefined;
@@ -380,8 +383,11 @@ struct PDFView {
 
   // 以指定的渲染缩放更新显示的页面
   async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
+    const loadVersion = this.pageLoadVersion;
     for (const pageIndex of this.displayedPageIndices) {
-      const cache = await this.getPageCache(pageIndex, renderScale);
+      const cache = await this.getPageCache(pageIndex, renderScale, loadVersion);
+      // 在等待期间若已发生页面切换则丢弃结果
+      if (loadVersion !== this.pageLoadVersion) return;
       // 更新相应视图的 pixelMap
       const displayIndex = this.displayedPageIndices.indexOf(pageIndex);
       if (displayIndex === 0) {
@@ -418,12 +424,17 @@ struct PDFView {
     }
   }
 
-  async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE): Promise<PageCache> {
+  async getPageCache(targetIndex: number, renderScale: number = MIN_RENDER_SCALE,
+    loadVersion: number = this.pageLoadVersion): Promise<PageCache> {
     // Use PageInfo's async caching method with callback for automatic high-res display update
     return await this.pageGroups.getPageCacheAsync(
       targetIndex,
       renderScale,
       (highResCache: PageCache) => {
+        // 如果在高分辨率渲染完成前用户已切换到其他页面，则丢弃此次更新
+        if (loadVersion !== this.pageLoadVersion) {
+          return;
+        }
         // Automatically update display when high-res version is ready
         if (this.displayedPageIndices.includes(targetIndex)) {
           const displayIndex = this.displayedPageIndices.indexOf(targetIndex);
@@ -511,6 +522,8 @@ struct PDFView {
 
   // 加载页面缓存并更新视图状态
   private async loadAndDisplayPages(indices: number[]): Promise<void> {
+    // 捕获当前加载版本；若在异步过程中 gotoPage 再次被调用则放弃过期的状态更新
+    const loadVersion = this.pageLoadVersion;
     // 立即设置占位白色矩形并预计算目标页面尺寸
     this.view2Visible = false;
     this.view3Visible = false;
@@ -551,8 +564,9 @@ struct PDFView {
 
     // 异步加载第一个页面
     if (indices.length > 0) {
-      tasks.push(this.getPageCache(indices[0], this.currentRenderScale)
+      tasks.push(this.getPageCache(indices[0], this.currentRenderScale, loadVersion)
         .then(cache => {
+          if (loadVersion !== this.pageLoadVersion) return;
           this.view1PixelMap = cache.pixelMap;
           this.view1ViewSize = cache.displaySize;
           this.view1Loading = false;
@@ -562,8 +576,9 @@ struct PDFView {
 
     // 异步加载第二个页面
     if (indices.length > 1) {
-      tasks.push(this.getPageCache(indices[1], this.currentRenderScale)
+      tasks.push(this.getPageCache(indices[1], this.currentRenderScale, loadVersion)
         .then(cache => {
+          if (loadVersion !== this.pageLoadVersion) return;
           this.view2PixelMap = cache.pixelMap;
           this.view2ViewSize = cache.displaySize;
           this.view2Loading = false;
@@ -573,8 +588,9 @@ struct PDFView {
 
     // 异步加载第三个页面
     if (indices.length > 2) {
-      tasks.push(this.getPageCache(indices[2], this.currentRenderScale)
+      tasks.push(this.getPageCache(indices[2], this.currentRenderScale, loadVersion)
         .then(cache => {
+          if (loadVersion !== this.pageLoadVersion) return;
           this.view3PixelMap = cache.pixelMap;
           this.view3ViewSize = cache.displaySize;
           this.view3Loading = false;
@@ -584,6 +600,9 @@ struct PDFView {
 
     await Promise.all(tasks);
 
+    // 若在加载期间已切到其他页面，不再更新视图大小
+    if (loadVersion !== this.pageLoadVersion) return;
+
     // 更新总体视图大小
     this.updateViewSize();
   }
@@ -592,6 +611,9 @@ struct PDFView {
     if (targetIndex < 0 || targetIndex >= this.totalPageCount) {
       return;
     }
+
+    // 递增加载版本以使上一个 gotoPage 发起的所有异步回调失效
+    this.pageLoadVersion++;
 
     this.currentPageIndex = targetIndex;
     // 导航到新页面时重置渲染缩放
