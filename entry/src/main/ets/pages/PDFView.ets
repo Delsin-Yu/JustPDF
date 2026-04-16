@@ -181,7 +181,12 @@ struct PDFView {
   }
 
   aboutToAppear(): void {
-    const args = this.getUIContext().getRouter().getParams() as Record<string, string>;
+    let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
+    if ((args == null || args['sandboxPath'] == null || args['sandboxPath'] == '')
+      && AppStorage.has('initialPdfViewArgs')) {
+      args = AppStorage.get<Record<string, string>>('initialPdfViewArgs') as Record<string, string>;
+      AppStorage.delete('initialPdfViewArgs');
+    }
     this.systemPath = args['systemPath'];
     this.sandBoxPath = args['sandboxPath'];
     this.saveTempPath = args['saveTempPath'];

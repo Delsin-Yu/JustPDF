@@ -62,7 +62,23 @@ export default class EntryAbility extends UIAbility {
     }
     AppStorage.setOrCreate('preferWaterfall', this.preferWaterfall);
     WaterfallPreference.setter = (enable: boolean) => this.setPreferWaterfall(enable);
-    windowStage.loadContent('pages/Index', null, (err) => {
+    this.loadInitialContent(windowStage);
+  }
+
+  private async loadInitialContent(windowStage: window.WindowStage): Promise<void> {
+    let pageUrl: string = 'pages/Index';
+    const launchUri = AppStorage.get<string>('launchUri');
+    if (launchUri) {
+      try {
+        const params = await this.buildLaunchParams(launchUri);
+        AppStorage.setOrCreate('initialPdfViewArgs', params);
+        pageUrl = 'pages/PDFView';
+        AppStorage.setOrCreate('launchUri', '');
+      } catch (error) {
+        hilog.error(0, 'PDFView', `Cold launch preparation failed: ${error}`);
+      }
+    }
+    windowStage.loadContent(pageUrl, null, (err) => {
       if (err.code) {
         hilog.error(0, 'PDFView', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
@@ -84,11 +100,27 @@ export default class EntryAbility extends UIAbility {
       }
       this.restoreWindowState();
 
-      // If a launch URI is already set, skip Index and go directly to PDFView
-      this.tryDirectLaunch();
-
       hilog.info(0, 'PDFView', 'Succeeded in loading the content.');
     });
+  }
+
+  private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {
+    const dir = this.context.tempDir;
+    const sourceFile = await fs.open(launchUri, fs.OpenMode.READ_ONLY);
+    const fileName = sourceFile.name;
+    const file = dir + '/' + fileName;
+    const tempFile = dir + '/saveTemp_' + fileName;
+    try {
+      await fs.copyFile(sourceFile.fd, file);
+    } finally {
+      await fs.close(sourceFile);
+    }
+    return {
+      'systemPath': launchUri,
+      'sandboxPath': file,
+      'saveTempPath': tempFile,
+      'fileName': fileName
+    };
   }
 
   private async tryDirectLaunch(): Promise<void> {
@@ -99,25 +131,11 @@ export default class EntryAbility extends UIAbility {
     // Clear launchUri so Index won't also try to load it
     AppStorage.setOrCreate('launchUri', '');
     try {
-      const dir = this.context.tempDir;
-      const sourceFile = await fs.open(launchUri, fs.OpenMode.READ_ONLY);
-      const fileName = sourceFile.name;
-      const file = dir + '/' + fileName;
-      const tempFile = dir + '/saveTemp_' + fileName;
-      try {
-        await fs.copyFile(sourceFile.fd, file);
-      } finally {
-        await fs.close(sourceFile);
-      }
-      const args: Record<string, string> = {
-        'systemPath': launchUri,
-        'sandboxPath': file,
-        'saveTempPath': tempFile,
-        'fileName': fileName
-      };
+      const args = await this.buildLaunchParams(launchUri);
       this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
     } catch (error) {
       hilog.error(0, 'PDFView', `Direct launch failed: ${error}`);
+      AppStorage.setOrCreate('launchUri', launchUri);
     }
   }
 
