@@ -112,6 +112,7 @@ struct PDFView {
   view2DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   placeholderPixelMap: PixelMap | undefined = undefined;
+  transparentPlaceholderPixelMap: PixelMap | undefined = undefined;
   activeDrawPath: Stroke = NewStroke();
   pathsToErase: Set<ReadonlyStroke> = new Set();
   undoHistory: DataStack<History> = new DataStack<History>();
@@ -157,11 +158,7 @@ struct PDFView {
   });
   settingsDialogController: CustomDialogController = new CustomDialogController({
     builder: SettingsDialogBuilder({
-      pageDisplayMode: this.pageDisplayMode,
-      pageFlipMode: this.pageFlipMode,
       showSlider: this.showSlider,
-      onPageDisplayModeChanged: (mode) => this.setPageDisplayMode(mode),
-      onPageFlipModeChanged: (mode) => this.setPageFlipMode(mode),
       onSliderToggled: (show: boolean) => {
         this.showSlider = show;
         try {
@@ -227,7 +224,7 @@ struct PDFView {
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.executeRedo()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.executeSave()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.totalPageCount - 1)));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.getLastNavigableIndex())));
 
     // Defer heavy document loading so UI can render the loading indicator first
     this.initializeDocument();
@@ -306,6 +303,10 @@ struct PDFView {
       this.placeholderPixelMap.release();
       this.placeholderPixelMap = undefined;
     }
+    if (this.transparentPlaceholderPixelMap) {
+      this.transparentPlaceholderPixelMap.release();
+      this.transparentPlaceholderPixelMap = undefined;
+    }
 
     // 释放主文档
     this.document.releaseDocument();
@@ -364,6 +365,82 @@ struct PDFView {
       case 'erase':
         return '擦除';
     }
+  }
+
+  getPageDisplayModeText(): string {
+    switch (this.pageDisplayMode) {
+      case 'single':
+        return '单页';
+      case 'dual':
+        return '双页';
+      case 'dualContinuous':
+        return '双页连续';
+      case 'tri':
+        return '三页';
+      case 'triContinuous':
+        return '三页连续';
+    }
+  }
+
+  getPageFlipModeText(): string {
+    switch (this.pageFlipMode) {
+      case 'side':
+        return '屏侧翻页';
+      case 'button':
+        return '按钮翻页';
+      case 'extern':
+        return '外设翻页';
+    }
+  }
+
+  getPageDisplayModeMenu(): MenuElement[] {
+    return [
+      {
+        value: '单页',
+        action: () => this.setPageDisplayMode('single'),
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'single')
+      },
+      {
+        value: '双页',
+        action: () => this.setPageDisplayMode('dual'),
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'dual')
+      },
+      {
+        value: '双页连续',
+        action: () => this.setPageDisplayMode('dualContinuous'),
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'dualContinuous')
+      },
+      {
+        value: '三页',
+        action: () => this.setPageDisplayMode('tri'),
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'tri')
+      },
+      {
+        value: '三页连续',
+        action: () => this.setPageDisplayMode('triContinuous'),
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'triContinuous')
+      }
+    ];
+  }
+
+  getPageFlipModeMenu(): MenuElement[] {
+    return [
+      {
+        value: '屏侧翻页',
+        action: () => this.setPageFlipMode('side'),
+        symbolIcon: getCheckIcon(this.pageFlipMode == 'side')
+      },
+      {
+        value: '按钮翻页',
+        action: () => this.setPageFlipMode('button'),
+        symbolIcon: getCheckIcon(this.pageFlipMode == 'button')
+      },
+      {
+        value: '外设翻页',
+        action: () => this.setPageFlipMode('extern'),
+        symbolIcon: getCheckIcon(this.pageFlipMode == 'extern')
+      }
+    ];
   }
 
   // 根据当前视图缩放确定适当的渲染缩放
@@ -504,19 +581,22 @@ struct PDFView {
     }
   }
 
-  // 创建 1x1 白色像素图作为页面加载时的占位符
+  // 创建占位像素图：白色（加载中）和透明（空槽位）
   private async createPlaceholderPixelMap(): Promise<void> {
-    const buffer = new ArrayBuffer(4);
-    const view = new Uint8Array(buffer);
-    view[0] = 255; // R
-    view[1] = 255; // G
-    view[2] = 255; // B
-    view[3] = 255; // A
     const opts: image.InitializationOptions = {
       size: { width: 1, height: 1 },
       pixelFormat: image.PixelMapFormat.RGBA_8888
     };
-    this.placeholderPixelMap = await image.createPixelMap(buffer, opts);
+    const whiteBuffer = new ArrayBuffer(4);
+    const whiteView = new Uint8Array(whiteBuffer);
+    whiteView[0] = 255; // R
+    whiteView[1] = 255; // G
+    whiteView[2] = 255; // B
+    whiteView[3] = 255; // A
+    this.placeholderPixelMap = await image.createPixelMap(whiteBuffer, opts);
+    const transparentBuffer = new ArrayBuffer(4);
+    // 所有字节默认为 0，即透明黑色 (RGBA 0,0,0,0)
+    this.transparentPlaceholderPixelMap = await image.createPixelMap(transparentBuffer, opts);
   }
 
   // 根据页面原始大小计算显示大小（与 cachePage 中的 displaySize 计算一致）
@@ -536,6 +616,14 @@ struct PDFView {
     this.view2Loading = false;
     this.view3Loading = false;
 
+    // 根据显示模式确定期望的槽位数，剩余页面不足时仍用白色占位保持布局稳定
+    let expectedSlots: number = 1;
+    if (this.pageDisplayMode === 'dual' || this.pageDisplayMode === 'dualContinuous') {
+      expectedSlots = 2;
+    } else if (this.pageDisplayMode === 'tri' || this.pageDisplayMode === 'triContinuous') {
+      expectedSlots = 3;
+    }
+
     if (indices.length > 0) {
       this.view1PixelMap = this.placeholderPixelMap;
       this.view1ViewSize = this.getPageDisplaySize(indices[0]);
@@ -549,6 +637,12 @@ struct PDFView {
       this.view2ViewSize = this.getPageDisplaySize(indices[1]);
       this.view2Visible = true;
       this.view2Loading = true;
+    } else if (expectedSlots >= 2) {
+      // 空占位：透明区域保持与最后一个实际页面相同大小，避免多页模式下末尾出现布局跳变
+      this.view2PixelMap = this.transparentPlaceholderPixelMap;
+      this.view2ViewSize = this.getPageDisplaySize(indices[indices.length - 1]);
+      this.view2Visible = true;
+      this.view2Loading = false;
     } else {
       this.view2PixelMap = undefined;
     }
@@ -558,6 +652,12 @@ struct PDFView {
       this.view3ViewSize = this.getPageDisplaySize(indices[2]);
       this.view3Visible = true;
       this.view3Loading = true;
+    } else if (expectedSlots >= 3) {
+      // 空占位：透明区域保持与最后一个实际页面相同大小，避免多页模式下末尾出现布局跳变
+      this.view3PixelMap = this.transparentPlaceholderPixelMap;
+      this.view3ViewSize = this.getPageDisplaySize(indices[indices.length - 1]);
+      this.view3Visible = true;
+      this.view3Loading = false;
     } else {
       this.view3PixelMap = undefined;
     }
@@ -734,11 +834,22 @@ struct PDFView {
     }
   }
 
+  // 返回当前显示模式下允许的最大 currentPageIndex
+  // 连续模式下末尾页面应填满所有槽位，而不是只占第一个槽位
+  getLastNavigableIndex(): number {
+    if (this.pageDisplayMode === 'dualContinuous') {
+      return Math.max(0, this.totalPageCount - 2);
+    } else if (this.pageDisplayMode === 'triContinuous') {
+      return Math.max(0, this.totalPageCount - 3);
+    }
+    return this.totalPageCount - 1;
+  }
+
   gotoNextPage(): void {
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
       this.pageDisplayMode === 'triContinuous') {
-      // 向前导航一页
-      this.gotoPage(this.currentPageIndex + 1);
+      // 向前导航一页，连续模式下不超过最后可导航索引
+      this.gotoPage(Math.min(this.currentPageIndex + 1, this.getLastNavigableIndex()));
     } else if (this.pageDisplayMode === 'dual') {
       // 导航到下一对的左页
       const currentPair = Math.floor(this.currentPageIndex / 2);
@@ -2359,99 +2470,123 @@ struct PDFView {
               // Bottom-left: expandable menu
               Column({ space: ContainerSpacing }) {
                 if (this.menuExpanded) {
-                  StyleIconButton({
-                    icon: $r('sys.symbol.questionmark_circle'),
-                    label: '教程',
-                    onClickCallback: () => {
-                      this.menuExpanded = false;
-                      this.tutorialDialogController.open();
-                    }
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-                  if (deviceInfo.deviceType != 'phone') {
-                    StyleIconButton({
-                      icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
-                      label: this.isExclusiveFullScreen ? '窗口' : '全屏',
-                      onClickCallback: () => {
-                        this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
-                        if (this.isExclusiveFullScreen) {
-                          this.mainWindow.maximize().catch();
-                        } else {
-                          this.mainWindow.recover().catch();
+                  Row({ space: ContainerSpacing }) {
+                    // 左列：通用操作
+                    Column({ space: ContainerSpacing }) {
+                      StyleIconButton({
+                        icon: $r('sys.symbol.questionmark_circle'),
+                        label: '教程',
+                        onClickCallback: () => {
+                          this.menuExpanded = false;
+                          this.tutorialDialogController.open();
                         }
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.gearshape'),
+                        label: '设置',
+                        onClickCallback: () => {
+                          this.menuExpanded = false;
+                          this.settingsDialogController.open();
+                        }
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      if (deviceInfo.deviceType != 'phone') {
+                        StyleIconButton({
+                          icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
+                          label: this.isExclusiveFullScreen ? '窗口' : '全屏',
+                          onClickCallback: () => {
+                            this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
+                            if (this.isExclusiveFullScreen) {
+                              this.mainWindow.maximize().catch();
+                            } else {
+                              this.mainWindow.recover().catch();
+                            }
+                          }
+                        }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
                       }
-                    }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.share'),
+                        label: '分享',
+                        onClickCallback: () => {
+                          this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                            this.menuExpanded = false;
+                          });
+                          this.executeShare();
+                        }
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.clock'),
+                        label: '节拍器',
+                        onClickCallback: () => {
+                          this.showMetronomeWindow = !this.showMetronomeWindow;
+                          this.menuExpanded = false;
+                        }
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                    }
+                    .alignItems(HorizontalAlign.Start)
+
+                    // 右列：视图与交互模式（包含较长标签）
+                    Column({ space: ContainerSpacing }) {
+                      StyleIconButton({
+                        icon: $r('sys.symbol.square_grid_2x2'),
+                        label: `显示:${this.getPageDisplayModeText()}`,
+                        menuElement: this.getPageDisplayModeMenu(),
+                        menuPlacement: Placement.RightBottom
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.rectangle_rotate'),
+                        label: `翻页:${this.getPageFlipModeText()}`,
+                        menuElement: this.getPageFlipModeMenu(),
+                        menuPlacement: Placement.RightBottom
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.arrow_right'),
+                        label: '跳转',
+                        menuElement: [
+                          {
+                            value: "重置视口",
+                            action: () => this.resetViewToFit(),
+                          },
+                          {
+                            value: "跳转首页",
+                            action: () => this.gotoPage(0),
+                          },
+                          {
+                            value: "跳转尾页",
+                            action: () => this.gotoPage(this.getLastNavigableIndex()),
+                          }],
+                        menuPlacement: Placement.RightBottom
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+
+                      StyleIconButton({
+                        icon: $r('sys.symbol.pencil_waveform'),
+                        label: this.getShowControlsText(),
+                        menuElement: [
+                          {
+                            value: "拖动",
+                            action: () => this.setAnnotateMode('drag'),
+                            symbolIcon: getCheckIcon(this.annotateMode == 'drag')
+                          },
+                          {
+                            value: "绘制",
+                            action: () => this.setAnnotateMode('draw'),
+                            symbolIcon: getCheckIcon(this.annotateMode == 'draw')
+                          },
+                          {
+                            value: "擦除",
+                            action: () => this.setAnnotateMode('erase'),
+                            symbolIcon: getCheckIcon(this.annotateMode == 'erase')
+                          }],
+                        menuPlacement: Placement.RightBottom
+                      }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+                    }
+                    .alignItems(HorizontalAlign.Start)
                   }
-
-                  StyleIconButton({
-                    icon: $r('sys.symbol.share'),
-                    label: '分享',
-                    onClickCallback: () => {
-                      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-                        this.menuExpanded = false;
-                      });
-                      this.executeShare();
-                    }
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-                  StyleIconButton({
-                    icon: $r('sys.symbol.gearshape'),
-                    label: '设置',
-                    onClickCallback: () => {
-                      this.menuExpanded = false;
-                      this.settingsDialogController.open();
-                    }
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-                  StyleIconButton({
-                    icon: $r('sys.symbol.clock'),
-                    label: '节拍器',
-                    onClickCallback: () => {
-                      this.showMetronomeWindow = !this.showMetronomeWindow;
-                      this.menuExpanded = false;
-                    }
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-                  StyleIconButton({
-                    icon: $r('sys.symbol.arrow_right'),
-                    label: '跳转',
-                    menuElement: [
-                      {
-                        value: "重置视口",
-                        action: () => this.resetViewToFit(),
-                      },
-                      {
-                        value: "跳转首页",
-                        action: () => this.gotoPage(0),
-                      },
-                      {
-                        value: "跳转尾页",
-                        action: () => this.gotoPage(this.totalPageCount - 1),
-                      }],
-                    menuPlacement: Placement.RightBottom
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-                  StyleIconButton({
-                    icon: $r('sys.symbol.pencil_waveform'),
-                    label: this.getShowControlsText(),
-                    menuElement: [
-                      {
-                        value: "拖动",
-                        action: () => this.setAnnotateMode('drag'),
-                        symbolIcon: getCheckIcon(this.annotateMode == 'drag')
-                      },
-                      {
-                        value: "绘制",
-                        action: () => this.setAnnotateMode('draw'),
-                        symbolIcon: getCheckIcon(this.annotateMode == 'draw')
-                      },
-                      {
-                        value: "擦除",
-                        action: () => this.setAnnotateMode('erase'),
-                        symbolIcon: getCheckIcon(this.annotateMode == 'erase')
-                      }],
-                    menuPlacement: Placement.RightBottom
-                  }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
                 }
 
                 StyleIconButton({
