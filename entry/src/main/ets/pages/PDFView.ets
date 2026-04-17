@@ -11,7 +11,7 @@ import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
-import { PageCache, PageGroup, PageInfo, PageInfoDataSource } from '../components/PageInfo';
+import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
@@ -39,7 +39,7 @@ struct PDFView {
   fileName = '';
   mainWindow: window.Window = (AppStorage.get('window') as window.Window);
   document = new pdfService.PdfDocument();
-  pageGroups: PageInfoDataSource = new PageInfoDataSource();
+  pageDataSource: PageStore = new PageStore();
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   viewerViewModel: PDFViewerViewModel = new PDFViewerViewModel();
   currentRenderScale: number = ViewerMinRenderScale;
@@ -74,7 +74,7 @@ struct PDFView {
   placeholderPixelMap: PixelMap | undefined = undefined;
   transparentPlaceholderPixelMap: PixelMap | undefined = undefined;
   annotationController: PDFAnnotationController = new PDFAnnotationController({
-    pageGroups: this.pageGroups,
+    pageDataSource: this.pageDataSource,
     viewerViewModel: this.viewerViewModel,
     document: this.document,
     getSystemPath: () => this.systemPath,
@@ -191,15 +191,9 @@ struct PDFView {
       return;
     }
     this.viewerViewModel.setTotalPageCount(this.document.getPageCount());
-    const pages = new Array<PageInfo>();
-    const pageGroup = new PageGroup(this.fileName, pages);
     for (let i = 0; i < this.viewerViewModel.totalPageCount; i++) {
-      pages.push(new PageInfo(i, this.document, this.sandBoxPath));
+      this.pageDataSource.push(new PageInfo(i, this.document, this.sandBoxPath));
     }
-    this.pageGroups.push(pageGroup);
-
-    // Register page reorder callback
-    this.pageGroups.onPageReordered = (oldIndex: number, newIndex: number) => this.handlePageReordered(oldIndex, newIndex);
 
     await this.createPlaceholderPixelMap();
     await this.gotoPage(0);
@@ -234,13 +228,11 @@ struct PDFView {
     }
 
     // 释放所有页面缓存和缩略图
-    const totalGroups = this.pageGroups.totalCount();
-    for (let i = 0; i < totalGroups; i++) {
-      const group = this.pageGroups.getData(i);
-      for (const page of group.pages) {
-        page.evictViewerCache();
-        page.releaseThumbnail();
-      }
+    const totalPages = this.pageDataSource.totalCount();
+    for (let i = 0; i < totalPages; i++) {
+      const page = this.pageDataSource.getData(i);
+      page.evictViewerCache();
+      page.releaseThumbnail();
     }
 
     // 释放占位符 PixelMap
@@ -344,7 +336,7 @@ struct PDFView {
   async getPageCache(targetIndex: number, renderScale: number = ViewerMinRenderScale,
     loadVersion: number = this.pageLoadVersion): Promise<PageCache> {
     // Use PageInfo's async caching method with callback for automatic high-res display update
-    return await this.pageGroups.getPageCacheAsync(
+    return await this.pageDataSource.getPageCacheAsync(
       targetIndex,
       renderScale,
       (highResCache: PageCache) => {
@@ -387,7 +379,7 @@ struct PDFView {
 
   // 根据页面原始大小计算显示大小（与 cachePage 中的 displaySize 计算一致）
   private getPageDisplaySize(pageIndex: number): Vector2 {
-    const rawSize = this.pageGroups.getPageRawSize(pageIndex);
+    const rawSize = this.pageDataSource.getPageRawSize(pageIndex);
     return mul(rawSize, 2);
   }
 
@@ -507,7 +499,7 @@ struct PDFView {
     }
     this.prefetchDebounceId = setTimeout(() => {
       this.prefetchDebounceId = undefined;
-      this.pageGroups.prefetchPagesAround(targetIndex, 5, 15, this.viewerViewModel.displayedPageIndices);
+      this.pageDataSource.prefetchPagesAround(targetIndex, 5, 15, this.viewerViewModel.displayedPageIndices);
     }, 300);
 
     // 加载并显示页面
@@ -581,10 +573,10 @@ struct PDFView {
   }
 
   getCanvasSize(pageIndex: number): Vector2 {
-    if (pageIndex >= this.pageGroups.totalPageCount()) {
+    if (pageIndex >= this.pageDataSource.totalPageCount()) {
       return Vec2(0, 0);
     }
-    const pageRawSize = this.pageGroups.getPageRawSize(pageIndex);
+    const pageRawSize = this.pageDataSource.getPageRawSize(pageIndex);
     return mul(pageRawSize, CanvasOverSampling);
   }
 
@@ -659,7 +651,7 @@ struct PDFView {
         this.annotationController.finishDraw(pageIndex, touchPoint, drawCtx, targetCtx);
       }
     } else if (this.annotationController.annotateMode === 'erase') {
-      if (this.pageGroups.getPageStrokesCount(pageIndex) === 0) {
+      if (this.pageDataSource.getPageStrokesCount(pageIndex) === 0) {
         return;
       }
 
@@ -833,7 +825,7 @@ struct PDFView {
         this.annotationController.finishDraw(pageIndex, mousePoint, drawCtx, targetCtx);
       }
     } else if (this.annotationController.annotateMode === 'erase') {
-      if (this.pageGroups.getPageStrokesCount(pageIndex) == 0) {
+      if (this.pageDataSource.getPageStrokesCount(pageIndex) == 0) {
         return;
       }
 
@@ -866,49 +858,6 @@ struct PDFView {
     }
     this.viewerViewModel.controlsTransparency = 1;
     this.transparencyTimeoutId = setTimeout(() => this.viewerViewModel.controlsTransparency = 0.5, 1000 * 3);
-  }
-
-  handlePageReordered(oldIndex: number, newIndex: number): void {
-    hilog.info(0, 'PDFView', `处理页面重新排序: ${oldIndex} -> ${newIndex}`);
-
-    // Determine if the current page was affected by the reorder
-    const currentPage = this.viewerViewModel.currentPageIndex;
-    let newCurrentPage = currentPage;
-
-    if (currentPage === oldIndex) {
-      // The current page was moved
-      newCurrentPage = newIndex > oldIndex ? newIndex - 1 : newIndex;
-    } else if (oldIndex < currentPage && newIndex >= currentPage) {
-      // A page before the current page was moved to after it
-      newCurrentPage = currentPage - 1;
-    } else if (oldIndex > currentPage && newIndex <= currentPage) {
-      // A page after the current page was moved to before or at it
-      newCurrentPage = currentPage + 1;
-    }
-
-    // If the current page index changed, navigate to the new position
-    if (newCurrentPage !== currentPage) {
-      this.gotoPage(newCurrentPage);
-    } else {
-      // Even if the current page didn't change, we might need to refresh
-      // if displayed pages were reordered (for dual/tri modes)
-      const affectedRange = [
-        Math.min(oldIndex, newIndex),
-        Math.max(oldIndex, newIndex)
-      ];
-      const currentDisplayRange = [
-        Math.min(...this.viewerViewModel.displayedPageIndices),
-        Math.max(...this.viewerViewModel.displayedPageIndices)
-      ];
-
-      // Check if reorder affected any displayed pages
-      const rangesOverlap = affectedRange[0] <= currentDisplayRange[1] &&
-        affectedRange[1] >= currentDisplayRange[0];
-
-      if (rangesOverlap) {
-        this.gotoPage(this.viewerViewModel.currentPageIndex);
-      }
-    }
   }
 
   build() {

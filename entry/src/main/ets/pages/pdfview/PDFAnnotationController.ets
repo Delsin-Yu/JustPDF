@@ -4,7 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool, util } from '@kit.ArkTS';
 import { getCheckIcon, showAlertDialog } from '../../components/UIComponents';
 import { Stack as DataStack } from '../../components/Colletions';
-import { History, NewStroke, PageInfoDataSource, ReadonlyStroke, Stroke } from '../../components/PageInfo';
+import { History, NewStroke, PageStore, ReadonlyStroke, Stroke } from '../../components/PageInfo';
 import { mul, pxToVp, Vec2, Vector2 } from '../../components/Numbers';
 import { PDFAnnotateMode, PDFViewerViewModel, ViewerMinRenderScale } from './PDFViewerViewModel';
 
@@ -14,7 +14,7 @@ const DefaultAnnotationPdfLineColor: number = 3547621;
 const DefaultAnnotationSubject: string = '由 Just PDF 创建的注释';
 
 interface PDFAnnotationControllerDependencies {
-  pageGroups: PageInfoDataSource;
+  pageDataSource: PageStore;
   viewerViewModel: PDFViewerViewModel;
   document: pdfService.PdfDocument;
   getSystemPath: () => string;
@@ -84,11 +84,11 @@ export class PDFAnnotationController {
   }
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
-    if (this.dependencies.pageGroups.getPageStrokesCount(pageIndex) === 0) {
+    if (this.dependencies.pageDataSource.getPageStrokesCount(pageIndex) === 0) {
       return;
     }
     this.applyStrokeStyle(ctx);
-    this.dependencies.pageGroups.stokePage(pageIndex, ctx);
+    this.dependencies.pageDataSource.stokePage(pageIndex, ctx);
   }
 
   resetTransientState(): AnnotationTransientResetResult {
@@ -133,7 +133,7 @@ export class PDFAnnotationController {
 
     const minPathLength = 2 * this.canvasOverSampling;
     if (pathLength >= minPathLength) {
-      this.dependencies.pageGroups.addStroke(pageIndex, this.activeDrawPath);
+      this.dependencies.pageDataSource.addStroke(pageIndex, this.activeDrawPath);
       this.appendUndoHistory({
         path: this.activeDrawPath,
         mode: 'add',
@@ -152,12 +152,12 @@ export class PDFAnnotationController {
   }
 
   previewErase(pageIndex: number, point: Vector2, targetCtx: CanvasRenderingContext2D): void {
-    if (this.dependencies.pageGroups.getPageStrokesCount(pageIndex) === 0) {
+    if (this.dependencies.pageDataSource.getPageStrokesCount(pageIndex) === 0) {
       return;
     }
 
     const eraseThreshold = 20 * this.canvasOverSampling;
-    for (const stroke of this.dependencies.pageGroups.iteratePageStrokes(pageIndex)) {
+    for (const stroke of this.dependencies.pageDataSource.iteratePageStrokes(pageIndex)) {
       if (this.pathsToErase.has(stroke)) {
         continue;
       }
@@ -174,7 +174,7 @@ export class PDFAnnotationController {
 
     targetCtx.reset();
     this.applyStrokeStyle(targetCtx);
-    for (const stroke of this.dependencies.pageGroups.iteratePageStrokes(pageIndex)) {
+    for (const stroke of this.dependencies.pageDataSource.iteratePageStrokes(pageIndex)) {
       if (!this.pathsToErase.has(stroke)) {
         stroke.stroke(targetCtx);
       }
@@ -186,7 +186,7 @@ export class PDFAnnotationController {
       return;
     }
 
-    this.dependencies.pageGroups.removeStrokeWhere(pageIndex, stroke => this.pathsToErase.has(stroke));
+    this.dependencies.pageDataSource.removeStrokeWhere(pageIndex, stroke => this.pathsToErase.has(stroke));
     this.pathsToErase.forEach((erasedPath: ReadonlyStroke) => {
       this.appendUndoHistory({
         path: erasedPath,
@@ -213,9 +213,9 @@ export class PDFAnnotationController {
     }
 
     if (history.mode === 'add') {
-      this.dependencies.pageGroups.removeStroke(history.pageIndex, history.path as Stroke);
+      this.dependencies.pageDataSource.removeStroke(history.pageIndex, history.path as Stroke);
     } else if (history.mode === 'erase') {
-      this.dependencies.pageGroups.addStroke(history.pageIndex, history.path as Stroke);
+      this.dependencies.pageDataSource.addStroke(history.pageIndex, history.path as Stroke);
     }
 
     this.redoHistory.push(history);
@@ -236,9 +236,9 @@ export class PDFAnnotationController {
     }
 
     if (history.mode === 'add') {
-      this.dependencies.pageGroups.addStroke(history.pageIndex, history.path as Stroke);
+      this.dependencies.pageDataSource.addStroke(history.pageIndex, history.path as Stroke);
     } else if (history.mode === 'erase') {
-      this.dependencies.pageGroups.removeStroke(history.pageIndex, history.path as Stroke);
+      this.dependencies.pageDataSource.removeStroke(history.pageIndex, history.path as Stroke);
     }
 
     this.undoHistory.push(history);
@@ -262,7 +262,7 @@ export class PDFAnnotationController {
       return;
     }
 
-    this.dependencies.pageGroups.clearAllStrokes();
+    this.dependencies.pageDataSource.clearAllStrokes();
     this.clearHistory();
     this.hasUnsavedStrokes = false;
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
@@ -277,7 +277,7 @@ export class PDFAnnotationController {
 
   private updateUnsavedStrokesFlag(): void {
     for (let i = 0; i < this.dependencies.viewerViewModel.totalPageCount; i++) {
-      if (this.dependencies.pageGroups.getPageStrokesCount(i) > 0) {
+      if (this.dependencies.pageDataSource.getPageStrokesCount(i) > 0) {
         this.hasUnsavedStrokes = true;
         return;
       }
@@ -313,19 +313,19 @@ export class PDFAnnotationController {
 
   private collectAffectedAnnotations(): Map<number, pdfService.PdfAnnotation[]> {
     const affectedPage = new Map<number, pdfService.PdfAnnotation[]>();
-    const totalPageCount = this.dependencies.pageGroups.totalPageCount();
+    const totalPageCount = this.dependencies.pageDataSource.totalPageCount();
 
     for (let pageIndex = 0; pageIndex < totalPageCount; pageIndex++) {
-      if (this.dependencies.pageGroups.getPageStrokesCount(pageIndex) == 0) {
+      if (this.dependencies.pageDataSource.getPageStrokesCount(pageIndex) == 0) {
         continue;
       }
 
-      const pdfPageSize = this.dependencies.pageGroups.getPageRawSize(pageIndex);
+      const pdfPageSize = this.dependencies.pageDataSource.getPageRawSize(pageIndex);
       const canvasSizePx = mul(pdfPageSize, this.canvasOverSampling);
       const canvasSizeVp = pxToVp(canvasSizePx, this.dependencies.getUIContext());
       const annotationsToAdd: pdfService.PolylineAnnotationInfo[] = [];
 
-      for (const stroke of this.dependencies.pageGroups.iteratePageStrokes(pageIndex)) {
+      for (const stroke of this.dependencies.pageDataSource.iteratePageStrokes(pageIndex)) {
         const transformedPoints: Vector2[] = [];
         for (const point of stroke.points) {
           transformedPoints.push(Vec2(
@@ -345,7 +345,7 @@ export class PDFAnnotationController {
         annotationsToAdd.push(annotationInfo);
       }
 
-      const annotations = this.dependencies.pageGroups.addPdfAnnotations(pageIndex, annotationsToAdd);
+      const annotations = this.dependencies.pageDataSource.addPdfAnnotations(pageIndex, annotationsToAdd);
       affectedPage.set(pageIndex, annotations);
     }
 
@@ -433,7 +433,7 @@ export class PDFAnnotationController {
       if (!annotations) {
         continue;
       }
-      this.dependencies.pageGroups.removePdfAnnotations(pageIndex, annotations);
+      this.dependencies.pageDataSource.removePdfAnnotations(pageIndex, annotations);
     }
   }
 
@@ -464,7 +464,7 @@ export class PDFAnnotationController {
     }
 
     for (const pageIndex of affectedPageIndices) {
-      this.dependencies.pageGroups.invalidateCaches(pageIndex);
+      this.dependencies.pageDataSource.invalidateCaches(pageIndex);
     }
 
     const currentPageAffected = this.dependencies.viewerViewModel.displayedPageIndices.some((pageIndex: number) =>
@@ -472,7 +472,7 @@ export class PDFAnnotationController {
     );
 
     for (const pageIndex of affectedPageIndices) {
-      this.dependencies.pageGroups.ensureCached(pageIndex, ViewerMinRenderScale, taskpool.Priority.HIGH);
+      this.dependencies.pageDataSource.ensureCached(pageIndex, ViewerMinRenderScale, taskpool.Priority.HIGH);
     }
 
     if (currentPageAffected) {
