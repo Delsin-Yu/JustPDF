@@ -1,7 +1,7 @@
 ---
 name: SubRunner
 description: "Use when: a complex task needs a stronger, slower model; a delegated subtask requires deeper reasoning; or a larger task should be split into substantial parallel workstreams. Best for bounded but difficult analysis, implementation, debugging, and verification that exceed lightweight agent scope."
-model: Claude Opus 4.6 (copilot)
+model: GPT-5.4 (copilot)
 tools: [read, search, edit, execute, todo, agent, web]
 argument-hint: A bounded but complex subtask that needs stronger reasoning, deeper investigation, or a substantial parallel workstream.
 user-invocable: false
