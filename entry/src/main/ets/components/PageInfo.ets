@@ -111,7 +111,7 @@ export class PageInfo implements ReadonlyPageInfo {
   public pageThumbnail: image.PixelMap | undefined = undefined;
   private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
   private thumbnailRefCount: number = 0;
-  public associatedSource: PageInfoDataSource | undefined = undefined;
+  public associatedSource: PageStore | undefined = undefined;
 
   public get pdfPage(): pdfService.PdfPage {
     if (!this._pdfPage) {
@@ -382,86 +382,20 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 }
 
-export interface ReadonlyPageGroup extends IDataSource {
-  readonly groupName: string;
-  readonly pages: readonly ReadonlyPageInfo[];
-}
-
-@ObservedV2
-export class PageGroup implements ReadonlyPageGroup {
-  public readonly groupGuid: string = util.generateRandomUUID(true);
-  public readonly groupHue: number = Math.random() * 360;
-  @Trace public groupName: string;
-  public pages: PageInfo[];
+export class PageStore implements IDataSource {
+  private pages: PageInfo[] = [];
   private listeners: DataChangeListener[] = [];
 
-  constructor(groupName: string, pages: PageInfo[]) {
-    this.groupName = groupName;
-    this.pages = pages;
-  }
-
-  totalCount(): number {
+  public totalCount(): number {
     return this.pages.length;
   }
 
-  getData(index: number): PageInfo {
-    return this.pages[index];
-  }
-
-  registerDataChangeListener(listener: DataChangeListener): void {
-    this.listeners.push(listener);
-  }
-
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const idx = this.listeners.indexOf(listener);
-    if (idx >= 0) {
-      this.listeners.splice(idx, 1);
-    }
-  }
-
-  public markAllPagesChanged(): void {
-    // hilog.error(0, "PDFView", `标记 PageGroup ${this.groupName} 所有页面为已更改 ${this.listeners.length}`);
-    for (let i = 0; i < this.pages.length; i++) {
-      this.listeners.forEach(listener => listener.onDataChange(i));
-    }
-  }
-
-  public notifyPageAdded(index: number): void {
-    this.listeners.forEach(listener => listener.onDataAdd(index));
-  }
-
-  public notifyPageDeleted(index: number): void {
-    this.listeners.forEach(listener => listener.onDataDelete(index));
-  }
-
-  public markChanged(pageInfo: ReadonlyPageInfo): void {
-    const pageIndex = this.pages.indexOf(pageInfo as PageInfo);
-    // hilog.error(0, "PDFView", `标记 PageGroup ${this.groupName} 页面 ${pageIndex} 为已更改 ${this.listeners.length}`);
-    if (pageIndex >= 0) {
-      this.listeners.forEach(listener => listener.onDataChange(pageIndex));
-    }
-  }
-}
-
-export class PageInfoDataSource implements IDataSource {
-  private pageGroups: PageGroup[] = [];
-  private listeners: DataChangeListener[] = [];
-  public onPageReordered?: (oldIndex: number, newIndex: number) => void;
-
-  public totalCount(): number {
-    return this.pageGroups.length;
-  }
-
   public totalPageCount(): number {
-    let count = 0;
-    for (const group of this.pageGroups) {
-      count += group.pages.length;
-    }
-    return count;
+    return this.pages.length;
   }
 
-  public getData(index: number): PageGroup {
-    return this.pageGroups[index];
+  public getData(index: number): PageInfo {
+    return this.pages[index];
   }
 
   public registerDataChangeListener(listener: DataChangeListener): void {
@@ -475,40 +409,26 @@ export class PageInfoDataSource implements IDataSource {
     }
   }
 
-  public push(pageGroup: PageGroup): void {
-    this.pageGroups.push(pageGroup);
-    // Calculate the starting global page index for this new group
-    let pageCounter = 0;
-    for (let i = 0; i < this.pageGroups.length - 1; i++) {
-      pageCounter += this.pageGroups[i].pages.length;
-    }
-    for (const pageInfo of pageGroup.pages) {
-      pageInfo.associatedSource = this;
-      // Removed eager caching - pages will be cached on-demand via prefetchPagesAround()
-      pageInfo.globalPageIndex = pageCounter;
-      pageCounter++;
-    }
-    this.listeners.forEach(listener => listener.onDataAdd(this.pageGroups.length - 1));
+  public push(pageInfo: PageInfo): void {
+    this.pages.push(pageInfo);
+    pageInfo.associatedSource = this;
+    // Removed eager caching - pages will be cached on-demand via prefetchPagesAround()
+    pageInfo.globalPageIndex = this.pages.length - 1;
+    this.listeners.forEach(listener => listener.onDataAdd(this.pages.length - 1));
   }
 
-  private getPageInfo(pageIndex: number): [PageGroup, PageInfo, number] {
-    let pageCounter = 0;
-    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
-      const group = this.pageGroups[groupIndex];
-      if (pageIndex < pageCounter + group.pages.length) {
-        return [group, group.pages[pageIndex - pageCounter] as PageInfo, groupIndex];
-      }
-      pageCounter += group.pages.length;
+  private getPageInfo(pageIndex: number): PageInfo {
+    if (pageIndex < 0 || pageIndex >= this.pages.length) {
+      throw new Error(`PageInfo not found for index ${pageIndex}`);
     }
-    throw new Error(`PageInfo not found for index ${pageIndex}`);
+    return this.pages[pageIndex] as PageInfo;
   }
 
   public ensureCached(
     index: number,
     renderScale: number,
     priority: taskpool.Priority): Promise<PageCache> | undefined {
-    const result = this.getPageInfo(index);
-    return result[1].ensureCached(renderScale, priority);
+    return this.getPageInfo(index).ensureCached(renderScale, priority);
   }
 
   /**
@@ -536,26 +456,18 @@ export class PageInfoDataSource implements IDataSource {
         : taskpool.Priority.MEDIUM;
       
       try {
-        const result = this.getPageInfo(pageIndex);
-        result[1].ensureCached(MIN_RENDER_SCALE, priority);
+        this.getPageInfo(pageIndex).ensureCached(MIN_RENDER_SCALE, priority);
       } catch (error) {
         hilog.debug(0, 'PDFView', `预取页面 ${pageIndex} 时出错: ${error}`);
       }
     }
     
     // Evict viewer caches for pages outside eviction range
-    // Note: Thumbnails are managed separately via releaseThumbnail() in PageManagerDialog
-    let pageCounter = 0;
-    for (const group of this.pageGroups) {
-      for (const pageInfo of group.pages) {
-        const globalIndex = pageCounter;
-        const distance = Math.abs(globalIndex - centerIndex);
-        
-        if (distance > evictionRange && !displayedPageIndices.includes(globalIndex)) {
-          pageInfo.evictViewerCache();
-        }
-        
-        pageCounter++;
+    for (let globalIndex = 0; globalIndex < this.pages.length; globalIndex++) {
+      const pageInfo = this.pages[globalIndex];
+      const distance = Math.abs(globalIndex - centerIndex);
+      if (distance > evictionRange && !displayedPageIndices.includes(globalIndex)) {
+        pageInfo.evictViewerCache();
       }
     }
     
@@ -567,129 +479,92 @@ export class PageInfoDataSource implements IDataSource {
     renderScale: number,
     onHighResReady?: (cache: PageCache) => void
   ): Promise<PageCache> {
-    const result = this.getPageInfo(index);
-    return await result[1].getPageCacheAsync(
+    return await this.getPageInfo(index).getPageCacheAsync(
       renderScale,
       onHighResReady
     );
   }
 
   public getPageStrokesCount(index: number): number {
-    const result = this.getPageInfo(index);
-    return result[1].strokesCount;
+    return this.getPageInfo(index).strokesCount;
   }
 
   public getPageRawSize(index: number): Vector2 {
-    const result = this.getPageInfo(index);
-    return Vec2(result[1].pdfPage.getWidth(), result[1].pdfPage.getHeight());
+    const pageInfo = this.getPageInfo(index);
+    return Vec2(pageInfo.pdfPage.getWidth(), pageInfo.pdfPage.getHeight());
   }
 
   /**
    * Returns an existing preview PixelMap for the page without triggering new work.
    */
   public getExistingPreview(index: number): PixelMap | undefined {
-    const result = this.getPageInfo(index);
-    return result[1].getExistingPreview();
+    return this.getPageInfo(index).getExistingPreview();
   }
 
   public iteratePageStrokes(index: number): Iterable<ReadonlyStroke> {
-    const result = this.getPageInfo(index);
-    return result[1].strokes;
+    return this.getPageInfo(index).strokes;
   }
 
   public addPdfAnnotations(index: number, annotationInfo: pdfService.PdfAnnotationInfo[]): pdfService.PdfAnnotation[] {
-    const result = this.getPageInfo(index);
+    const pageInfo = this.getPageInfo(index);
     const annotations: pdfService.PdfAnnotation[] = [];
     for (const info of annotationInfo) {
-      const annotation = result[1].pdfPage.addAnnotation(info);
+      const annotation = pageInfo.pdfPage.addAnnotation(info);
       annotations.push(annotation);
     }
-    this.notifyPageChanged(result[0], result[1], result[2]);
+    this.markPageChanged(index);
     return annotations;
   }
 
   public removePdfAnnotations(index: number, annotations: pdfService.PdfAnnotation[]): void {
-    const result = this.getPageInfo(index);
+    const pageInfo = this.getPageInfo(index);
     for (const annotation of annotations) {
-      result[1].pdfPage.removeAnnotation(annotation);
+      pageInfo.pdfPage.removeAnnotation(annotation);
     }
-    this.notifyPageChanged(result[0], result[1], result[2]);
+    this.markPageChanged(index);
   }
 
   public stokePage(index: number, renderingContext: CanvasRenderingContext2D) {
-    const result = this.getPageInfo(index);
-    result[1].stroke(renderingContext);
+    this.getPageInfo(index).stroke(renderingContext);
   }
 
   public addStroke(index: number, pathWithPoints: Stroke): void {
-    const result = this.getPageInfo(index);
-    result[1].strokes.push(pathWithPoints);
-    this.notifyPageChanged(result[0], result[1], result[2]);
+    this.getPageInfo(index).strokes.push(pathWithPoints);
+    this.markPageChanged(index);
   }
 
   public removeStroke(index: number, pathWithPoints: Stroke): void {
-    const result = this.getPageInfo(index);
-    const idx = result[1].strokes.indexOf(pathWithPoints);
+    const pageInfo = this.getPageInfo(index);
+    const idx = pageInfo.strokes.indexOf(pathWithPoints);
     if (idx < 0) return;
-    result[1].strokes.splice(idx, 1);
-    this.notifyPageChanged(result[0], result[1], result[2]);
+    pageInfo.strokes.splice(idx, 1);
+    this.markPageChanged(index);
   }
 
   public removeStrokeWhere(pageIndex: number, predicate: (stroke: ReadonlyStroke) => boolean): void {
-    const result = this.getPageInfo(pageIndex);
-    const originalLength = result[1].strokes.length;
-    result[1].strokes = result[1].strokes.filter(stroke => !predicate(stroke));
-    if (result[1].strokes.length == originalLength) return;
-    this.notifyPageChanged(result[0], result[1], result[2]);
+    const pageInfo = this.getPageInfo(pageIndex);
+    const originalLength = pageInfo.strokes.length;
+    pageInfo.strokes = pageInfo.strokes.filter(stroke => !predicate(stroke));
+    if (pageInfo.strokes.length == originalLength) return;
+    this.markPageChanged(pageIndex);
   }
 
   public clearAllStrokes(): void {
-    // Track which groups actually had strokes cleared
-    const changedGroupIndices: number[] = [];
-    
-    for (let pageGroupIndex = 0; pageGroupIndex < this.pageGroups.length; pageGroupIndex++) {
-      const pageGroup = this.pageGroups[pageGroupIndex];
-      let groupHadStrokes = false;
-      
-      for (const page of pageGroup.pages) {
-        if (page.strokes.length > 0) {
-          page.strokes = [];
-          groupHadStrokes = true;
-        }
-      }
-      
-      if (groupHadStrokes) {
-        changedGroupIndices.push(pageGroupIndex);
+    const changedPageIndices: number[] = [];
+    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+      if (this.pages[pageIndex].strokes.length > 0) {
+        this.pages[pageIndex].strokes = [];
+        changedPageIndices.push(pageIndex);
       }
     }
-    
-    // Only notify for groups that actually changed
-    for (const groupIndex of changedGroupIndices) {
-      this.pageGroups[groupIndex].markAllPagesChanged();
-      this.notifyPageGroupChanged(groupIndex);
+
+    for (const pageIndex of changedPageIndices) {
+      this.listeners.forEach(listener => listener.onDataChange(pageIndex));
     }
   }
 
   public invalidateCaches(pageIndex: number): void {
-    const result = this.getPageInfo(pageIndex);
-    result[1].invalidateCaches();
-  }
-
-  private notifyPageGroupChanged(groupIndex: number): void {
-    // hilog.error(0, "PDFView", `通知 PageGroup ${groupIndex} 数据变更 ${this.listeners.length}`);
-    this.listeners.forEach(listener => listener.onDataChange(groupIndex));
-  }
-
-  /**
-   * Notifies both PageGroup and PageInfoDataSource listeners about a page change.
-   * This is the preferred method for notifying changes to a specific page.
-   * @param group The PageGroup containing the page
-   * @param pageInfo The PageInfo that changed
-   * @param groupIndex The index of the group in pageGroups
-   */
-  private notifyPageChanged(group: PageGroup, pageInfo: PageInfo, groupIndex: number): void {
-    group.markChanged(pageInfo);
-    this.notifyPageGroupChanged(groupIndex);
+    this.getPageInfo(pageIndex).invalidateCaches();
   }
 
   /**
@@ -698,217 +573,10 @@ export class PageInfoDataSource implements IDataSource {
    * @param globalPageIndex The global page index
    */
   public markPageChanged(globalPageIndex: number): void {
-    let pageCounter = 0;
-    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
-      const group = this.pageGroups[groupIndex];
-      if (globalPageIndex < pageCounter + group.pages.length) {
-        const localPageIndex = globalPageIndex - pageCounter;
-        const pageInfo = group.pages[localPageIndex];
-        this.notifyPageChanged(group, pageInfo, groupIndex);
-        return;
-      }
-      pageCounter += group.pages.length;
+    if (globalPageIndex < 0 || globalPageIndex >= this.pages.length) {
+      return;
     }
+    this.listeners.forEach(listener => listener.onDataChange(globalPageIndex));
   }
 
-  public renameGroup(pageGroup: PageGroup, newName: string): void {
-    const groupIndex = this.pageGroups.indexOf(pageGroup);
-    if (groupIndex < 0) {
-      throw new Error(`PageGroup not found for renaming`);
-    }
-    this.pageGroups[groupIndex].groupName = newName;
-    this.notifyPageGroupChanged(groupIndex);
-    hilog.info(0, 'PDFView', `重命名 PageGroup ${groupIndex} 为 ${newName}`);
-  }
-
-  /**
-   * Deletes a page group from the data source.
-   * Removes all pages in the group, updates global page indices, and notifies listeners.
-   * @param pageGroup The PageGroup to delete
-   */
-  public deleteGroup(pageGroup: PageGroup): void {
-    const groupIndex = this.pageGroups.indexOf(pageGroup);
-    if (groupIndex < 0) {
-      throw new Error(`PageGroup not found for deletion`);
-    }
-
-    // Clean up resources for all pages in the group
-    for (const pageInfo of pageGroup.pages) {
-      pageInfo.evictViewerCache();
-      pageInfo.releaseThumbnail();
-      pageInfo.associatedSource = undefined;
-      pageInfo.globalPageIndex = undefined;
-    }
-
-    // Remove the group from the array
-    this.pageGroups.splice(groupIndex, 1);
-
-    // Recalculate global page indices for remaining pages
-    this.recalculateGlobalIndices();
-
-    // Notify listeners about the deletion
-    this.listeners.forEach(listener => listener.onDataDelete(groupIndex));
-
-    hilog.info(0, 'PDFView', `删除 PageGroup ${groupIndex} (${pageGroup.groupName})`);
-  }
-
-  /**
-   * Moves a page from one global index to another.
-   * Removes the page from its source position and inserts it at the destination position.
-   * @param srcIndex The global index of the page to move
-   * @param dstIndex The global index where the page should be inserted
-   */
-  public movePage(srcIndex: number, dstIndex: number): void {
-    if (srcIndex === dstIndex) return;
-
-    const totalPages = this.totalPageCount();
-    if (srcIndex < 0 || srcIndex >= totalPages) {
-      throw new Error(`Source index ${srcIndex} out of bounds`);
-    }
-    if (dstIndex < 0 || dstIndex > totalPages) {
-      throw new Error(`Destination index ${dstIndex} out of bounds`);
-    }
-
-    // Find source page info
-    const pageInfoResult = this.getPageInfo(srcIndex);
-    const srcGroup = pageInfoResult[0];
-    const srcPageInfo = pageInfoResult[1];
-    const srcGroupIndex = pageInfoResult[2];
-
-    const srcLocalIndex = srcGroup.pages.indexOf(srcPageInfo);
-
-    // Remove from source group
-    srcGroup.pages.splice(srcLocalIndex, 1);
-
-    // Adjust destination index if source was before destination
-    let adjustedDstIndex = dstIndex;
-    if (srcIndex < dstIndex) {
-      adjustedDstIndex--;
-    }
-
-    // Find destination group and local index
-    let pageCounter = 0;
-    let dstGroup: PageGroup | undefined = undefined;
-    let dstGroupIndex = 0;
-    let dstLocalIndex = 0;
-
-    for (let groupIndex = 0; groupIndex < this.pageGroups.length; groupIndex++) {
-      const group = this.pageGroups[groupIndex];
-      if (adjustedDstIndex <= pageCounter + group.pages.length) {
-        dstGroup = group;
-        dstGroupIndex = groupIndex;
-        dstLocalIndex = adjustedDstIndex - pageCounter;
-        break;
-      }
-      pageCounter += group.pages.length;
-    }
-
-    // If destination is at the very end, insert into the last group
-    if (!dstGroup && this.pageGroups.length > 0) {
-      dstGroupIndex = this.pageGroups.length - 1;
-      dstGroup = this.pageGroups[dstGroupIndex];
-      dstLocalIndex = dstGroup.pages.length;
-    }
-
-    if (!dstGroup) {
-      throw new Error(`Could not find destination group for index ${dstIndex}`);
-    }
-
-    // Insert into destination group
-    dstGroup.pages.splice(dstLocalIndex, 0, srcPageInfo);
-
-    // Update global page indices for all pages
-    this.recalculateGlobalIndices();
-
-    // Notify source group about deletion
-    srcGroup.notifyPageDeleted(srcLocalIndex);
-    this.notifyPageGroupChanged(srcGroupIndex);
-
-    // Notify target group about addition (if different from source)
-    if (srcGroup !== dstGroup) {
-      dstGroup.notifyPageAdded(dstLocalIndex);
-      this.notifyPageGroupChanged(dstGroupIndex);
-    } else {
-      // Same group: notify about the move as a change
-      srcGroup.markAllPagesChanged();
-    }
-
-    hilog.info(0, 'PDFView', `页面从 ${srcIndex} 移动到 ${dstIndex}`);
-
-    // Notify external listeners of the page reorder
-    if (this.onPageReordered) {
-      this.onPageReordered(srcIndex, dstIndex);
-    }
-  }
-
-  /**
-   * Moves a page to the end of a specific group.
-   * This method explicitly targets a group, making it suitable for cross-group moves
-   * including moves to empty groups.
-   * @param srcGlobalIndex The global index of the page to move
-   * @param targetGroup The group to append the page to
-   */
-  public movePageToGroupEnd(srcGlobalIndex: number, targetGroup: PageGroup): void {
-    const totalPages = this.totalPageCount();
-    if (srcGlobalIndex < 0 || srcGlobalIndex >= totalPages) {
-      throw new Error(`Source index ${srcGlobalIndex} out of bounds`);
-    }
-
-    const targetGroupIndex = this.pageGroups.indexOf(targetGroup);
-    if (targetGroupIndex < 0) {
-      throw new Error(`Target group not found in data source`);
-    }
-
-    // Find source page info
-    const pageInfoResult = this.getPageInfo(srcGlobalIndex);
-    const srcGroup = pageInfoResult[0];
-    const srcPageInfo = pageInfoResult[1];
-    const srcGroupIndex = pageInfoResult[2];
-
-    // Check if page is already the last in the target group
-    if (srcGroup === targetGroup &&
-        srcGroup.pages.indexOf(srcPageInfo) === srcGroup.pages.length - 1) {
-      return; // Already at the end of this group, nothing to do
-    }
-
-    // Remove from source group
-    const srcLocalIndex = srcGroup.pages.indexOf(srcPageInfo);
-    srcGroup.pages.splice(srcLocalIndex, 1);
-
-    // Append to target group
-    targetGroup.pages.push(srcPageInfo);
-    const dstLocalIndex = targetGroup.pages.length - 1;
-
-    // Update global page indices for all pages
-    this.recalculateGlobalIndices();
-
-    // Notify source group about deletion
-    srcGroup.notifyPageDeleted(srcLocalIndex);
-    this.notifyPageGroupChanged(srcGroupIndex);
-
-    // Notify target group about addition
-    targetGroup.notifyPageAdded(dstLocalIndex);
-    this.notifyPageGroupChanged(targetGroupIndex);
-
-    hilog.info(0, 'PDFView', `页面 ${srcGlobalIndex} 移动到组 "${targetGroup.groupName}" 末尾`);
-
-    // Notify external listeners of the page reorder
-    if (this.onPageReordered) {
-      const newGlobalIndex = srcPageInfo.globalPageIndex!;
-      this.onPageReordered(srcGlobalIndex, newGlobalIndex);
-    }
-  }
-
-  /**
-   * Recalculates global page indices for all pages after a move operation.
-   */
-  private recalculateGlobalIndices(): void {
-    let pageCounter = 0;
-    for (const group of this.pageGroups) {
-      for (const pageInfo of group.pages) {
-        pageInfo.globalPageIndex = pageCounter;
-        pageCounter++;
-      }
-    }
-  }
 }
