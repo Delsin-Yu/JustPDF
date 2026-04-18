@@ -1,5 +1,5 @@
 import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, showAlertDialog, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
-import { LengthMetricsUnit, window } from '@kit.ArkUI';
+import { LengthMetricsUnit, UIUtils, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool } from '@kit.ArkTS';
@@ -15,7 +15,7 @@ import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
-import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
+import { PDFMetronomeController, PDFMetronomeControllerState } from './pdfview/PDFMetronomeController';
 import { PDFPageSlot } from './pdfview/PDFPageSlot';
 import { PDFMetronomePanel } from './pdfview/PDFMetronomePanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
@@ -87,10 +87,12 @@ struct PDFView {
     onRedrawRequested: () => this.redrawStrokes(),
     onRefreshDisplayedPages: () => this.refreshDisplayedPages()
   }, CanvasOverSampling);
-  metronomeController: PDFMetronomeController = new PDFMetronomeController({
-    getUIContext: () => this.getUIContext(),
-    getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
-  });
+  @State metronomeControllerState: PDFMetronomeControllerState = new PDFMetronomeControllerState(
+    new PDFMetronomeController({
+      getUIContext: () => this.getUIContext(),
+      getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
+    })
+  );
   @State isExclusiveFullScreen: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
@@ -146,7 +148,7 @@ struct PDFView {
     try {
       this.viewerViewModel.loadPreferences(this.preferences);
       this.rebuildSettingsDialogController();
-      this.metronomeController.initialize(this.preferences);
+      this.metronomeControllerState.controller.initialize(this.preferences);
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -202,7 +204,7 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
-    this.metronomeController.cleanup();
+    this.metronomeControllerState.controller.cleanup();
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
@@ -247,7 +249,6 @@ struct PDFView {
 
     // 释放主文档
     this.document.releaseDocument();
-    hilog.info(0, 'PDFView', '页面销毁，已释放所有资源');
   }
 
   onPageHide(): void {
@@ -256,7 +257,7 @@ struct PDFView {
   }
 
   onBackGround = () => {
-    this.metronomeController.stopPlayback();
+    this.metronomeControllerState.controller.stopPlayback();
     this.immersiveDisablingListening();
   }
 
@@ -298,7 +299,6 @@ struct PDFView {
     const requiredScale = this.viewerViewModel.getRenderScaleForViewScale();
 
     if (requiredScale !== this.currentRenderScale) {
-      hilog.info(0, 'PDFView', `检测到缩放变化: ${this.currentRenderScale} -> ${requiredScale}`);
       this.currentRenderScale = requiredScale;
       // 以新缩放重新渲染当前显示的页面
       await this.updateDisplayedPagesAtScale(requiredScale);
@@ -973,7 +973,7 @@ struct PDFView {
             repeating: false
           })
         PDFMetronomePanel({
-          controller: this.metronomeController
+          controllerState: UIUtils.enableV2Compatibility(this.metronomeControllerState)
         })
         .alignRules(TopLeft)
         .margin(ContainerPadding)
@@ -1039,7 +1039,7 @@ struct PDFView {
                   this.executeShare();
                 },
                 onToggleMetronome: () => {
-                  this.metronomeController.toggleWindow();
+                  this.metronomeControllerState.controller.toggleWindow();
                   this.viewerViewModel.setMenuExpanded(false);
                 },
                 onToggleMenu: () => {

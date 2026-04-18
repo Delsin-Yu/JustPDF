@@ -1,19 +1,140 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
 import { ButtonColor, StyleIconButton } from '../../components/UIComponents';
-import { PDFMetronomeController } from './PDFMetronomeController';
+import { PDFMetronomeController, PDFMetronomeControllerState } from './PDFMetronomeController';
 
-const MetronomeBeatSpacing: LengthMetrics = LengthMetrics.vp(10);
+const MetronomeBeatSpacing: Length = `10vp`;
+const MetronomeSpinBoxSettleMs: number = 160;
 const MetronomeWindowWidth: number = 400;
+const MetronomeTempoDialogWidth: number = 260;
+const MetronomeBeatButtonHeight: number = 44;
+
+@CustomDialog
+struct TempoInputDialogBuilder {
+  private controller: CustomDialogController;
+  initialValue: string = '';
+  onCancel: () => void = () => {
+  };
+  onConfirm: (value: number) => void = () => {
+  };
+  @State private tempoInputValue: string = '';
+
+  aboutToAppear(): void {
+    this.tempoInputValue = this.sanitizeTempoInput(this.initialValue);
+  }
+
+  private sanitizeTempoInput(value: string): string {
+    return value.replace(/[^0-9]/g, '').slice(0, 3);
+  }
+
+  private trySubmitTempoInput(): void {
+    const sanitizedValue = this.sanitizeTempoInput(this.tempoInputValue);
+    const parsedValue = sanitizedValue === '' ? 0 : Number.parseInt(sanitizedValue, 10);
+    const normalizedValue = Number.isNaN(parsedValue) ? 0 : parsedValue;
+    const clampedValue = Math.max(0, Math.min(600, normalizedValue));
+
+    if (normalizedValue !== clampedValue) {
+      this.tempoInputValue = `${clampedValue}`;
+      return;
+    }
+
+    this.controller.close();
+    this.onConfirm(clampedValue);
+  }
+
+  private closeWithCancel(): void {
+    this.controller.close();
+    this.onCancel();
+  }
+
+  private closeWithConfirm(): void {
+    this.trySubmitTempoInput();
+  }
+
+  build() {
+    Column({ space: 14 }) {
+
+      Text('设置速度')
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Color.White)
+        .width('100%')
+        .textAlign(TextAlign.Start)
+
+      TextInput({ text: this.tempoInputValue, placeholder: '144' })
+        .type(InputType.Number)
+        .enterKeyType(EnterKeyType.Done)
+        .defaultFocus(true)
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Color.White)
+        .placeholderColor('rgba(255, 255, 255, 0.38)')
+        .backgroundColor('rgba(255, 255, 255, 0.08)')
+        .borderRadius(14)
+        .padding({
+          left: 14,
+          right: 14,
+          top: 12,
+          bottom: 12
+        })
+        .caretColor('#4DA6FF')
+        .width('100%')
+        .onChange((value: string) => {
+          this.tempoInputValue = this.sanitizeTempoInput(value);
+        })
+        .onSubmit((_enterKey: EnterKeyType, _event: SubmitEvent) => {
+          this.trySubmitTempoInput();
+        })
+
+      Row({ space: 8 }) {
+        Button('取消')
+          .type(ButtonType.Capsule)
+          .layoutWeight(1)
+          .height(38)
+          .fontSize(14)
+          .fontColor(Color.White)
+          .backgroundColor('rgba(255, 255, 255, 0.12)')
+          .onClick(() => this.closeWithCancel())
+
+        Button('确定')
+          .type(ButtonType.Capsule)
+          .layoutWeight(1)
+          .height(38)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+          .backgroundColor('rgba(77, 166, 255, 0.88)')
+          .onClick(() => this.closeWithConfirm())
+      }
+      .width('100%')
+    }
+    .width(MetronomeTempoDialogWidth)
+    .padding(16)
+    .backgroundColor('rgba(12, 15, 21, 0.96)')
+    .borderRadius(18)
+    .border({ width: 1, color: 'rgba(255, 255, 255, 0.08)' })
+    .shadow({ radius: 18, color: 'rgba(0, 0, 0, 0.28)', offsetY: 6 })
+  }
+}
 
 @ComponentV2
 export struct PDFMetronomePanel {
-  @Param controller: PDFMetronomeController | undefined = undefined;
+  @Param controllerState: PDFMetronomeControllerState | undefined = undefined;
+  private tempoDialogOpen: boolean = false;
+  tempoInputDialogController: CustomDialogController = new CustomDialogController({
+    builder: TempoInputDialogBuilder()
+  });
+  private resumeMetronomeAfterInteraction: boolean = false;
+  private activeSpinInteractionCount: number = 0;
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
     onGetIrregularSizeByIndex: (): [number, number] => [1, 2]
   };
+
+  private get controller(): PDFMetronomeController | undefined {
+    return this.controllerState?.controller;
+  }
 
   private getBeatIndices(): number[] {
     const beats: number[] = [];
@@ -35,6 +156,136 @@ export struct PDFMetronomePanel {
       return 1;
     }
     return this.controller?.floatingButtonPulseScale ?? 1;
+  }
+
+  private getFloatingButtonColor(isActive: boolean = true): string {
+    if (!isActive || !(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0) {
+      return 'rgba(35, 42, 53, 0.62)';
+    }
+    return this.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)';
+  }
+
+  private getFloatingButtonTransitionDurationMs(): number {
+    return this.controller?.floatingButtonTransitionDurationMs ?? 0;
+  }
+
+  private getBeatRowSizes(): number[] {
+    switch (this.controller?.numerator ?? 0) {
+      case 0:
+        return [];
+      case 8:
+        return [4, 4];
+      case 9:
+        return [3, 3, 3];
+      case 10:
+        return [5, 5];
+      case 11:
+        return [6, 5];
+      case 12:
+        return [6, 6];
+      case 13:
+        return [7, 6];
+      case 14:
+        return [7, 7];
+      case 15:
+        return [5, 5, 5];
+      case 16:
+        return [4, 4, 4, 4];
+      default:
+        return [Math.max(1, this.controller?.numerator ?? 1)];
+    }
+  }
+
+  private getBeatRows(): number[][] {
+    const rows: number[][] = [];
+    const rowSizes: number[] = this.getBeatRowSizes();
+    let beatIndex: number = 0;
+
+    for (let i = 0; i < rowSizes.length; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < rowSizes[i]; j++) {
+        row.push(beatIndex);
+        beatIndex += 1;
+      }
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  private getBeatLayoutVersion(): string {
+    const numerator: number = this.controller?.numerator ?? 0;
+    return `${numerator}-${this.getBeatRowSizes().join('-')}`;
+  }
+
+  private handleSpinInteractionStart(): void {
+    this.activeSpinInteractionCount += 1;
+    if (this.activeSpinInteractionCount > 1) {
+      return;
+    }
+
+    this.resumeMetronomeAfterInteraction = this.controller?.isPlaying ?? false;
+    if (this.resumeMetronomeAfterInteraction) {
+      this.controller?.pauseForInteraction();
+    }
+  }
+
+  private handleSpinInteractionEnd(): void {
+    if (this.activeSpinInteractionCount <= 0) {
+      return;
+    }
+
+    this.activeSpinInteractionCount -= 1;
+    if (this.activeSpinInteractionCount > 0) {
+      return;
+    }
+
+    if (this.tempoDialogOpen) {
+      return;
+    }
+
+    if (this.resumeMetronomeAfterInteraction) {
+      this.resumeMetronomeAfterInteraction = false;
+      this.controller?.resumeAfterInteraction();
+    }
+  }
+
+  private openTempoInputDialog(): void {
+    if (this.tempoDialogOpen) {
+      return;
+    }
+
+    this.tempoInputDialogController = new CustomDialogController({
+      builder: TempoInputDialogBuilder({
+        initialValue: `${this.controller?.bpm ?? 0}`,
+        onCancel: () => this.handleTempoDialogClosed(),
+        onConfirm: (value: number) => this.applyTempoInputValue(value)
+      }),
+      alignment: DialogAlignment.Center,
+      autoCancel: true,
+      customStyle: true,
+      maskColor: 'rgba(0, 0, 0, 0.38)',
+      keyboardAvoidDistance: LengthMetrics.vp(16),
+      cancel: () => this.handleTempoDialogClosed()
+    });
+
+    this.tempoDialogOpen = true;
+    this.handleSpinInteractionStart();
+    this.tempoInputDialogController.open();
+  }
+
+  private handleTempoDialogClosed(): void {
+    if (!this.tempoDialogOpen) {
+      return;
+    }
+
+    this.tempoDialogOpen = false;
+    this.handleSpinInteractionEnd();
+  }
+
+  private applyTempoInputValue(value: number): void {
+    this.controller?.setBpm(value);
+    this.handleTempoDialogClosed();
   }
 
   build() {
@@ -61,7 +312,6 @@ export struct PDFMetronomePanel {
           .width('100%')
 
           Grid(undefined, this.metronomeGridLayout) {
-            // Row 0: Labels
             GridItem() {
               Text('速度')
                 .fontSize(12)
@@ -78,39 +328,51 @@ export struct PDFMetronomePanel {
                 .textAlign(TextAlign.Start)
             }
 
-            // Row 1: Tempo Spin Controls
             GridItem() {
               ScrollSpinBox({
                 value: this.controller?.bpm ?? 120,
-                min: 1,
+                canLoop: false,
+                min: 0,
                 max: 600,
                 step: 1,
                 valueFontSize: 30,
+                debounceMs: MetronomeSpinBoxSettleMs,
                 onValueChange: (value: number) => this.controller?.setBpm(value),
+                onInteractionStart: () => this.handleSpinInteractionStart(),
+                onInteractionEnd: () => this.handleSpinInteractionEnd(),
+                onLongPress: () => this.openTempoInputDialog(),
                 itemHeight: 30,
                 gradientHeight: 35
               })
-              .width('100%')
-              .height(120)
-              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-              .borderRadius(16)
-              .backgroundColor('rgba(255, 255, 255, 0.2)')
+                .width('100%')
+                .height(120)
+                .padding({
+                  left: 10,
+                  right: 10,
+                  top: 8,
+                  bottom: 8
+                })
+                .borderRadius(16)
+                .backgroundColor('rgba(255, 255, 255, 0.2)')
             }
 
-            // Row 1: Time Signature Controls
             GridItem() {
               Row({ space: 6 }) {
                 ScrollSpinBox({
                   value: this.controller?.numerator ?? 4,
+                  canLoop: false,
                   min: 1,
                   max: 16,
                   step: 1,
                   valueFontSize: 28,
+                  debounceMs: MetronomeSpinBoxSettleMs,
                   onValueChange: (value: number) => this.controller?.setNumerator(value),
+                  onInteractionStart: () => this.handleSpinInteractionStart(),
+                  onInteractionEnd: () => this.handleSpinInteractionEnd(),
                   itemHeight: 28,
                   gradientHeight: 35
                 })
-                .layoutWeight(1)
+                  .layoutWeight(1)
 
                 Divider()
                   .strokeWidth(2)
@@ -121,21 +383,29 @@ export struct PDFMetronomePanel {
                 ScrollSpinBox({
                   value: this.controller?.denominator ?? 4,
                   values: [2, 4, 8, 16],
+                  canLoop: false,
                   valueFontSize: 28,
+                  debounceMs: MetronomeSpinBoxSettleMs,
                   onValueChange: (value: number) => this.controller?.setDenominator(value),
+                  onInteractionStart: () => this.handleSpinInteractionStart(),
+                  onInteractionEnd: () => this.handleSpinInteractionEnd(),
                   itemHeight: 28,
                   gradientHeight: 35
                 })
-                .layoutWeight(1)
+                  .layoutWeight(1)
               }
               .width('100%')
               .height(120)
-              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+              .padding({
+                left: 10,
+                right: 10,
+                top: 8,
+                bottom: 8
+              })
               .borderRadius(16)
               .backgroundColor('rgba(255, 255, 255, 0.2)')
             }
 
-            // Row 2: Preset Buttons
             GridItem() {
               Row({ space: 6 }) {
                 Button('-10')
@@ -186,42 +456,44 @@ export struct PDFMetronomePanel {
                 })
             }
 
-            // Row 3: 拍点 Label (spans 2 columns)
             GridItem() {
               Text('拍点')
                 .fontSize(12)
                 .fontColor('rgba(255, 255, 255, 0.62)')
                 .width('100%')
                 .textAlign(TextAlign.Start)
+
             }
 
-            // Row 4: Beat Controls (spans 2 columns)
             GridItem() {
-              Flex({ wrap: FlexWrap.Wrap, space: { main: MetronomeBeatSpacing, cross: MetronomeBeatSpacing } }) {
-                ForEach(this.getBeatIndices(), (beat: number) => {
-                  Stack() {
-                    Text(`${beat + 1}`)
-                      .fontSize(16)
-                      .fontWeight(FontWeight.Bold)
-                      .fontColor(Color.White)
+              Column({ space: MetronomeBeatSpacing }) {
+                ForEach(this.getBeatRows(), (row: number[], rowIndex: number) => {
+                  Row({ space: MetronomeBeatSpacing }) {
+                    ForEach(row, (beat: number) => {
+                      Stack() {
+                        Text(`${beat + 1}`)
+                          .fontSize(16)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor(Color.White)
+                      }
+                      .layoutWeight(1)
+                      .height(MetronomeBeatButtonHeight)
+                      .borderRadius(14)
+                      .backgroundColor(this.getBeatColor(beat))
+                      .animation({ duration: 0 })
+                      .border({
+                        width: beat === 0 ? 2 : 1,
+                        color: beat === 0 ? 'rgba(255, 159, 67, 0.45)' : 'rgba(255, 255, 255, 0.06)'
+                      })
+                    }, (beat: number) => `${this.getBeatLayoutVersion()}-${rowIndex}-${beat}`)
                   }
-                  .flexGrow(1)
-                  .height(44)
-                  .borderRadius(14)
-                  .backgroundColor(this.getBeatColor(beat))
-                  .border({
-                    width: beat === 0 ? 2 : 1,
-                    color: beat === 0 ? 'rgba(255, 159, 67, 0.45)' : 'rgba(255, 255, 255, 0.06)'
-                  })
-                }, (beat: number) => `${beat}`)
+                  .width('100%')
+                }, (row: number[], rowIndex: number) => `${this.getBeatLayoutVersion()}-${rowIndex}-${row.length}`)
               }
               .width('100%')
-              .padding(12)
-              .borderRadius(16)
-              .backgroundColor('rgba(255, 255, 255, 0.035)')
+
             }
 
-            // Row 5: Play/Stop Button (spans 2 columns)
             GridItem() {
               Button(this.controller?.isPlaying ?? false ? '停止' : '播放')
                 .type(ButtonType.Capsule)
@@ -253,7 +525,8 @@ export struct PDFMetronomePanel {
       if (!(this.controller?.showWindow ?? false) && (this.controller?.isPlaying ?? false)) {
         StyleIconButton({
           icon: $r('sys.symbol.clock'),
-          alternateColor: !(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0 ? 'rgba(35, 42, 53, 0.62)' : (this.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)'),
+          alternateColor: this.getFloatingButtonColor(),
+          backgroundAnimationDurationMs: this.getFloatingButtonTransitionDurationMs(),
           onClickCallback: () => this.controller?.openWindow()
         })
           .scale({
@@ -262,6 +535,7 @@ export struct PDFMetronomePanel {
             centerX: 22,
             centerY: 22
           })
+          .animation({ duration: this.getFloatingButtonTransitionDurationMs(), curve: Curve.EaseOut })
           .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
       }
     }

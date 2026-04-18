@@ -1,18 +1,25 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 import { audio } from '@kit.AudioKit';
-import { media } from '@kit.MediaKit';
+import { displaySync } from '@kit.ArkGraphics2D';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const MetronomeDenominatorOptions: number[] = [2, 4, 8, 16];
-const MetronomeBpmPresets: number[] = [40, 60, 80, 100, 120, 140, 160, 180, 200];
+const MetronomeBpmPresets: number[] = [40, 60, 80, 100, 120, 140, 160, 180, 200, 300, 400, 500, 600];
 const MetronomeBpmPreferenceKey: string = 'metronomeBpm';
 const MetronomeNumeratorPreferenceKey: string = 'metronomeNumerator';
 const MetronomeDenominatorPreferenceKey: string = 'metronomeDenominator';
-const MetronomeAccentRawFile: string = 'metronome_accent.wav';
-const MetronomeWeakRawFile: string = 'metronome_beat.wav';
 const MetronomeFloatingButtonBaseColor: string = 'rgba(35, 42, 53, 0.62)';
+const MetronomeNsPerSecond: number = 1000000000;
+const MetronomeNsPerMs: number = 1000000;
+const MetronomeDisplaySyncFrameRate: number = 120;
+const MetronomeAudioTimestampRefreshNs: number = 200 * MetronomeNsPerMs;
+const MetronomeAudioSampleRateHz: number = 48000;
+const MetronomeAudioBytesPerFrame: number = 2;
+const MetronomeAudioMaxAmplitude: number = 32767;
+const MetronomeAudioNoiseFloorAmplitude: number = 2;
+const MetronomeAudioNoiseFloorSeed: number = 0x6d2b79f5;
+const MetronomeBeatPhaseEpsilonFrames: number = 0.5;
 const MetronomeTimeSignaturePresets: Array<[number, number]> = [
   [2, 4],
   [3, 4],
@@ -30,19 +37,47 @@ interface PDFMetronomeControllerDependencies {
   getHostContext: () => common.UIAbilityContext;
 }
 
+interface MetronomeClickInstance {
+  startFrame: number;
+  waveform: Int16Array;
+}
+
+@Observed
+export class PDFMetronomeControllerState {
+  public controller: PDFMetronomeController;
+
+  constructor(controller: PDFMetronomeController) {
+    this.controller = controller;
+  }
+}
+
 @ObservedV2
 export class PDFMetronomeController {
   private readonly dependencies: PDFMetronomeControllerDependencies;
+  private readonly accentWaveform: Int16Array;
+  private readonly weakWaveform: Int16Array;
   private preferenceStore?: preferences.Preferences;
-  private soundPool: media.SoundPool | undefined = undefined;
-  private accentSoundId: number = -1;
-  private weakSoundId: number = -1;
-  private soundPoolLoading: boolean = false;
-  private loadedSoundIds: Set<number> = new Set<number>();
-  private metronomeTimerId: number | undefined = undefined;
-  private metronomeNextTickAt: number = 0;
-  private pulseTimerId: number | undefined = undefined;
+  private audioRenderer: audio.AudioRenderer | undefined = undefined;
+  private audioRendererLoading: boolean = false;
+  private metronomeDisplaySync: displaySync.DisplaySync | undefined = undefined;
+  private metronomeDisplaySyncStarted: boolean = false;
+  private pendingRendererStop: Promise<void> | undefined = undefined;
   private audioRequestToken: number = 0;
+  private audioPlaybackSessionToken: number = 0;
+  private playbackStartRequested: boolean = false;
+  private beatIntervalFrames: number = 0;
+  private rendererBufferFrames: number = 0;
+  private streamCursorFrame: number = 0;
+  private nextBeatFrame: number = 0;
+  private nextBeatIndex: number = 0;
+  private activeClicks: MetronomeClickInstance[] = [];
+  private audioTimestampAnchor: audio.AudioTimestampInfo | undefined = undefined;
+  private audioTimestampAnchorUpdatedAtNs: number = 0;
+  private audioRenderedFrameAtAnchor: number = 0;
+  private lastVisualizedBeatOrdinal: number = -1;
+  private noiseFloorState: number = MetronomeAudioNoiseFloorSeed;
+  private floatingButtonPulseToken: number = 0;
+  private floatingButtonPulseResetTimeoutId: number | undefined = undefined;
 
   @Trace public showWindow: boolean = false;
   @Trace public bpm: number = 120;
@@ -52,19 +87,59 @@ export class PDFMetronomeController {
   @Trace public isPlaying: boolean = false;
   @Trace public floatingButtonPulseScale: number = 1;
   @Trace public floatingButtonColor: string = MetronomeFloatingButtonBaseColor;
-  @Trace public soundPoolReady: boolean = false;
+  @Trace public floatingButtonTransitionDurationMs: number = 0;
+  @Trace public audioReady: boolean = false;
 
-  private readonly handleSoundPoolLoadComplete = (soundId: number): void => {
-    this.loadedSoundIds.add(soundId);
-    this.soundPoolReady = this.loadedSoundIds.has(this.accentSoundId) && this.loadedSoundIds.has(this.weakSoundId);
+  private readonly handleAudioWriteData: audio.AudioRendererWriteDataCallback = (buffer: ArrayBuffer): audio.AudioDataCallbackResult => {
+    const output = new Int16Array(buffer);
+    if (this.isPlaying && this.beatIntervalFrames > 0) {
+      this.fillOutputWithNoiseFloor(output);
+    } else {
+      output.fill(0);
+    }
+
+    if (!this.isPlaying || this.beatIntervalFrames <= 0) {
+      this.streamCursorFrame += output.length;
+      return audio.AudioDataCallbackResult.VALID;
+    }
+
+    const chunkStartFrame = this.streamCursorFrame;
+    const chunkFrameCount = output.length;
+    const chunkEndFrame = chunkStartFrame + chunkFrameCount;
+
+    this.pruneFinishedClicks(chunkStartFrame);
+    this.enqueueClicksWithinRange(chunkEndFrame);
+    this.mixActiveClicksIntoChunk(output, chunkStartFrame, chunkFrameCount);
+
+    this.streamCursorFrame = chunkEndFrame;
+    return audio.AudioDataCallbackResult.VALID;
   };
 
-  private readonly handleSoundPoolError = (error: BusinessError): void => {
-    hilog.error(0, 'PDFMetronomeController', `节拍器音频错误: ${error.code} ${error.message}`);
+  private readonly handleMetronomeFrame = (frameInfo: displaySync.IntervalInfo): void => {
+    if (!this.isPlaying) {
+      return;
+    }
+
+    const presentationTimestamp = Math.max(frameInfo.timestamp, frameInfo.targetTimestamp);
+    const renderedFrame = this.getEstimatedRenderedFrame(presentationTimestamp);
+    if (renderedFrame === undefined || this.beatIntervalFrames <= 0) {
+      return;
+    }
+
+    const beatOrdinal = Math.floor((renderedFrame + MetronomeBeatPhaseEpsilonFrames) / this.beatIntervalFrames);
+    if (beatOrdinal < 0 || beatOrdinal === this.lastVisualizedBeatOrdinal) {
+      return;
+    }
+
+    this.lastVisualizedBeatOrdinal = beatOrdinal;
+    this.currentBeat = beatOrdinal % this.numerator;
+    this.startFloatingButtonPulse();
   };
 
   constructor(dependencies: PDFMetronomeControllerDependencies) {
     this.dependencies = dependencies;
+    this.accentWaveform = this.createClickWaveform(1760, 16, 0.95, 7.2);
+    this.weakWaveform = this.createClickWaveform(1320, 11, 0.62, 8.8);
   }
 
   initialize(preferenceStore: preferences.Preferences): void {
@@ -76,6 +151,7 @@ export class PDFMetronomeController {
   cleanup(): void {
     this.stopPlayback();
     this.releaseAudio();
+    this.releaseMetronomeLoop();
   }
 
   openWindow(): void {
@@ -158,13 +234,58 @@ export class PDFMetronomeController {
     this.startPlayback();
   }
 
-  stopPlayback(resetBeat: boolean = true): void {
-    this.isPlaying = false;
-    this.metronomeNextTickAt = 0;
-    if (this.metronomeTimerId !== undefined) {
-      clearTimeout(this.metronomeTimerId);
-      this.metronomeTimerId = undefined;
+  pauseForInteraction(): void {
+    if (!this.isPlaying) {
+      return;
     }
+    this.playbackStartRequested = false;
+    this.isPlaying = false;
+    this.audioPlaybackSessionToken += 1;
+    this.clearAudioClockState();
+    this.stopMetronomeLoop();
+    this.currentBeat = -1;
+    this.stopFloatingButtonPulse();
+
+    const stopPromise = this.stopAudioRendererPlayback('pauseForInteraction');
+    this.pendingRendererStop = stopPromise;
+    void stopPromise.finally(() => {
+      if (this.pendingRendererStop === stopPromise) {
+        this.pendingRendererStop = undefined;
+      }
+    });
+  }
+
+  resumeAfterInteraction(): void {
+    if (this.isPlaying) {
+      return;
+    }
+    if (this.bpm <= 0) {
+      this.playbackStartRequested = false;
+      this.isPlaying = false;
+      this.currentBeat = -1;
+      return;
+    }
+    this.playbackStartRequested = true;
+    this.isPlaying = true;
+    this.currentBeat = -1;
+    this.prepareAudioSchedule();
+    this.startMetronomeLoop();
+    this.startAudioRendererPlayback(++this.audioPlaybackSessionToken);
+  }
+
+  stopPlayback(resetBeat: boolean = true): void {
+    this.playbackStartRequested = false;
+    this.isPlaying = false;
+    this.audioPlaybackSessionToken += 1;
+    this.clearAudioClockState();
+    this.stopMetronomeLoop();
+    const stopPromise = this.stopAudioRendererPlayback('stopPlayback');
+    this.pendingRendererStop = stopPromise;
+    void stopPromise.finally(() => {
+      if (this.pendingRendererStop === stopPromise) {
+        this.pendingRendererStop = undefined;
+      }
+    });
     if (resetBeat) {
       this.currentBeat = -1;
     }
@@ -197,61 +318,53 @@ export class PDFMetronomeController {
   }
 
   private initializeAudio(): void {
-    if (this.soundPoolLoading || this.soundPool) {
+    if (this.audioRendererLoading || this.audioRenderer) {
       return;
     }
-    this.soundPoolLoading = true;
+
+    this.audioRendererLoading = true;
     const requestToken = ++this.audioRequestToken;
-    this.createSoundPool(requestToken).finally(() => {
+    this.createAudioRenderer(requestToken).finally(() => {
       if (this.audioRequestToken === requestToken) {
-        this.soundPoolLoading = false;
+        this.audioRendererLoading = false;
       }
     });
   }
 
-  private async createSoundPool(requestToken: number): Promise<void> {
-    this.loadedSoundIds.clear();
-    this.soundPoolReady = false;
-    this.accentSoundId = -1;
-    this.weakSoundId = -1;
+  private async createAudioRenderer(requestToken: number): Promise<void> {
+    this.audioReady = false;
 
     try {
-      const audioRendererInfo: audio.AudioRendererInfo = {
-        usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
-        rendererFlags: 1
+      const audioRendererOptions: audio.AudioRendererOptions = {
+        streamInfo: {
+          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_48000,
+          channels: audio.AudioChannel.CHANNEL_1,
+          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+        },
+        rendererInfo: {
+          usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+          rendererFlags: 0
+        }
       };
-      const soundPool = await media.createSoundPool(4, audioRendererInfo);
-      soundPool.on('loadComplete', this.handleSoundPoolLoadComplete);
-      soundPool.on('error', this.handleSoundPoolError);
+
+      const audioRenderer = await audio.createAudioRenderer(audioRendererOptions);
+      audioRenderer.on('writeData', this.handleAudioWriteData);
+      this.rendererBufferFrames = this.getRendererBufferFrames(audioRenderer);
 
       if (requestToken !== this.audioRequestToken) {
-        this.releaseDetachedSoundPool(soundPool);
+        this.releaseDetachedAudioRenderer(audioRenderer);
         return;
       }
 
-      const context = this.dependencies.getHostContext();
-      const accentDescriptor = await context.resourceManager.getRawFd(MetronomeAccentRawFile);
-      const weakDescriptor = await context.resourceManager.getRawFd(MetronomeWeakRawFile);
+      this.audioRenderer = audioRenderer;
+      this.audioReady = true;
 
-      if (requestToken !== this.audioRequestToken) {
-        this.releaseDetachedSoundPool(soundPool);
-        return;
+      if (this.playbackStartRequested && this.isPlaying) {
+        this.startAudioRendererPlayback(this.audioPlaybackSessionToken);
       }
-
-      this.soundPool = soundPool;
-      this.accentSoundId = await soundPool.load(accentDescriptor.fd, accentDescriptor.offset, accentDescriptor.length);
-      if (requestToken !== this.audioRequestToken || this.soundPool !== soundPool) {
-        this.releaseDetachedSoundPool(soundPool);
-        return;
-      }
-      this.weakSoundId = await soundPool.load(weakDescriptor.fd, weakDescriptor.offset, weakDescriptor.length);
-      if (requestToken !== this.audioRequestToken || this.soundPool !== soundPool) {
-        this.releaseDetachedSoundPool(soundPool);
-        return;
-      }
-      hilog.info(0, 'PDFMetronomeController', '节拍器音频资源已开始加载');
     } catch (error) {
-      hilog.error(0, 'PDFMetronomeController', `初始化节拍器音频失败: ${JSON.stringify(error)}`);
+      hilog.error(0, 'PDFMetronomeController', `初始化节拍器AudioRenderer失败: ${JSON.stringify(error)}`);
       if (requestToken === this.audioRequestToken) {
         this.resetAudioState();
       }
@@ -260,99 +373,182 @@ export class PDFMetronomeController {
 
   private releaseAudio(): void {
     this.audioRequestToken += 1;
-    this.soundPoolLoading = false;
-    const soundPool = this.soundPool;
+    this.audioRendererLoading = false;
+    const audioRenderer = this.audioRenderer;
     this.resetAudioState();
-    if (!soundPool) {
+    if (!audioRenderer) {
       return;
     }
-    this.releaseDetachedSoundPool(soundPool);
+    this.releaseDetachedAudioRenderer(audioRenderer);
   }
 
   private resetAudioState(): void {
-    this.soundPool = undefined;
-    this.soundPoolReady = false;
-    this.loadedSoundIds.clear();
-    this.accentSoundId = -1;
-    this.weakSoundId = -1;
+    this.audioRenderer = undefined;
+    this.audioReady = false;
+    this.clearAudioClockState();
   }
 
-  private releaseDetachedSoundPool(soundPool: media.SoundPool): void {
-    soundPool.off('loadComplete');
-    soundPool.off('error');
-    soundPool.release().catch((error: BusinessError) => {
-      hilog.error(0, 'PDFMetronomeController', `释放节拍器音频失败: ${error.code} ${error.message}`);
-    });
-  }
+  private releaseDetachedAudioRenderer(audioRenderer: audio.AudioRenderer): void {
+    try {
+      audioRenderer.off('writeData', this.handleAudioWriteData);
+    } catch (error) {
+      hilog.error(0, 'PDFMetronomeController', `解绑节拍器AudioRenderer回调失败: ${JSON.stringify(error)}`);
+    }
 
-  private playBeatSound(beat: number): void {
-    if (!this.soundPool || !this.soundPoolReady) {
-      return;
-    }
-    const soundId = beat === 0 ? this.accentSoundId : this.weakSoundId;
-    if (soundId < 0) {
-      return;
-    }
-    const playParameters: media.PlayParameters = {
-      loop: 0,
-      rate: audio.AudioRendererRate.RENDER_RATE_NORMAL,
-      leftVolume: 1,
-      rightVolume: 1,
-      priority: 1
+    const releaseRenderer = async (): Promise<void> => {
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING || audioRenderer.state === audio.AudioState.STATE_PAUSED) {
+          await audioRenderer.stop();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `停止节拍器AudioRenderer失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `清空节拍器音频缓冲失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state !== audio.AudioState.STATE_RELEASED) {
+          await audioRenderer.release();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `释放节拍器AudioRenderer失败: ${JSON.stringify(error)}`);
+      }
     };
-    this.soundPool.play(soundId, playParameters).catch((error: BusinessError) => {
-      hilog.error(0, 'PDFMetronomeController', `播放节拍器音频失败: ${error.code} ${error.message}`);
-    });
+
+    void releaseRenderer();
+  }
+
+  private stopAudioRendererPlayback(reason: string): Promise<void> {
+    if (!this.audioRenderer) {
+      return Promise.resolve();
+    }
+
+    const audioRenderer = this.audioRenderer;
+    return (async (): Promise<void> => {
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING || audioRenderer.state === audio.AudioState.STATE_PAUSED) {
+          await audioRenderer.stop();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `停止节拍器播放失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `清空节拍器播放缓冲失败: ${JSON.stringify(error)}`);
+      }
+    })();
   }
 
   private clampBpm(value: number): number {
-    return Math.max(1, Math.min(600, Math.round(value)));
+    return Math.max(0, Math.min(600, Math.round(value)));
   }
 
   private clampNumerator(value: number): number {
     return Math.max(1, Math.min(16, Math.round(value)));
   }
 
-  private getIntervalMs(): number {
-    return Math.round((60000 / this.bpm) * (4 / this.denominator));
+  private getIntervalFrames(): number {
+    if (this.bpm <= 0) {
+      return 0;
+    }
+    return (MetronomeAudioSampleRateHz * 60 / this.bpm) * (4 / this.denominator);
   }
 
   private startPlayback(): void {
     this.stopPlayback(false);
+
+    if (this.bpm <= 0) {
+      this.currentBeat = -1;
+      return;
+    }
+
+    this.playbackStartRequested = true;
     this.isPlaying = true;
     this.currentBeat = -1;
-    this.advanceBeat();
-    const intervalMs = this.getIntervalMs();
-    this.metronomeNextTickAt = Date.now() + intervalMs;
-    this.scheduleTick(intervalMs);
-    this.startFloatingButtonPulse();
+    this.prepareAudioSchedule();
+    this.startMetronomeLoop();
+    this.startAudioRendererPlayback(++this.audioPlaybackSessionToken);
   }
 
-  private advanceBeat(): void {
-    if (this.currentBeat < 0 || this.currentBeat >= this.numerator - 1) {
-      this.currentBeat = 0;
-    } else {
-      this.currentBeat += 1;
-    }
-    this.playBeatSound(this.currentBeat);
+  private prepareAudioSchedule(): void {
+    this.clearAudioClockState();
+    this.beatIntervalFrames = this.getIntervalFrames();
+    this.streamCursorFrame = 0;
+    this.nextBeatFrame = 0;
+    this.nextBeatIndex = 0;
   }
 
-  private scheduleTick(delayMs: number): void {
-    if (this.metronomeTimerId !== undefined) {
-      clearTimeout(this.metronomeTimerId);
-      this.metronomeTimerId = undefined;
+  private clearAudioClockState(): void {
+    this.beatIntervalFrames = 0;
+    this.streamCursorFrame = 0;
+    this.nextBeatFrame = 0;
+    this.nextBeatIndex = 0;
+    this.activeClicks = [];
+    this.audioTimestampAnchor = undefined;
+    this.audioTimestampAnchorUpdatedAtNs = 0;
+    this.audioRenderedFrameAtAnchor = 0;
+    this.lastVisualizedBeatOrdinal = -1;
+  }
+
+  private getRendererBufferFrames(audioRenderer: audio.AudioRenderer): number {
+    try {
+      return Math.max(1, Math.floor(audioRenderer.getBufferSizeSync() / MetronomeAudioBytesPerFrame));
+    } catch (error) {
+      hilog.error(0, 'PDFMetronomeController', `获取节拍器缓冲区大小失败: ${JSON.stringify(error)}`);
+      return 0;
     }
-    this.metronomeTimerId = setTimeout(() => {
-      if (!this.isPlaying) {
-        return;
+  }
+
+  private startAudioRendererPlayback(playbackToken: number): void {
+    if (playbackToken !== this.audioPlaybackSessionToken || !this.playbackStartRequested || !this.isPlaying) {
+      return;
+    }
+
+    if (!this.audioRenderer) {
+      this.initializeAudio();
+      return;
+    }
+
+    const audioRenderer = this.audioRenderer;
+    const startRenderer = async (): Promise<void> => {
+      try {
+        const pendingStop = this.pendingRendererStop;
+        if (pendingStop) {
+          await pendingStop;
+        }
+
+        if (playbackToken !== this.audioPlaybackSessionToken || !this.playbackStartRequested || !this.isPlaying) {
+          return;
+        }
+
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING) {
+          return;
+        }
+
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+
+        await audioRenderer.start();
+      } catch (error) {
+        if (playbackToken === this.audioPlaybackSessionToken && this.isPlaying) {
+          hilog.error(0, 'PDFMetronomeController', `启动节拍器播放失败: ${JSON.stringify(error)}`);
+          this.stopPlayback();
+        }
       }
-      this.advanceBeat();
-      const intervalMs = this.getIntervalMs();
-      const now = Date.now();
-      this.metronomeNextTickAt += intervalMs;
-      const nextDelay = Math.max(12, this.metronomeNextTickAt - now);
-      this.scheduleTick(nextDelay);
-    }, Math.max(12, delayMs));
+    };
+
+    void startRenderer();
   }
 
   private restartIfPlaying(): void {
@@ -360,6 +556,187 @@ export class PDFMetronomeController {
       return;
     }
     this.startPlayback();
+  }
+
+  private createClickWaveform(frequencyHz: number, durationMs: number, amplitude: number,
+    decayStrength: number): Int16Array {
+    const frameCount = Math.max(1, Math.round(MetronomeAudioSampleRateHz * durationMs / 1000));
+    const attackFrames = Math.max(1, Math.round(MetronomeAudioSampleRateHz * 0.0015));
+    const waveform = new Int16Array(frameCount);
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      const phase = 2 * Math.PI * frequencyHz * frameIndex / MetronomeAudioSampleRateHz;
+      const attackGain = frameIndex < attackFrames ? frameIndex / attackFrames : 1;
+      const decayGain = Math.exp(-decayStrength * frameIndex / frameCount);
+      const sample = Math.sin(phase) * amplitude * attackGain * decayGain;
+      waveform[frameIndex] = Math.round(sample * MetronomeAudioMaxAmplitude);
+    }
+
+    return waveform;
+  }
+
+  private fillOutputWithNoiseFloor(output: Int16Array): void {
+    for (let sampleIndex = 0; sampleIndex < output.length; sampleIndex++) {
+      this.noiseFloorState = (Math.imul(this.noiseFloorState, 1664525) + 1013904223) >>> 0;
+      output[sampleIndex] = (this.noiseFloorState & 1) === 0
+        ? -MetronomeAudioNoiseFloorAmplitude
+        : MetronomeAudioNoiseFloorAmplitude;
+    }
+  }
+
+  private pruneFinishedClicks(chunkStartFrame: number): void {
+    this.activeClicks = this.activeClicks.filter((click: MetronomeClickInstance): boolean => {
+      return click.startFrame + click.waveform.length > chunkStartFrame;
+    });
+  }
+
+  private enqueueClicksWithinRange(chunkEndFrame: number): void {
+    const scheduleWindowEndFrame = chunkEndFrame + this.rendererBufferFrames;
+    while (this.nextBeatFrame < scheduleWindowEndFrame) {
+      this.activeClicks.push({
+        startFrame: Math.max(0, Math.round(this.nextBeatFrame)),
+        waveform: this.nextBeatIndex === 0 ? this.accentWaveform : this.weakWaveform
+      });
+
+      this.nextBeatFrame += this.beatIntervalFrames;
+      if (this.nextBeatIndex >= this.numerator - 1) {
+        this.nextBeatIndex = 0;
+      } else {
+        this.nextBeatIndex += 1;
+      }
+    }
+  }
+
+  private mixActiveClicksIntoChunk(output: Int16Array, chunkStartFrame: number, chunkFrameCount: number): void {
+    for (const click of this.activeClicks) {
+      const clickOffsetInChunk = click.startFrame - chunkStartFrame;
+      const sourceStartIndex = Math.max(0, -clickOffsetInChunk);
+      const targetStartIndex = Math.max(0, clickOffsetInChunk);
+      const sampleCount = Math.min(click.waveform.length - sourceStartIndex, chunkFrameCount - targetStartIndex);
+
+      if (sampleCount <= 0) {
+        continue;
+      }
+
+      for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
+        const outputIndex = targetStartIndex + sampleIndex;
+        const mixedSample = output[outputIndex] + click.waveform[sourceStartIndex + sampleIndex];
+        output[outputIndex] = this.clampPcmSample(mixedSample);
+      }
+    }
+  }
+
+  private clampPcmSample(value: number): number {
+    return Math.max(-MetronomeAudioMaxAmplitude - 1, Math.min(MetronomeAudioMaxAmplitude, Math.round(value)));
+  }
+
+  private getEstimatedRenderedFrame(nowNs: number): number | undefined {
+    const audioRenderer = this.audioRenderer;
+    if (!audioRenderer || audioRenderer.state !== audio.AudioState.STATE_RUNNING || this.beatIntervalFrames <= 0) {
+      return undefined;
+    }
+
+    if (!this.audioTimestampAnchor || nowNs - this.audioTimestampAnchorUpdatedAtNs >= MetronomeAudioTimestampRefreshNs) {
+      try {
+        const timestampInfo = audioRenderer.getAudioTimestampInfoSync();
+        if (timestampInfo.timestamp > 0 && timestampInfo.framePos > 0) {
+          this.updateAudioTimestampAnchor(timestampInfo, nowNs);
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFMetronomeController', `获取节拍器音频时间戳失败: ${JSON.stringify(error)}`);
+      }
+    }
+
+    if (!this.audioTimestampAnchor || this.audioTimestampAnchor.timestamp <= 0) {
+      return undefined;
+    }
+
+    const elapsedFrames = Math.max(0,
+      (nowNs - this.audioTimestampAnchor.timestamp) * MetronomeAudioSampleRateHz / MetronomeNsPerSecond);
+    return Math.max(0, this.audioRenderedFrameAtAnchor + elapsedFrames);
+  }
+
+  private updateAudioTimestampAnchor(timestampInfo: audio.AudioTimestampInfo, nowNs: number): void {
+    if (!this.audioTimestampAnchor) {
+      this.audioTimestampAnchor = timestampInfo;
+      this.audioTimestampAnchorUpdatedAtNs = nowNs;
+      this.audioRenderedFrameAtAnchor = 0;
+      return;
+    }
+
+    const frameDelta = timestampInfo.framePos - this.audioTimestampAnchor.framePos;
+    if (frameDelta >= 0) {
+      this.audioRenderedFrameAtAnchor += frameDelta;
+    } else {
+      const timestampDeltaFrames = Math.max(0,
+        (timestampInfo.timestamp - this.audioTimestampAnchor.timestamp) * MetronomeAudioSampleRateHz / MetronomeNsPerSecond);
+      this.audioRenderedFrameAtAnchor += timestampDeltaFrames;
+    }
+
+    this.audioTimestampAnchor = timestampInfo;
+    this.audioTimestampAnchorUpdatedAtNs = nowNs;
+  }
+
+  private ensureMetronomeLoop(): displaySync.DisplaySync | undefined {
+    if (this.metronomeDisplaySync) {
+      return this.metronomeDisplaySync;
+    }
+
+    const nextDisplaySync = displaySync.create();
+    nextDisplaySync.setExpectedFrameRateRange({
+      expected: MetronomeDisplaySyncFrameRate,
+      min: 0,
+      max: MetronomeDisplaySyncFrameRate
+    });
+    nextDisplaySync.on('frame', this.handleMetronomeFrame);
+    this.metronomeDisplaySync = nextDisplaySync;
+    return nextDisplaySync;
+  }
+
+  private startMetronomeLoop(): void {
+    const metronomeLoop = this.ensureMetronomeLoop();
+    if (!metronomeLoop || this.metronomeDisplaySyncStarted) {
+      return;
+    }
+
+    let uiContext: UIContext;
+    try {
+      uiContext = this.dependencies.getUIContext();
+    } catch (error) {
+      hilog.error(0, 'PDFMetronomeController', `节拍器帧循环启动失败: ${JSON.stringify(error)}`);
+      return;
+    }
+
+    uiContext.runScopedTask(() => {
+      metronomeLoop.start();
+      this.metronomeDisplaySyncStarted = true;
+    });
+  }
+
+  private stopMetronomeLoop(): void {
+    if (!this.metronomeDisplaySync || !this.metronomeDisplaySyncStarted) {
+      return;
+    }
+    this.metronomeDisplaySync.stop();
+    this.metronomeDisplaySyncStarted = false;
+  }
+
+  private releaseMetronomeLoop(): void {
+    if (!this.metronomeDisplaySync) {
+      return;
+    }
+    this.stopMetronomeLoop();
+    this.metronomeDisplaySync.off('frame', this.handleMetronomeFrame);
+    this.metronomeDisplaySync = undefined;
+  }
+
+  private getFloatingButtonPulseDurationMs(): number {
+    if (this.bpm <= 0) {
+      return 180;
+    }
+
+    const beatDurationMs = 60000 / this.bpm * (4 / this.denominator);
+    return Math.max(60, Math.round(beatDurationMs));
   }
 
   private startFloatingButtonPulse(): void {
@@ -374,39 +751,42 @@ export class PDFMetronomeController {
       if (!this.isPlaying) {
         return;
       }
+      const pulseToken = ++this.floatingButtonPulseToken;
+      const pulseDurationMs = this.getFloatingButtonPulseDurationMs();
+      if (this.floatingButtonPulseResetTimeoutId !== undefined) {
+        clearTimeout(this.floatingButtonPulseResetTimeoutId);
+        this.floatingButtonPulseResetTimeoutId = undefined;
+      }
+      this.floatingButtonTransitionDurationMs = 0;
       this.floatingButtonPulseScale = 1.12;
       this.floatingButtonColor = this.currentBeat === 0 ? 'rgba(255, 159, 67, 0.78)' : 'rgba(77, 166, 255, 0.76)';
 
-      uiContext.keyframeAnimateTo({ iterations: 1 }, [
-        {
-          duration: 500,
-          curve: Curve.EaseOut,
-          event: () => {
-            this.floatingButtonPulseScale = 1;
-            this.floatingButtonColor = MetronomeFloatingButtonBaseColor;
-          }
+      this.floatingButtonPulseResetTimeoutId = setTimeout(() => {
+        this.floatingButtonPulseResetTimeoutId = undefined;
+        if (pulseToken !== this.floatingButtonPulseToken) {
+          return;
         }
-      ]);
+
+        if (!this.isPlaying) {
+          return;
+        }
+
+        this.floatingButtonTransitionDurationMs = pulseDurationMs;
+        this.floatingButtonColor = MetronomeFloatingButtonBaseColor;
+        this.floatingButtonPulseScale = 1;
+      }, 16);
     };
 
     pulse();
-    this.pulseTimerId = setInterval(() => {
-      if (!this.isPlaying) {
-        if (this.pulseTimerId !== undefined) {
-          clearInterval(this.pulseTimerId);
-          this.pulseTimerId = undefined;
-        }
-        return;
-      }
-      pulse();
-    }, this.getIntervalMs());
   }
 
   private stopFloatingButtonPulse(): void {
-    if (this.pulseTimerId !== undefined) {
-      clearInterval(this.pulseTimerId);
-      this.pulseTimerId = undefined;
+    this.floatingButtonPulseToken += 1;
+    if (this.floatingButtonPulseResetTimeoutId !== undefined) {
+      clearTimeout(this.floatingButtonPulseResetTimeoutId);
+      this.floatingButtonPulseResetTimeoutId = undefined;
     }
+    this.floatingButtonTransitionDurationMs = 0;
     this.floatingButtonPulseScale = 1;
     this.floatingButtonColor = MetronomeFloatingButtonBaseColor;
   }
