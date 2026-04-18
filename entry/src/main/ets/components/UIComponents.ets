@@ -189,6 +189,7 @@ export struct StyleIconButton {
   @Param onClickCallback: () => void = () => {
   };
   @Param alternateColor: ResourceColor | undefined = undefined;
+  @Param backgroundAnimationDurationMs: number = 0;
   @Param menuElement: MenuElement[] | undefined = undefined;
   @Param menuPlacement: Placement = Placement.Bottom;
 
@@ -205,6 +206,7 @@ export struct StyleIconButton {
     .hitTestBehavior(HitTestMode.Block)
     .monopolizeEvents(true)
     .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
+    .animation({ duration: this.backgroundAnimationDurationMs, curve: Curve.EaseOut })
     .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
       backgroundColor: ButtonColor,
       outlineColor: Color.Transparent,
