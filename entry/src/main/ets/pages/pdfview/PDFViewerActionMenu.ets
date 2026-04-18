@@ -1,10 +1,10 @@
-import { deviceInfo } from '@kit.BasicServicesKit';
 import { ButtonColor, ButtonColorSemiTransparent, ContainerSpacing, StyleIconButton } from '../../components/UIComponents';
 
 @ComponentV2
 export struct PDFViewerActionMenu {
   @Param menuExpanded: boolean = false;
   @Param isExclusiveFullScreen: boolean = false;
+  @Param showFullscreenButton: boolean = false;
   @Param pageDisplayModeText: string = '';
   @Param pageFlipModeText: string = '';
   @Param annotateModeText: string = '';
@@ -38,7 +38,7 @@ export struct PDFViewerActionMenu {
               onClickCallback: () => this.onSettings()
             }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
 
-            if (deviceInfo.deviceType != 'phone') {
+            if (this.showFullscreenButton) {
               StyleIconButton({
                 icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
                 label: this.isExclusiveFullScreen ? '窗口' : '全屏',
