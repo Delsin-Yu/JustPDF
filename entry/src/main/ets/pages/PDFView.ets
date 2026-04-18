@@ -56,6 +56,7 @@ struct PDFView {
   @State loadError: string = '';
   transparencyTimeoutId: number | undefined = undefined;
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
+  freeWindowModeCallback: ((isInFreeWindowMode: boolean) => void) | undefined = undefined;
   lastTouchPoint: Vector2 | undefined = undefined;
   lastPinchDistance: number | undefined = undefined;
   lastPinchCenter: Vector2 | undefined = undefined;
@@ -94,6 +95,7 @@ struct PDFView {
     })
   );
   @State isExclusiveFullScreen: boolean = false;
+  @State isInFreeWindowMode: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
@@ -157,6 +159,10 @@ struct PDFView {
       this.windowStatusCallback = (statusType: window.WindowStatusType) => this.isExclusiveFullScreen = statusType == window.WindowStatusType.FULL_SCREEN;
       this.mainWindow.on('windowStatusChange', this.windowStatusCallback);
       this.isExclusiveFullScreen = this.mainWindow.getWindowStatus() == window.WindowStatusType.FULL_SCREEN;
+
+      this.freeWindowModeCallback = (isInFreeWindowMode: boolean) => this.isInFreeWindowMode = isInFreeWindowMode;
+      this.mainWindow.on('freeWindowModeChange', this.freeWindowModeCallback);
+      this.isInFreeWindowMode = this.mainWindow.isInFreeWindowMode();
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
@@ -213,6 +219,13 @@ struct PDFView {
     if (this.windowStatusCallback) {
       try {
         this.mainWindow.off('windowStatusChange', this.windowStatusCallback);
+      } catch (_e) { /* ignore */
+      }
+    }
+
+    if (this.freeWindowModeCallback) {
+      try {
+        this.mainWindow.off('freeWindowModeChange', this.freeWindowModeCallback);
       } catch (_e) { /* ignore */
       }
     }
@@ -1007,6 +1020,7 @@ struct PDFView {
               PDFViewerActionMenu({
                 menuExpanded: this.viewerViewModel.menuExpanded,
                 isExclusiveFullScreen: this.isExclusiveFullScreen,
+                showFullscreenButton: this.isInFreeWindowMode,
                 pageDisplayModeText: this.viewerViewModel.getPageDisplayModeText(),
                 pageFlipModeText: this.viewerViewModel.getPageFlipModeText(),
                 annotateModeText: this.viewerViewModel.getAnnotateModeText(),
@@ -1027,7 +1041,7 @@ struct PDFView {
                 onToggleFullscreen: () => {
                   this.isExclusiveFullScreen = !this.isExclusiveFullScreen;
                   if (this.isExclusiveFullScreen) {
-                    this.mainWindow.maximize().catch();
+                    this.mainWindow.maximize(window.MaximizePresentation.ENTER_IMMERSIVE).catch();
                   } else {
                     this.mainWindow.recover().catch();
                   }
