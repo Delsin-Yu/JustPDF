@@ -47,7 +47,6 @@ struct Index {
     this.isLoading = true;
     let file = dir + "/" + fileName;
     let tempFile = dir + "/saveTemp_" + fileName;
-    hilog.info(0x0000, TAG, "[rawfile_copy_to_sandbox] Path:" + file);
     try {
       await fs.copyFile(sourceFile.fd, file);
     } catch (error) {
@@ -62,7 +61,6 @@ struct Index {
         hilog.error(0x0000, TAG, `Error closing file: ${error}`);
       }
     }
-    hilog.info(0x0000, TAG, "copyFile succeed");
 
     let args: Record<string, string> = {
       'systemPath': uri,

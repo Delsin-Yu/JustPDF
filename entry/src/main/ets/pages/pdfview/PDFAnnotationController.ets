@@ -303,7 +303,6 @@ export class PDFAnnotationController {
       if (result && result.length > 0) {
         return result[0];
       }
-      hilog.info(0, 'PDFView', '用户取消保存操作');
       return '';
     } catch (error) {
       hilog.error(0, 'PDFView', `保存对话框错误: ${JSON.stringify(error)}`);
