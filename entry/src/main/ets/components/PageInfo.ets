@@ -127,11 +127,8 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 
   public retainThumbnail(preferredSize: Vector2): void {
-    hilog.warn(0, 'PDFView', `请求页面 ${this.localPageIndex} 缩略图，首选大小: ${preferredSize.x}x${preferredSize.y}`);
-
     // Increment reference count for this thumbnail request
     this.thumbnailRefCount++;
-    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图引用计数增加到 ${this.thumbnailRefCount}`);
 
     if (this.pageThumbnail) return;
     if (this.pageThumbnailTask) return;
@@ -141,11 +138,9 @@ export class PageInfo implements ReadonlyPageInfo {
     const scaleY = preferredSize.y / pageSize.y;
     const scale = Math.min(scaleX, scaleY);
     const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale);
-    hilog.warn(0, 'PDFView', `开始生成页面 ${this.localPageIndex} 缩略图，缩放比例: ${scale}`);
     const promise = taskpool.execute(task, taskpool.Priority.LOW)
       .then(result => {
         const pageCache = result as PageCache;
-        hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已生成 ${scale.toFixed(2)}`);
         this.pageThumbnail = pageCache.pixelMap;
         this.pageThumbnailTask = undefined;
         if (!this.associatedSource || !this.globalPageIndex) return;
@@ -183,7 +178,6 @@ export class PageInfo implements ReadonlyPageInfo {
         const pageCache = result as PageCache;
         this.caches.set(renderScale, pageCache as PageCache);
         this.pendingTasks.delete(renderScale);
-        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache as PageCache;
       })
       .catch((error: Error) => {
@@ -204,8 +198,7 @@ export class PageInfo implements ReadonlyPageInfo {
       try {
         taskpool.cancel(pendingTask.task);
       } catch (error) {
-        // Task may have already completed or been cancelled
-        hilog.debug(0, 'PDFView', `取消任务时出错: ${error}`);
+        // Task may have already completed or been cancelled.
       }
     }
     this.pendingTasks.clear();
@@ -228,8 +221,6 @@ export class PageInfo implements ReadonlyPageInfo {
     
     // Cancel pending cache tasks
     this.cancelPendingTasks();
-    
-    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 查看器缓存已清除`);
   }
 
   /**
@@ -240,7 +231,6 @@ export class PageInfo implements ReadonlyPageInfo {
   public releaseThumbnail(): void {
     // Decrement reference count
     this.thumbnailRefCount--;
-    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图引用计数减少到 ${this.thumbnailRefCount}`);
 
     // Only evict when no more references
     if (this.thumbnailRefCount > 0) {
@@ -255,7 +245,7 @@ export class PageInfo implements ReadonlyPageInfo {
       try {
         taskpool.cancel(this.pageThumbnailTask.task);
       } catch (error) {
-        hilog.error(0, 'PDFView', `取消缩略图任务时出错: ${error}`);
+        // Task may have already completed or been cancelled.
       }
       this.pageThumbnailTask = undefined;
     }
@@ -269,8 +259,6 @@ export class PageInfo implements ReadonlyPageInfo {
       }
       this.pageThumbnail = undefined;
     }
-    
-    hilog.warn(0, 'PDFView', `页面 ${this.localPageIndex} 缩略图已清除`);
   }
 
   private getLowestRenderScaleCache(): PageCache | undefined {
@@ -351,7 +339,6 @@ export class PageInfo implements ReadonlyPageInfo {
         let pageCache: PageCache = result as PageCache;
         this.caches.set(renderScale, pageCache);
         this.pendingTasks.delete(renderScale);
-        hilog.info(0, 'PDFView', `页面 ${this.localPageIndex} 已在缩放 ${renderScale} 下缓存`);
         return pageCache;
       })
       .catch((error: Error) => {
@@ -458,7 +445,6 @@ export class PageStore implements IDataSource {
       try {
         this.getPageInfo(pageIndex).ensureCached(MIN_RENDER_SCALE, priority);
       } catch (error) {
-        hilog.debug(0, 'PDFView', `预取页面 ${pageIndex} 时出错: ${error}`);
       }
     }
     
@@ -470,8 +456,6 @@ export class PageStore implements IDataSource {
         pageInfo.evictViewerCache();
       }
     }
-    
-    hilog.info(0, 'PDFView', `预取页面 ${centerIndex} 周围 ±${prefetchRange}，清除 ±${evictionRange} 外的缓存`);
   }
 
   public async getPageCacheAsync(
