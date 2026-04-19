@@ -1,7 +1,7 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
 import { ButtonColor, ContainerPadding, StyleIconButton } from '../../components/UIComponents';
-import { PDFMetronomeController, PDFMetronomeControllerState } from './PDFMetronomeController';
+import { PDFMetronomeController } from './PDFMetronomeController';
 
 const MetronomeBeatSpacing: Length = `10vp`;
 const MetronomeSpinBoxSettleMs: number = 160;
@@ -132,7 +132,7 @@ struct TempoInputDialogBuilder {
 
 @ComponentV2
 export struct PDFMetronomePanel {
-  @Param controllerState: PDFMetronomeControllerState | undefined = undefined;
+  @Param controller: PDFMetronomeController | undefined = undefined;
   @Param useDocked: boolean = false;
   @Param initialFloatingScale: number = FloatingMetronomeDefaultScale;
   @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
@@ -154,10 +154,6 @@ export struct PDFMetronomePanel {
   aboutToAppear(): void {
     this.floatingScale = clampFloatingMetronomeScale(this.initialFloatingScale);
     this.pinchStartScale = this.floatingScale;
-  }
-
-  private get controller(): PDFMetronomeController | undefined {
-    return this.controllerState?.controller;
   }
 
   private getBeatColor(beat: number): string {
