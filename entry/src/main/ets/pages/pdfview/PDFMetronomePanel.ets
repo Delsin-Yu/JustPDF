@@ -1,13 +1,26 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ButtonColor, StyleIconButton } from '../../components/UIComponents';
+import { ButtonColor, ContainerPadding, StyleIconButton } from '../../components/UIComponents';
 import { PDFMetronomeController, PDFMetronomeControllerState } from './PDFMetronomeController';
 
 const MetronomeBeatSpacing: Length = `10vp`;
 const MetronomeSpinBoxSettleMs: number = 160;
+const MetronomeWindowMargin: number = 16;
 const MetronomeWindowWidth: number = 400;
+export const MetronomeTotalWidth: number = MetronomeWindowWidth + MetronomeWindowMargin * 2;
+export const FloatingMetronomeDefaultScale: number = 0.5;
+const FloatingMetronomeMinScale: number = 0.35;
+const FloatingMetronomeMaxScale: number = 1.5;
 const MetronomeTempoDialogWidth: number = 260;
 const MetronomeBeatButtonHeight: number = 44;
+
+function clampFloatingMetronomeScale(scale: number): number {
+  return Math.max(FloatingMetronomeMinScale, Math.min(FloatingMetronomeMaxScale, scale));
+}
+
+export function getFloatingMetronomeTotalWidth(scale: number): number {
+  return MetronomeTotalWidth * clampFloatingMetronomeScale(scale);
+}
 
 @CustomDialog
 struct TempoInputDialogBuilder {
@@ -120,28 +133,31 @@ struct TempoInputDialogBuilder {
 @ComponentV2
 export struct PDFMetronomePanel {
   @Param controllerState: PDFMetronomeControllerState | undefined = undefined;
+  @Param useDocked: boolean = false;
+  @Param initialFloatingScale: number = FloatingMetronomeDefaultScale;
+  @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
+  };
+  @Local floatingScale: number = FloatingMetronomeDefaultScale;
   private tempoDialogOpen: boolean = false;
   tempoInputDialogController: CustomDialogController = new CustomDialogController({
     builder: TempoInputDialogBuilder()
   });
   private resumeMetronomeAfterInteraction: boolean = false;
   private activeSpinInteractionCount: number = 0;
+  private pinchStartScale: number = FloatingMetronomeDefaultScale;
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
     onGetIrregularSizeByIndex: (): [number, number] => [1, 2]
   };
 
-  private get controller(): PDFMetronomeController | undefined {
-    return this.controllerState?.controller;
+  aboutToAppear(): void {
+    this.floatingScale = clampFloatingMetronomeScale(this.initialFloatingScale);
+    this.pinchStartScale = this.floatingScale;
   }
 
-  private getBeatIndices(): number[] {
-    const beats: number[] = [];
-    for (let i = 0; i < (this.controller?.numerator ?? 0); i++) {
-      beats.push(i);
-    }
-    return beats;
+  private get controller(): PDFMetronomeController | undefined {
+    return this.controllerState?.controller;
   }
 
   private getBeatColor(beat: number): string {
@@ -288,6 +304,27 @@ export struct PDFMetronomePanel {
     this.handleTempoDialogClosed();
   }
 
+  private updateFloatingScale(scale: number): void {
+    const nextScale = clampFloatingMetronomeScale(scale);
+    if (Math.abs(nextScale - this.floatingScale) < 0.001) {
+      return;
+    }
+    this.floatingScale = nextScale;
+    this.onFloatingScaleChanged(nextScale);
+  }
+
+  private handleFloatingPinchStart(): void {
+    this.pinchStartScale = this.floatingScale;
+  }
+
+  private handleFloatingPinchUpdate(event: GestureEvent): void {
+    this.updateFloatingScale(this.pinchStartScale * event.scale);
+  }
+
+  private handleFloatingPinchEnd(): void {
+    this.pinchStartScale = this.floatingScale;
+  }
+
   build() {
     Stack() {
       if (this.controller?.showWindow ?? false) {
@@ -310,6 +347,7 @@ export struct PDFMetronomePanel {
             .onClick(() => this.controller?.closeWindow())
           }
           .width('100%')
+          .hitTestBehavior(HitTestMode.Default)
 
           Grid(undefined, this.metronomeGridLayout) {
             GridItem() {
@@ -408,20 +446,23 @@ export struct PDFMetronomePanel {
 
             GridItem() {
               Row({ space: 6 }) {
-                Button('-10')
-                  .type(ButtonType.Capsule)
-                  .flexGrow(1)
-                  .height(34)
-                  .fontSize(13)
-                  .fontColor(Color.White)
-                  .backgroundColor('rgba(255, 255, 255, 0.1)')
-                  .onClick(() => this.controller?.adjustBpm(-10))
+                if (!this.useDocked) {
+                  Button('-10')
+                    .type(ButtonType.Capsule)
+                    .flexGrow(1)
+                    .height(34)
+                    .fontSize(13)
+                    .fontColor(Color.White)
+                    .backgroundColor('rgba(255, 255, 255, 0.1)')
+                    .onClick(() => this.controller?.adjustBpm(-10))
+                }
 
                 Button('预设')
                   .type(ButtonType.Capsule)
                   .flexGrow(1)
                   .height(34)
                   .fontSize(13)
+                  .width(this.useDocked ? '100%' : 'auto')
                   .fontColor(Color.White)
                   .backgroundColor('rgba(255, 255, 255, 0.1)')
                   .bindMenu(this.controller?.getBpmMenu() ?? [], {
@@ -430,14 +471,16 @@ export struct PDFMetronomePanel {
                     placement: Placement.BottomRight
                   })
 
-                Button('+10')
-                  .type(ButtonType.Capsule)
-                  .flexGrow(1)
-                  .height(34)
-                  .fontSize(13)
-                  .fontColor(Color.White)
-                  .backgroundColor('rgba(255, 255, 255, 0.1)')
-                  .onClick(() => this.controller?.adjustBpm(+10))
+                if (!this.useDocked) {
+                  Button('+10')
+                    .type(ButtonType.Capsule)
+                    .flexGrow(1)
+                    .height(34)
+                    .fontSize(13)
+                    .fontColor(Color.White)
+                    .backgroundColor('rgba(255, 255, 255, 0.1)')
+                    .onClick(() => this.controller?.adjustBpm(+10))
+                }
               }
             }
 
@@ -512,14 +555,28 @@ export struct PDFMetronomePanel {
           .height(LayoutPolicy.wrapContent)
           .width('100%')
         }
-        .width(MetronomeWindowWidth)
+        .width(this.useDocked ? "100%" : MetronomeWindowWidth)
         .padding(16)
         .backgroundColor('rgba(8, 10, 14, 0.78)')
-        .borderRadius(18)
+        .borderRadius({
+          topLeft: this.useDocked ? 0 : 18,
+          topRight: this.useDocked ? 0 : 18,
+          bottomLeft: 18,
+          bottomRight: 18
+        })
+        .margin(this.useDocked ? 0 : ContainerPadding)
         .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
         .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
         .align(Alignment.TopStart)
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
+        .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.floatingScale, y: this.floatingScale, centerX: 0, centerY: 0 })
+        .gesture(
+          PinchGesture({ fingers: 2 })
+            .onActionStart((_event: GestureEvent) => this.handleFloatingPinchStart())
+            .onActionUpdate((event: GestureEvent) => this.handleFloatingPinchUpdate(event))
+            .onActionEnd((_event: GestureEvent) => this.handleFloatingPinchEnd())
+            .onActionCancel(() => this.handleFloatingPinchEnd())
+        )
       }
 
       if (!(this.controller?.showWindow ?? false) && (this.controller?.isPlaying ?? false)) {
@@ -537,6 +594,7 @@ export struct PDFMetronomePanel {
           })
           .animation({ duration: this.getFloatingButtonTransitionDurationMs(), curve: Curve.EaseOut })
           .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+          .margin(ContainerPadding)
       }
     }
     .alignContent(Alignment.TopStart)
