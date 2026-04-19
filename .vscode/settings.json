@@ -2,6 +2,21 @@
     "chat.tools.terminal.autoApprove": {
         ".\\build.ps1": true
     },
-    "typescript.validate.enable": false,
-    "typescript.suggest.enabled": false
+    "search.useIgnoreFiles": false,
+    "search.exclude": {
+        "**/node_modules": true,
+        "**/oh_modules": true,
+        "**/build": true,
+        "**/.test": true,
+        ".idea": true,
+        ".hvigor": true,
+        ".appanalyzer": true,
+        ".cxx": true,
+        "certs": true,
+        "entry/patch.json": true,
+        "build-deploy.ps1": true,
+        "build.ps1": true
+    },
+    "js/ts.validate.enabled": false,
+    "js/ts.suggest.enabled": false
 }
