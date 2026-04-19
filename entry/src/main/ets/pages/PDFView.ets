@@ -97,6 +97,8 @@ struct PDFView {
   });
   @Local useDockedMetronomePanel: boolean = false;
   @Local metronomePanelScale: number = FloatingMetronomeDefaultScale;
+  @Local metronomeViewportWidthVp: number = 0;
+  @Local metronomeViewportHeightVp: number = 0;
   @Local isExclusiveFullScreen: boolean = false;
   @Local isInFreeWindowMode: boolean = false;
   hotkeys: InputAction[] = [];
@@ -145,10 +147,22 @@ struct PDFView {
     this.useDockedMetronomePanel = windowWidthPx <= totalWidthPx;
   }
 
+  private updateMetronomeViewportFromArea(area: Area): void {
+    this.metronomeViewportWidthVp = area.width as number;
+    this.metronomeViewportHeightVp = area.height as number;
+  }
+
+  private updateMetronomeViewport(windowSize: window.Size): void {
+    this.updateMetronomeDocking(windowSize.width);
+  }
+
   private refreshMetronomeDockingForCurrentWindow(): void {
     try {
       const rect = this.mainWindow.getWindowProperties().windowRect;
-      this.updateMetronomeDocking(rect.width);
+      this.updateMetronomeViewport({
+        width: rect.width,
+        height: rect.height
+      });
     } catch (error) {
       hilog.error(0, 'PDFView', `刷新节拍器停靠状态出错: ${error}.`);
     }
@@ -185,7 +199,7 @@ struct PDFView {
       this.isInFreeWindowMode = this.mainWindow.isInFreeWindowMode();
       this.useDockedMetronomePanel = false;
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
-        this.updateMetronomeDocking(_windowSize.width);
+        this.updateMetronomeViewport(_windowSize);
       };
       this.mainWindow.on('windowSizeChange', this.windowSizeChangeCallback);
     } catch (error) {
@@ -988,6 +1002,7 @@ struct PDFView {
         Flex()
           .size({ width: '100%', height: '100%' })
           .onAreaChange((_, newVal) => {
+            this.updateMetronomeViewportFromArea(newVal);
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             this.resetViewToFit();
           })
@@ -1043,6 +1058,8 @@ struct PDFView {
           controller: this.metronomeController,
           useDocked: this.useDockedMetronomePanel,
           initialFloatingScale: this.metronomePanelScale,
+          floatingViewportWidthVp: this.metronomeViewportWidthVp,
+          floatingViewportHeightVp: this.metronomeViewportHeightVp,
           onFloatingScaleChanged: (scale: number) => {
             this.metronomePanelScale = scale;
             if (this.lastWindowWidthPx > 0) {
