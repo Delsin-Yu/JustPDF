@@ -1,5 +1,5 @@
 import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
-import { LengthMetricsUnit, UIUtils, window } from '@kit.ArkUI';
+import { LengthMetricsUnit, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fromArea, mul, toSizePx, Vec2, Vector2 } from '../components/Numbers';
@@ -14,7 +14,7 @@ import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
-import { PDFMetronomeController, PDFMetronomeControllerState } from './pdfview/PDFMetronomeController';
+import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
 import { PDFPageSlot } from './pdfview/PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
@@ -34,7 +34,7 @@ const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
 
 @Entry
-@Component
+@ComponentV2
 struct PDFView {
   systemPath = '';
   sandBoxPath = '';
@@ -44,19 +44,19 @@ struct PDFView {
   document = new pdfService.PdfDocument();
   pageDataSource: PageStore = new PageStore();
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
-  viewerViewModel: PDFViewerViewModel = new PDFViewerViewModel();
+  @Local viewerViewModel: PDFViewerViewModel = new PDFViewerViewModel();
   currentRenderScale: number = ViewerMinRenderScale;
-  @State view1PixelMap: PixelMap | undefined = undefined;
-  @State view2PixelMap: PixelMap | undefined = undefined;
-  @State view3PixelMap: PixelMap | undefined = undefined;
-  @State view1Loading: boolean = false;
-  @State view2Loading: boolean = false;
-  @State view3Loading: boolean = false;
-  @State view1ViewSize: Vector2 = Vec2(0, 0);
-  @State view2ViewSize: Vector2 = Vec2(0, 0);
-  @State view3ViewSize: Vector2 = Vec2(0, 0);
-  @State isDocumentLoading: boolean = true;
-  @State loadError: string = '';
+  @Local view1PixelMap: PixelMap | undefined = undefined;
+  @Local view2PixelMap: PixelMap | undefined = undefined;
+  @Local view3PixelMap: PixelMap | undefined = undefined;
+  @Local view1Loading: boolean = false;
+  @Local view2Loading: boolean = false;
+  @Local view3Loading: boolean = false;
+  @Local view1ViewSize: Vector2 = Vec2(0, 0);
+  @Local view2ViewSize: Vector2 = Vec2(0, 0);
+  @Local view3ViewSize: Vector2 = Vec2(0, 0);
+  @Local isDocumentLoading: boolean = true;
+  @Local loadError: string = '';
   transparencyTimeoutId: number | undefined = undefined;
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
   freeWindowModeCallback: ((isInFreeWindowMode: boolean) => void) | undefined = undefined;
@@ -77,7 +77,7 @@ struct PDFView {
   view3DrawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings, LengthMetricsUnit.PX);
   placeholderPixelMap: PixelMap | undefined = undefined;
   transparentPlaceholderPixelMap: PixelMap | undefined = undefined;
-  annotationController: PDFAnnotationController = new PDFAnnotationController({
+  @Local annotationController: PDFAnnotationController = new PDFAnnotationController({
     pageDataSource: this.pageDataSource,
     viewerViewModel: this.viewerViewModel,
     document: this.document,
@@ -91,16 +91,14 @@ struct PDFView {
     onRedrawRequested: () => this.redrawStrokes(),
     onRefreshDisplayedPages: () => this.refreshDisplayedPages()
   }, CanvasOverSampling);
-  @State metronomeControllerState: PDFMetronomeControllerState = new PDFMetronomeControllerState(
-    new PDFMetronomeController({
-      getUIContext: () => this.getUIContext(),
-      getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
-    })
-  );
-  @State useDockedMetronomePanel: boolean = false;
-  @State metronomePanelScale: number = FloatingMetronomeDefaultScale;
-  @State isExclusiveFullScreen: boolean = false;
-  @State isInFreeWindowMode: boolean = false;
+  @Local metronomeController: PDFMetronomeController = new PDFMetronomeController({
+    getUIContext: () => this.getUIContext(),
+    getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
+  });
+  @Local useDockedMetronomePanel: boolean = false;
+  @Local metronomePanelScale: number = FloatingMetronomeDefaultScale;
+  @Local isExclusiveFullScreen: boolean = false;
+  @Local isInFreeWindowMode: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
@@ -172,7 +170,7 @@ struct PDFView {
     try {
       this.viewerViewModel.loadPreferences(this.preferences);
       this.rebuildSettingsDialogController();
-      this.metronomeControllerState.controller.initialize(this.preferences);
+      this.metronomeController.initialize(this.preferences);
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -249,7 +247,7 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
-    this.metronomeControllerState.controller.cleanup();
+    this.metronomeController.cleanup();
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
@@ -316,7 +314,7 @@ struct PDFView {
   }
 
   onBackGround = () => {
-    this.metronomeControllerState.controller.stopPlayback();
+    this.metronomeController.stopPlayback();
     this.immersiveDisablingListening();
   }
 
@@ -1042,7 +1040,7 @@ struct PDFView {
             repeating: false
           })
         PDFMetronomePanel({
-          controllerState: UIUtils.enableV2Compatibility(this.metronomeControllerState),
+          controller: this.metronomeController,
           useDocked: this.useDockedMetronomePanel,
           initialFloatingScale: this.metronomePanelScale,
           onFloatingScaleChanged: (scale: number) => {
@@ -1115,7 +1113,7 @@ struct PDFView {
                   this.executeShare();
                 },
                 onToggleMetronome: () => {
-                  this.metronomeControllerState.controller.toggleWindow();
+                  this.metronomeController.toggleWindow();
                   this.viewerViewModel.setMenuExpanded(false);
                 },
                 onToggleMenu: () => {
