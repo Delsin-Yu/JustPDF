@@ -144,6 +144,8 @@ export struct PDFMetronomePanel {
   @Param controller: PDFMetronomeController | undefined = undefined;
   @Param useDocked: boolean = false;
   @Param initialFloatingScale: number = FloatingMetronomeDefaultScale;
+  @Param floatingViewportWidthVp: number = 0;
+  @Param floatingViewportHeightVp: number = 0;
   @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
   };
   @Local floatingScale: number = FloatingMetronomeDefaultScale;
@@ -157,6 +159,8 @@ export struct PDFMetronomePanel {
   private floatingDragStartOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
   private pinchStartScale: number = FloatingMetronomeDefaultScale;
   private floatingPinchActive: boolean = false;
+  private floatingWindowAreaWidthVp: number = MetronomeWindowWidth;
+  private floatingWindowContentHeightVp: number = 0;
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
@@ -318,7 +322,53 @@ export struct PDFMetronomePanel {
       return;
     }
     this.floatingScale = nextScale;
+    this.syncFloatingOffsetToBounds();
     this.onFloatingScaleChanged(nextScale);
+  }
+
+  private clampFloatingOffset(offset: FloatingMetronomeOffset): FloatingMetronomeOffset {
+    if (this.useDocked) {
+      return { x: 0, y: 0 };
+    }
+
+    const scaledWidthVp: number = this.floatingWindowAreaWidthVp * this.floatingScale;
+    const scaledHeightVp: number = this.floatingWindowContentHeightVp * this.floatingScale;
+    const minX: number = 0;
+    const minY: number = 0;
+    const maxX: number = this.floatingViewportWidthVp - scaledWidthVp - MetronomeWindowMargin;
+    const maxY: number = this.floatingViewportHeightVp - scaledHeightVp - MetronomeWindowMargin;
+    return {
+      x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+    };
+  }
+
+  private getClampedFloatingOffset(): FloatingMetronomeOffset {
+    return this.clampFloatingOffset(this.floatingOffset);
+  }
+
+  private syncFloatingOffsetToBounds(): void {
+    const nextOffset = this.getClampedFloatingOffset();
+    if (Math.abs(nextOffset.x - this.floatingOffset.x) < 0.001
+      && Math.abs(nextOffset.y - this.floatingOffset.y) < 0.001) {
+      return;
+    }
+
+    this.floatingOffset = nextOffset;
+    this.floatingDragStartOffset = { x: nextOffset.x, y: nextOffset.y };
+  }
+
+  private handleFloatingWindowAreaChange(newValue: Area): void {
+    const nextWidthVp = newValue.width as number;
+    const nextHeightVp = newValue.height as number;
+    if (Math.abs(nextWidthVp - this.floatingWindowAreaWidthVp) < 0.001
+      && Math.abs(nextHeightVp - this.floatingWindowContentHeightVp) < 0.001) {
+      return;
+    }
+
+    this.floatingWindowAreaWidthVp = nextWidthVp;
+    this.floatingWindowContentHeightVp = nextHeightVp;
+    this.syncFloatingOffsetToBounds();
   }
 
   private handleFloatingDragStart(): void {
@@ -326,7 +376,9 @@ export struct PDFMetronomePanel {
       return;
     }
 
-    this.floatingDragStartOffset = { x: this.floatingOffset.x, y: this.floatingOffset.y };
+    const clampedOffset = this.getClampedFloatingOffset();
+    this.floatingOffset = clampedOffset;
+    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
   }
 
   private handleFloatingDragUpdate(event: GestureEvent): void {
@@ -335,10 +387,10 @@ export struct PDFMetronomePanel {
     }
 
     const visualDragScale: number = this.floatingScale;
-    this.floatingOffset = {
+    this.floatingOffset = this.clampFloatingOffset({
       x: this.floatingDragStartOffset.x + event.offsetX * visualDragScale,
       y: this.floatingDragStartOffset.y + event.offsetY * visualDragScale
-    };
+    });
   }
 
   private handleFloatingDragEnd(): void {
@@ -346,7 +398,9 @@ export struct PDFMetronomePanel {
       return;
     }
 
-    this.floatingDragStartOffset = { x: this.floatingOffset.x, y: this.floatingOffset.y };
+    const clampedOffset = this.getClampedFloatingOffset();
+    this.floatingOffset = clampedOffset;
+    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
   }
 
   private handleFloatingPinchStart(): void {
@@ -361,6 +415,7 @@ export struct PDFMetronomePanel {
   private handleFloatingPinchEnd(): void {
     this.floatingPinchActive = false;
     this.pinchStartScale = this.floatingScale;
+    this.syncFloatingOffsetToBounds();
   }
 
   build() {
@@ -647,8 +702,9 @@ export struct PDFMetronomePanel {
         .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
         .align(Alignment.TopStart)
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
+        .onAreaChange((_oldValue: Area, newValue: Area) => this.handleFloatingWindowAreaChange(newValue))
         .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.floatingScale, y: this.floatingScale, centerX: 0, centerY: 0 })
-        .offset(this.useDocked ? { x: 0, y: 0 } : this.floatingOffset)
+        .offset(this.useDocked ? { x: 0, y: 0 } : this.getClampedFloatingOffset())
         .gesture(
           PinchGesture({ fingers: 2 })
             .onActionStart((_event: GestureEvent) => this.handleFloatingPinchStart())
