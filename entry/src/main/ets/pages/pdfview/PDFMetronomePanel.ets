@@ -11,8 +11,17 @@ export const MetronomeTotalWidth: number = MetronomeWindowWidth + MetronomeWindo
 export const FloatingMetronomeDefaultScale: number = 0.5;
 const FloatingMetronomeMinScale: number = 0.35;
 const FloatingMetronomeMaxScale: number = 1.5;
+const FloatingMetronomeDragDistanceVp: number = 1;
+const MetronomeHeaderGap: number = 10;
+const MetronomeHeaderCloseButtonWidth: number = 60;
+const MetronomeHeaderDragMaxWidth: Length = `calc(100% - ${MetronomeHeaderCloseButtonWidth + MetronomeHeaderGap}vp)`;
 const MetronomeTempoDialogWidth: number = 260;
 const MetronomeBeatButtonHeight: number = 44;
+
+interface FloatingMetronomeOffset {
+  x: number;
+  y: number;
+}
 
 function clampFloatingMetronomeScale(scale: number): number {
   return Math.max(FloatingMetronomeMinScale, Math.min(FloatingMetronomeMaxScale, scale));
@@ -138,13 +147,16 @@ export struct PDFMetronomePanel {
   @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
   };
   @Local floatingScale: number = FloatingMetronomeDefaultScale;
+  @Local floatingOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
   private tempoDialogOpen: boolean = false;
   tempoInputDialogController: CustomDialogController = new CustomDialogController({
     builder: TempoInputDialogBuilder()
   });
   private resumeMetronomeAfterInteraction: boolean = false;
   private activeSpinInteractionCount: number = 0;
+  private floatingDragStartOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
   private pinchStartScale: number = FloatingMetronomeDefaultScale;
+  private floatingPinchActive: boolean = false;
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
@@ -309,7 +321,36 @@ export struct PDFMetronomePanel {
     this.onFloatingScaleChanged(nextScale);
   }
 
+  private handleFloatingDragStart(): void {
+    if (this.useDocked || this.tempoDialogOpen) {
+      return;
+    }
+
+    this.floatingDragStartOffset = { x: this.floatingOffset.x, y: this.floatingOffset.y };
+  }
+
+  private handleFloatingDragUpdate(event: GestureEvent): void {
+    if (this.useDocked || this.floatingPinchActive || this.tempoDialogOpen) {
+      return;
+    }
+
+    const visualDragScale: number = this.floatingScale;
+    this.floatingOffset = {
+      x: this.floatingDragStartOffset.x + event.offsetX * visualDragScale,
+      y: this.floatingDragStartOffset.y + event.offsetY * visualDragScale
+    };
+  }
+
+  private handleFloatingDragEnd(): void {
+    if (this.useDocked || this.tempoDialogOpen) {
+      return;
+    }
+
+    this.floatingDragStartOffset = { x: this.floatingOffset.x, y: this.floatingOffset.y };
+  }
+
   private handleFloatingPinchStart(): void {
+    this.floatingPinchActive = true;
     this.pinchStartScale = this.floatingScale;
   }
 
@@ -318,6 +359,7 @@ export struct PDFMetronomePanel {
   }
 
   private handleFloatingPinchEnd(): void {
+    this.floatingPinchActive = false;
     this.pinchStartScale = this.floatingScale;
   }
 
@@ -325,20 +367,60 @@ export struct PDFMetronomePanel {
     Stack() {
       if (this.controller?.showWindow ?? false) {
         Column({ space: 14 }) {
-          Row() {
-            Text('节拍器')
-              .fontSize(18)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Color.White)
-            Blank()
-            Button({ type: ButtonType.Capsule }) {
+          Row({ space: MetronomeHeaderGap }) {
+            Row({ space: 10 }) {
+              Column({ space: 3 }) {
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.26)')
+                  }, (index: number) => `metronome-drag-grip-top-${index}`)
+                }
+
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.16)')
+                  }, (index: number) => `metronome-drag-grip-bottom-${index}`)
+                }
+              }
+
+              Text('节拍器')
+                .fontSize(18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Color.White)
+            }
+            .height('auto')
+            .width('100%')
+            .constraintSize({ maxWidth: MetronomeHeaderDragMaxWidth })
+            .padding(ContainerPadding)
+            .alignItems(VerticalAlign.Center)
+            .borderRadius(10)
+            .backgroundColor('rgba(255, 255, 255, 0.05)')
+            .border({ width: 1, color: 'rgba(255, 255, 255, 0.06)' })
+            .gesture(
+              PanGesture({ fingers: 1, distance: FloatingMetronomeDragDistanceVp })
+                .onActionStart((_event: GestureEvent) => this.handleFloatingDragStart())
+                .onActionUpdate((event: GestureEvent) => this.handleFloatingDragUpdate(event))
+                .onActionEnd((_event: GestureEvent) => this.handleFloatingDragEnd())
+                .onActionCancel(() => this.handleFloatingDragEnd())
+            )
+
+            Button({ type: ButtonType.Normal }) {
               SymbolGlyph($r('sys.symbol.xmark'))
                 .fontSize(14)
                 .fontWeight(FontWeight.Bold)
                 .fontColor([Color.White])
             }
-            .width(60)
-            .height(28)
+            .width(MetronomeHeaderCloseButtonWidth)
+            .height(LayoutPolicy.matchParent)
+            .borderRadius(10)
             .backgroundColor('rgba(255, 255, 255, 0.16)')
             .onClick(() => this.controller?.closeWindow())
           }
@@ -566,6 +648,7 @@ export struct PDFMetronomePanel {
         .align(Alignment.TopStart)
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
         .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.floatingScale, y: this.floatingScale, centerX: 0, centerY: 0 })
+        .offset(this.useDocked ? { x: 0, y: 0 } : this.floatingOffset)
         .gesture(
           PinchGesture({ fingers: 2 })
             .onActionStart((_event: GestureEvent) => this.handleFloatingPinchStart())
