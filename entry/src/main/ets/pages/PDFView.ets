@@ -1,9 +1,8 @@
-import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, showAlertDialog, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
+import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
 import { LengthMetricsUnit, UIUtils, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { taskpool } from '@kit.ArkTS';
-import { fromArea, mul, pxToVp, toSizePx, Vec2, Vector2 } from '../components/Numbers';
+import { fromArea, mul, toSizePx, Vec2, Vector2 } from '../components/Numbers';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { fileUri } from '@kit.CoreFileKit';
@@ -17,7 +16,11 @@ import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
 import { PDFMetronomeController, PDFMetronomeControllerState } from './pdfview/PDFMetronomeController';
 import { PDFPageSlot } from './pdfview/PDFPageSlot';
-import { PDFMetronomePanel } from './pdfview/PDFMetronomePanel';
+import {
+  FloatingMetronomeDefaultScale,
+  getFloatingMetronomeTotalWidth,
+  PDFMetronomePanel
+} from './pdfview/PDFMetronomePanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
 import { PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
@@ -94,10 +97,14 @@ struct PDFView {
       getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
     })
   );
+  @State useDockedMetronomePanel: boolean = false;
+  @State metronomePanelScale: number = FloatingMetronomeDefaultScale;
   @State isExclusiveFullScreen: boolean = false;
   @State isInFreeWindowMode: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
+  windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
+  private lastWindowWidthPx: number = 0;
   // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
   // 避免快速翻页后显示内容与当前页码不符。
   private pageLoadVersion: number = 0;
@@ -134,6 +141,21 @@ struct PDFView {
     });
   }
 
+  private updateMetronomeDocking(windowWidthPx: number): void {
+    this.lastWindowWidthPx = windowWidthPx;
+    const totalWidthPx = this.getUIContext().vp2px(getFloatingMetronomeTotalWidth(this.metronomePanelScale));
+    this.useDockedMetronomePanel = windowWidthPx <= totalWidthPx;
+  }
+
+  private refreshMetronomeDockingForCurrentWindow(): void {
+    try {
+      const rect = this.mainWindow.getWindowProperties().windowRect;
+      this.updateMetronomeDocking(rect.width);
+    } catch (error) {
+      hilog.error(0, 'PDFView', `刷新节拍器停靠状态出错: ${error}.`);
+    }
+  }
+
   aboutToAppear(): void {
     let args = this.getUIContext().getRouter().getParams() as Record<string, string>;
     if ((args == null || args['sandboxPath'] == null || args['sandboxPath'] == '')
@@ -163,6 +185,11 @@ struct PDFView {
       this.freeWindowModeCallback = (isInFreeWindowMode: boolean) => this.isInFreeWindowMode = isInFreeWindowMode;
       this.mainWindow.on('freeWindowModeChange', this.freeWindowModeCallback);
       this.isInFreeWindowMode = this.mainWindow.isInFreeWindowMode();
+      this.useDockedMetronomePanel = false;
+      this.windowSizeChangeCallback = (_windowSize: window.Size) => {
+        this.updateMetronomeDocking(_windowSize.width);
+      };
+      this.mainWindow.on('windowSizeChange', this.windowSizeChangeCallback);
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
@@ -172,17 +199,29 @@ struct PDFView {
     context.eventHub.on('onBackGround', this.onBackGround);
 
     // Register hotkeys
-  this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
-  this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.navigateNextPage()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.navigateNextPage()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => this.annotationController.executeUndo()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => this.annotationController.executeRedo()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.annotationController.executeRedo()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.annotationController.executeSave()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
-  this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
 
     // Defer heavy document loading so UI can render the loading indicator first
     this.initializeDocument();
+  }
+
+  onPageShow(): void {
+    try {
+      const rect = this.mainWindow.getWindowProperties().windowRect;
+      this.windowSizeChangeCallback?.({
+        width: rect.width,
+        height: rect.height
+      });
+    } catch (error) {
+      hilog.error(0, 'PDFView', `获取窗口大小出错: ${error}.`);
+    }
   }
 
   private async initializeDocument(): Promise<void> {
@@ -226,6 +265,13 @@ struct PDFView {
     if (this.freeWindowModeCallback) {
       try {
         this.mainWindow.off('freeWindowModeChange', this.freeWindowModeCallback);
+      } catch (_e) { /* ignore */
+      }
+    }
+
+    if (this.windowSizeChangeCallback) {
+      try {
+        this.mainWindow.off('windowSizeChange', this.windowSizeChangeCallback);
       } catch (_e) { /* ignore */
       }
     }
@@ -324,7 +370,9 @@ struct PDFView {
     for (const pageIndex of this.viewerViewModel.displayedPageIndices) {
       const cache = await this.getPageCache(pageIndex, renderScale, loadVersion);
       // 在等待期间若已发生页面切换则丢弃结果
-      if (loadVersion !== this.pageLoadVersion) return;
+      if (loadVersion !== this.pageLoadVersion) {
+        return;
+      }
       // 更新相应视图的 pixelMap
       const displayIndex = this.viewerViewModel.displayedPageIndices.indexOf(pageIndex);
       if (displayIndex === 0) {
@@ -453,7 +501,9 @@ struct PDFView {
     if (indices.length > 0) {
       tasks.push(this.getPageCache(indices[0], this.currentRenderScale, loadVersion)
         .then(cache => {
-          if (loadVersion !== this.pageLoadVersion) return;
+          if (loadVersion !== this.pageLoadVersion) {
+            return;
+          }
           this.view1PixelMap = cache.pixelMap;
           this.view1ViewSize = cache.displaySize;
           this.view1Loading = false;
@@ -465,7 +515,9 @@ struct PDFView {
     if (indices.length > 1) {
       tasks.push(this.getPageCache(indices[1], this.currentRenderScale, loadVersion)
         .then(cache => {
-          if (loadVersion !== this.pageLoadVersion) return;
+          if (loadVersion !== this.pageLoadVersion) {
+            return;
+          }
           this.view2PixelMap = cache.pixelMap;
           this.view2ViewSize = cache.displaySize;
           this.view2Loading = false;
@@ -477,7 +529,9 @@ struct PDFView {
     if (indices.length > 2) {
       tasks.push(this.getPageCache(indices[2], this.currentRenderScale, loadVersion)
         .then(cache => {
-          if (loadVersion !== this.pageLoadVersion) return;
+          if (loadVersion !== this.pageLoadVersion) {
+            return;
+          }
           this.view3PixelMap = cache.pixelMap;
           this.view3ViewSize = cache.displaySize;
           this.view3Loading = false;
@@ -488,7 +542,9 @@ struct PDFView {
     await Promise.all(tasks);
 
     // 若在加载期间已切到其他页面，不再更新视图大小
-    if (loadVersion !== this.pageLoadVersion) return;
+    if (loadVersion !== this.pageLoadVersion) {
+      return;
+    }
 
     // 更新总体视图大小
     this.updateViewerViewSize();
@@ -986,13 +1042,19 @@ struct PDFView {
             repeating: false
           })
         PDFMetronomePanel({
-          controllerState: UIUtils.enableV2Compatibility(this.metronomeControllerState)
-        })
-        .alignRules(TopLeft)
-        .margin(ContainerPadding)
-        .width('100%')
-        .height('100%')
-        .hitTestBehavior(HitTestMode.Transparent)
+          controllerState: UIUtils.enableV2Compatibility(this.metronomeControllerState),
+          useDocked: this.useDockedMetronomePanel,
+          initialFloatingScale: this.metronomePanelScale,
+          onFloatingScaleChanged: (scale: number) => {
+            this.metronomePanelScale = scale;
+            if (this.lastWindowWidthPx > 0) {
+              this.updateMetronomeDocking(this.lastWindowWidthPx);
+            } else {
+              this.refreshMetronomeDockingForCurrentWindow();
+            }
+          }
+        }).alignRules(TopLeft)
+
 
         Stack() {
           // Slider - positioned at right, vertically centered, independent of bottom bar
