@@ -1,8 +1,8 @@
-import { ButtonColor, ButtonColorSemiTransparent, ContainerSpacing, StyleIconButton } from '../../components/UIComponents';
+import { SymbolGlyphModifier } from '@kit.ArkUI';
+import { ButtonColor, ButtonColorSemiTransparent } from '../../components/UIComponents';
 
 @ComponentV2
 export struct PDFViewerActionMenu {
-  @Param menuExpanded: boolean = false;
   @Param isExclusiveFullScreen: boolean = false;
   @Param showFullscreenButton: boolean = false;
   @Param pageDisplayModeText: string = '';
@@ -18,87 +18,137 @@ export struct PDFViewerActionMenu {
   @Param onToggleFullscreen: () => void = () => {};
   @Param onShare: () => void = () => {};
   @Param onToggleMetronome: () => void = () => {};
-  @Param onToggleMenu: () => void = () => {};
 
-  build() {
-    Column({ space: ContainerSpacing }) {
-      if (this.menuExpanded) {
-        Row({ space: ContainerSpacing }) {
-          // 左列：通用操作
-          Column({ space: ContainerSpacing }) {
-            StyleIconButton({
-              icon: $r('sys.symbol.questionmark_circle'),
-              label: '教程',
-              onClickCallback: () => this.onTutorial()
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+  private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
+  private readonly settingsIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.gearshape')).fontSize('20vp');
+  private readonly shareIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.share')).fontSize('20vp');
+  private readonly metronomeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.clock')).fontSize('20vp');
+  private readonly displayModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')).fontSize('20vp');
+  private readonly flipModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.rectangle_rotate')).fontSize('20vp');
+  private readonly jumpIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.arrow_right')).fontSize('20vp');
+  private readonly annotateIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.pencil_waveform')).fontSize('20vp');
+  private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
+    .fontSize('18vp')
+    .padding('2vp');
 
-            StyleIconButton({
-              icon: $r('sys.symbol.gearshape'),
-              label: '设置',
-              onClickCallback: () => this.onSettings()
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+  private getFullscreenIcon(): SymbolGlyphModifier {
+    return new SymbolGlyphModifier(
+      this.isExclusiveFullScreen ?
+        $r('sys.symbol.arrow_down_right_and_arrow_up_left') :
+        $r('sys.symbol.arrow_up_left_and_arrow_down_right')
+    ).fontSize('20vp');
+  }
 
-            if (this.showFullscreenButton) {
-              StyleIconButton({
-                icon: this.isExclusiveFullScreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') : $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
-                label: this.isExclusiveFullScreen ? '窗口' : '全屏',
-                onClickCallback: () => this.onToggleFullscreen()
-              }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-            }
+  @Builder
+  private buildLeafMenuItems(items: MenuElement[]) {
+    ForEach(items, (item: MenuElement, index: number) => {
+      MenuItem({
+        content: item.value,
+        startIcon: item.icon,
+        symbolStartIcon: item.symbolIcon
+      })
+        .enabled(item.enabled ?? true)
+        .onClick(() => item.action())
+    }, (_item: MenuElement, index: number) => index.toString())
+  }
 
-            StyleIconButton({
-              icon: $r('sys.symbol.share'),
-              label: '分享',
-              onClickCallback: () => this.onShare()
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+  @Builder
+  private buildSubMenu(items: MenuElement[]) {
+    Menu() {
+      this.buildLeafMenuItems(items)
+    }
+      .backgroundColor(ButtonColorSemiTransparent)
+  }
 
-            StyleIconButton({
-              icon: $r('sys.symbol.clock'),
-              label: '节拍器',
-              onClickCallback: () => this.onToggleMetronome()
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-          }
-          .alignItems(HorizontalAlign.Start)
+  @Builder
+  private buildActionMenu() {
+    Menu() {
+      MenuItemGroup() {
+        MenuItem({
+          content: '教程',
+          symbolStartIcon: this.tutorialIcon
+        })
+          .onClick(() => this.onTutorial())
 
-          // 右列：视图与交互模式（包含较长标签）
-          Column({ space: ContainerSpacing }) {
-            StyleIconButton({
-              icon: $r('sys.symbol.square_grid_2x2'),
-              label: `显示:${this.pageDisplayModeText}`,
-              menuElement: this.displayModeMenu,
-              menuPlacement: Placement.RightBottom
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
+        MenuItem({
+          content: '设置',
+          symbolStartIcon: this.settingsIcon
+        })
+          .onClick(() => this.onSettings())
 
-            StyleIconButton({
-              icon: $r('sys.symbol.rectangle_rotate'),
-              label: `翻页:${this.pageFlipModeText}`,
-              menuElement: this.flipModeMenu,
-              menuPlacement: Placement.RightBottom
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-            StyleIconButton({
-              icon: $r('sys.symbol.arrow_right'),
-              label: '跳转',
-              menuElement: this.jumpMenu,
-              menuPlacement: Placement.RightBottom
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-
-            StyleIconButton({
-              icon: $r('sys.symbol.pencil_waveform'),
-              label: this.annotateModeText,
-              menuElement: this.annotateModeMenu,
-              menuPlacement: Placement.RightBottom
-            }).transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 })))
-          }
-          .alignItems(HorizontalAlign.Start)
+        if (this.showFullscreenButton) {
+          MenuItem({
+            content: this.isExclusiveFullScreen ? '窗口' : '全屏',
+            symbolStartIcon: this.getFullscreenIcon()
+          })
+            .onClick(() => this.onToggleFullscreen())
         }
+
+        MenuItem({
+          content: '分享',
+          symbolStartIcon: this.shareIcon
+        })
+          .onClick(() => this.onShare())
+
+        MenuItem({
+          content: '节拍器',
+          symbolStartIcon: this.metronomeIcon
+        })
+          .onClick(() => this.onToggleMetronome())
       }
 
-      StyleIconButton({
-        icon: this.menuExpanded ? $r('sys.symbol.xmark') : $r('sys.symbol.more'),
-        alternateColor: this.menuExpanded ? ButtonColor : ButtonColorSemiTransparent,
-        onClickCallback: () => this.onToggleMenu()
-      }).id(this.shareButtonId)
+      MenuItemGroup() {
+        MenuItem({
+          content: `显示:${this.pageDisplayModeText}`,
+          symbolStartIcon: this.displayModeIcon,
+          symbolEndIcon: this.submenuArrowIcon,
+          builder: (): void => this.buildSubMenu(this.displayModeMenu)
+        })
+
+        MenuItem({
+          content: `翻页:${this.pageFlipModeText}`,
+          symbolStartIcon: this.flipModeIcon,
+          symbolEndIcon: this.submenuArrowIcon,
+          builder: (): void => this.buildSubMenu(this.flipModeMenu)
+        })
+
+        MenuItem({
+          content: '跳转',
+          symbolStartIcon: this.jumpIcon,
+          symbolEndIcon: this.submenuArrowIcon,
+          builder: (): void => this.buildSubMenu(this.jumpMenu)
+        })
+
+        MenuItem({
+          content: this.annotateModeText,
+          symbolStartIcon: this.annotateIcon,
+          symbolEndIcon: this.submenuArrowIcon,
+          builder: (): void => this.buildSubMenu(this.annotateModeMenu)
+        })
+      }
+    }
+    .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND)
+  }
+
+  build() {
+    Column() {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.more'))
+          .fontSize(20)
+          .fontColor([Color.White])
+          .fontWeight(FontWeight.Bold)
+      }
+        .id(this.shareButtonId)
+        .width(44)
+        .height(44)
+        .hitTestBehavior(HitTestMode.Block)
+        .monopolizeEvents(true)
+        .backgroundColor(ButtonColorSemiTransparent)
+        .bindMenu(this.buildActionMenu, {
+          backgroundColor: ButtonColor,
+          outlineColor: Color.Transparent,
+          placement: Placement.Top
+        })
     }
     .alignItems(HorizontalAlign.Start)
   }

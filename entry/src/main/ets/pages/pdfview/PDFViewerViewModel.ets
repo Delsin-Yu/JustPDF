@@ -30,7 +30,6 @@ export class PDFViewerViewModel {
   @Trace public showSlider: boolean = true;
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
-  @Trace public menuExpanded: boolean = false;
 
   constructor(minScale: number = 0.5, maxScale: number = 9.0) {
     this.minScale = minScale;
@@ -186,10 +185,6 @@ export class PDFViewerViewModel {
   setShowSlider(value: boolean): void {
     this.showSlider = value;
     this.persistPreference('showSlider', value, '保存滑块偏好出错');
-  }
-
-  setMenuExpanded(value: boolean): void {
-    this.menuExpanded = value;
   }
 
   updateViewSize(view1Size: Vector2, view2Size: Vector2, view3Size: Vector2): void {

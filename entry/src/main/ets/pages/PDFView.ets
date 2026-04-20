@@ -1095,23 +1095,26 @@ struct PDFView {
             Blank().layoutWeight(1)
             Row(ContainerCfg) {
               PDFViewerActionMenu({
-                menuExpanded: this.viewerViewModel.menuExpanded,
                 isExclusiveFullScreen: this.isExclusiveFullScreen,
                 showFullscreenButton: this.isInFreeWindowMode,
                 pageDisplayModeText: this.viewerViewModel.getPageDisplayModeText(),
                 pageFlipModeText: this.viewerViewModel.getPageFlipModeText(),
                 annotateModeText: this.viewerViewModel.getAnnotateModeText(),
                 shareButtonId: ShareButtonId,
-                displayModeMenu: this.viewerViewModel.buildPageDisplayModeMenu(() => this.gotoPage(this.viewerViewModel.currentPageIndex)),
+                displayModeMenu: this.viewerViewModel.buildPageDisplayModeMenu(() => {
+                  this.gotoPage(this.viewerViewModel.currentPageIndex);
+                }),
                 flipModeMenu: this.viewerViewModel.buildPageFlipModeMenu(),
-                jumpMenu: this.viewerViewModel.buildJumpMenu(() => this.resetViewToFit(), (pageIndex: number) => this.gotoPage(pageIndex)),
+                jumpMenu: this.viewerViewModel.buildJumpMenu(() => {
+                  this.resetViewToFit();
+                }, (pageIndex: number) => {
+                  this.gotoPage(pageIndex);
+                }),
                 annotateModeMenu: this.annotationController.buildAnnotateModeMenu(),
                 onTutorial: () => {
-                  this.viewerViewModel.setMenuExpanded(false);
                   this.tutorialDialogController.open();
                 },
                 onSettings: () => {
-                  this.viewerViewModel.setMenuExpanded(false);
                   this.rebuildSettingsDialogController();
                   this.settingsDialogController.open();
                 },
@@ -1124,19 +1127,10 @@ struct PDFView {
                   }
                 },
                 onShare: () => {
-                  this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-                    this.viewerViewModel.setMenuExpanded(false);
-                  });
                   this.executeShare();
                 },
                 onToggleMetronome: () => {
                   this.metronomeController.toggleWindow();
-                  this.viewerViewModel.setMenuExpanded(false);
-                },
-                onToggleMenu: () => {
-                  this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-                    this.viewerViewModel.setMenuExpanded(!this.viewerViewModel.menuExpanded);
-                  });
                 }
               })
 
