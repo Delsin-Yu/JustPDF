@@ -1,0 +1,15 @@
+---
+description: JustPDF project guidance for HarmonyOS ArkTS and ArkUI work, including language, logging, cache, and local docs lookup conventions.
+alwaysApply: true
+---
+
+# JustPDF Project Guidance
+
+- This project is a HarmonyOS PDF reader built with ArkTS and ArkUI for phones, tablets, and 2-in-1 devices.
+- Treat ArkTS like strict TypeScript: keep types explicit, avoid untyped patterns, and prefer clear async/await flows.
+- Initial syntax diagnostics from VS Code OpenHarmony tooling may be false positives; prefer HarmonyOS and DevEco Studio behavior when they disagree.
+- Keep UI text and code comments in Simplified Chinese. Keep variable, function, type, and file-level identifiers in English.
+- Use `hilog` for logging. Wrap async operations in `try/catch`, and use `AlertDialog` for user-facing failures when recovery or feedback is needed.
+- Respect viewer memory behavior: evict page caches when content scrolls away, and prefer existing prefetch and eviction helpers over ad-hoc cache logic.
+- For HarmonyOS API questions, search the local `HarmonyOS-Developer-Docs/` guides and references before relying on general knowledge.
+- Key entry points are `entry/src/main/ets/entryability/EntryAbility.ets`, `entry/src/main/ets/pages/Index.ets`, and `entry/src/main/ets/pages/PDFView.ets`.
