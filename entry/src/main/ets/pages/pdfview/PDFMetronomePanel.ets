@@ -140,61 +140,48 @@ struct TempoInputDialogBuilder {
 }
 
 @ComponentV2
-export struct PDFMetronomePanel {
+export struct PDFMetronomePanelContent {
   @Param controller: PDFMetronomeController | undefined = undefined;
   @Param useDocked: boolean = false;
-  @Param initialFloatingScale: number = FloatingMetronomeDefaultScale;
-  @Param floatingViewportWidthVp: number = 0;
-  @Param floatingViewportHeightVp: number = 0;
-  @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
+  @Param dockedTopOffsetVp: number = 0;
+  @Param hostScale: number = FloatingMetronomeDefaultScale;
+  @Param hostOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
+  @Param showDragHandle: boolean = true;
+  @Event onInteraction: () => void = () => {
   };
-  @Local floatingScale: number = FloatingMetronomeDefaultScale;
-  @Local floatingOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
+  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {
+  };
+  @Event onHostDragStart: () => void = () => {
+  };
+  @Event onHostDragUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {
+  };
+  @Event onHostDragEnd: () => void = () => {
+  };
+  @Event onHostPinchStart: () => void = () => {
+  };
+  @Event onHostPinchUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {
+  };
+  @Event onHostPinchEnd: () => void = () => {
+  };
+  @Event onClose: () => void = () => {
+  };
   private tempoDialogOpen: boolean = false;
   tempoInputDialogController: CustomDialogController = new CustomDialogController({
     builder: TempoInputDialogBuilder()
   });
   private resumeMetronomeAfterInteraction: boolean = false;
   private activeSpinInteractionCount: number = 0;
-  private floatingDragStartOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
-  private pinchStartScale: number = FloatingMetronomeDefaultScale;
-  private floatingPinchActive: boolean = false;
-  private floatingWindowAreaWidthVp: number = MetronomeWindowWidth;
-  private floatingWindowContentHeightVp: number = 0;
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
     onGetIrregularSizeByIndex: (): [number, number] => [1, 2]
   };
 
-  aboutToAppear(): void {
-    this.floatingScale = clampFloatingMetronomeScale(this.initialFloatingScale);
-    this.pinchStartScale = this.floatingScale;
-  }
-
   private getBeatColor(beat: number): string {
     if (beat === (this.controller?.currentBeat ?? -1)) {
       return beat === 0 ? '#FF9F43' : '#4DA6FF';
     }
     return 'rgba(255, 255, 255, 0.12)';
-  }
-
-  private getFloatingButtonScale(): number {
-    if (!(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0) {
-      return 1;
-    }
-    return this.controller?.floatingButtonPulseScale ?? 1;
-  }
-
-  private getFloatingButtonColor(isActive: boolean = true): string {
-    if (!isActive || !(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0) {
-      return 'rgba(35, 42, 53, 0.62)';
-    }
-    return this.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)';
-  }
-
-  private getFloatingButtonTransitionDurationMs(): number {
-    return this.controller?.floatingButtonTransitionDurationMs ?? 0;
   }
 
   private getBeatRowSizes(): number[] {
@@ -316,133 +303,31 @@ export struct PDFMetronomePanel {
     this.handleTempoDialogClosed();
   }
 
-  private updateFloatingScale(scale: number): void {
-    const nextScale = clampFloatingMetronomeScale(scale);
-    if (Math.abs(nextScale - this.floatingScale) < 0.001) {
-      return;
-    }
-    this.floatingScale = nextScale;
-    this.syncFloatingOffsetToBounds();
-    this.onFloatingScaleChanged(nextScale);
-  }
-
-  private clampFloatingOffset(offset: FloatingMetronomeOffset): FloatingMetronomeOffset {
-    if (this.useDocked) {
-      return { x: 0, y: 0 };
-    }
-
-    const scaledWidthVp: number = this.floatingWindowAreaWidthVp * this.floatingScale;
-    const scaledHeightVp: number = this.floatingWindowContentHeightVp * this.floatingScale;
-    const minX: number = 0;
-    const minY: number = 0;
-    const maxX: number = this.floatingViewportWidthVp - scaledWidthVp - MetronomeWindowMargin;
-    const maxY: number = this.floatingViewportHeightVp - scaledHeightVp - MetronomeWindowMargin;
-    return {
-      x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
-      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
-    };
-  }
-
-  private getClampedFloatingOffset(): FloatingMetronomeOffset {
-    return this.clampFloatingOffset(this.floatingOffset);
-  }
-
-  private syncFloatingOffsetToBounds(): void {
-    const nextOffset = this.getClampedFloatingOffset();
-    if (Math.abs(nextOffset.x - this.floatingOffset.x) < 0.001
-      && Math.abs(nextOffset.y - this.floatingOffset.y) < 0.001) {
-      return;
-    }
-
-    this.floatingOffset = nextOffset;
-    this.floatingDragStartOffset = { x: nextOffset.x, y: nextOffset.y };
-  }
-
-  private handleFloatingWindowAreaChange(newValue: Area): void {
-    const nextWidthVp = newValue.width as number;
-    const nextHeightVp = newValue.height as number;
-    if (Math.abs(nextWidthVp - this.floatingWindowAreaWidthVp) < 0.001
-      && Math.abs(nextHeightVp - this.floatingWindowContentHeightVp) < 0.001) {
-      return;
-    }
-
-    this.floatingWindowAreaWidthVp = nextWidthVp;
-    this.floatingWindowContentHeightVp = nextHeightVp;
-    this.syncFloatingOffsetToBounds();
-  }
-
-  private handleFloatingDragStart(): void {
-    if (this.useDocked || this.tempoDialogOpen) {
-      return;
-    }
-
-    const clampedOffset = this.getClampedFloatingOffset();
-    this.floatingOffset = clampedOffset;
-    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
-  }
-
-  private handleFloatingDragUpdate(event: GestureEvent): void {
-    if (this.useDocked || this.floatingPinchActive || this.tempoDialogOpen) {
-      return;
-    }
-
-    const visualDragScale: number = this.floatingScale;
-    this.floatingOffset = this.clampFloatingOffset({
-      x: this.floatingDragStartOffset.x + event.offsetX * visualDragScale,
-      y: this.floatingDragStartOffset.y + event.offsetY * visualDragScale
-    });
-  }
-
-  private handleFloatingDragEnd(): void {
-    if (this.useDocked || this.tempoDialogOpen) {
-      return;
-    }
-
-    const clampedOffset = this.getClampedFloatingOffset();
-    this.floatingOffset = clampedOffset;
-    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
-  }
-
-  private handleFloatingPinchStart(): void {
-    this.floatingPinchActive = true;
-    this.pinchStartScale = this.floatingScale;
-  }
-
-  private handleFloatingPinchUpdate(event: GestureEvent): void {
-    this.updateFloatingScale(this.pinchStartScale * event.scale);
-  }
-
-  private handleFloatingPinchEnd(): void {
-    this.floatingPinchActive = false;
-    this.pinchStartScale = this.floatingScale;
-    this.syncFloatingOffsetToBounds();
-  }
-
   build() {
-    Stack() {
-      if (this.controller?.showWindow ?? false) {
-        Column({ space: 14 }) {
+    Column({ space: 14 }) {
           Row({ space: MetronomeHeaderGap }) {
-            Row({ space: 10 }) {
-              Column({ space: 3 }) {
-                Row({ space: 3 }) {
-                  ForEach([0, 1, 2, 3], (index: number) => {
-                    Text('')
-                      .width(4)
-                      .height(4)
-                      .borderRadius(2)
-                      .backgroundColor('rgba(255, 255, 255, 0.26)')
-                  }, (index: number) => `metronome-drag-grip-top-${index}`)
-                }
+            Row({ space: this.useDocked ? 0 : 10 }) {
+              if (this.showDragHandle && !this.useDocked) {
+                Column({ space: 3 }) {
+                  Row({ space: 3 }) {
+                    ForEach([0, 1, 2, 3], (index: number) => {
+                      Text('')
+                        .width(4)
+                        .height(4)
+                        .borderRadius(2)
+                        .backgroundColor('rgba(255, 255, 255, 0.26)')
+                    }, (index: number) => `metronome-drag-grip-top-${index}`)
+                  }
 
-                Row({ space: 3 }) {
-                  ForEach([0, 1, 2, 3], (index: number) => {
-                    Text('')
-                      .width(4)
-                      .height(4)
-                      .borderRadius(2)
-                      .backgroundColor('rgba(255, 255, 255, 0.16)')
-                  }, (index: number) => `metronome-drag-grip-bottom-${index}`)
+                  Row({ space: 3 }) {
+                    ForEach([0, 1, 2, 3], (index: number) => {
+                      Text('')
+                        .width(4)
+                        .height(4)
+                        .borderRadius(2)
+                        .backgroundColor('rgba(255, 255, 255, 0.16)')
+                    }, (index: number) => `metronome-drag-grip-bottom-${index}`)
+                  }
                 }
               }
 
@@ -461,10 +346,30 @@ export struct PDFMetronomePanel {
             .border({ width: 1, color: 'rgba(255, 255, 255, 0.06)' })
             .gesture(
               PanGesture({ fingers: 1, distance: FloatingMetronomeDragDistanceVp })
-                .onActionStart((_event: GestureEvent) => this.handleFloatingDragStart())
-                .onActionUpdate((event: GestureEvent) => this.handleFloatingDragUpdate(event))
-                .onActionEnd((_event: GestureEvent) => this.handleFloatingDragEnd())
-                .onActionCancel(() => this.handleFloatingDragEnd())
+                .onActionStart((_event: GestureEvent) => {
+                  if (this.useDocked || this.tempoDialogOpen) {
+                    return;
+                  }
+                  this.onHostDragStart();
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  if (this.useDocked || this.tempoDialogOpen) {
+                    return;
+                  }
+                  this.onHostDragUpdate(event);
+                })
+                .onActionEnd((_event: GestureEvent) => {
+                  if (this.useDocked || this.tempoDialogOpen) {
+                    return;
+                  }
+                  this.onHostDragEnd();
+                })
+                .onActionCancel(() => {
+                  if (this.useDocked || this.tempoDialogOpen) {
+                    return;
+                  }
+                  this.onHostDragEnd();
+                })
             )
 
             Button({ type: ButtonType.Normal }) {
@@ -477,7 +382,7 @@ export struct PDFMetronomePanel {
             .height(LayoutPolicy.matchParent)
             .borderRadius(10)
             .backgroundColor('rgba(255, 255, 255, 0.16)')
-            .onClick(() => this.controller?.closeWindow())
+            .onClick(() => this.onClose())
           }
           .width('100%')
           .hitTestBehavior(HitTestMode.Default)
@@ -687,31 +592,226 @@ export struct PDFMetronomePanel {
           .rowsGap(10)
           .height(LayoutPolicy.wrapContent)
           .width('100%')
-        }
-        .width(this.useDocked ? "100%" : MetronomeWindowWidth)
-        .padding(16)
-        .backgroundColor('rgba(8, 10, 14, 0.78)')
-        .borderRadius({
-          topLeft: this.useDocked ? 0 : 18,
-          topRight: this.useDocked ? 0 : 18,
-          bottomLeft: 18,
-          bottomRight: 18
+    }
+    .width(this.useDocked ? "100%" : MetronomeWindowWidth)
+    .padding(16)
+    .backgroundColor('rgba(8, 10, 14, 0.78)')
+    .borderRadius({
+      topLeft: this.useDocked ? 0 : 18,
+      topRight: this.useDocked ? 0 : 18,
+      bottomLeft: 18,
+      bottomRight: 18
+    })
+    .margin(this.useDocked ? 0 : ContainerPadding)
+    .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
+    .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
+    .align(Alignment.TopStart)
+    .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.onInteraction();
+      }
+    })
+    .onAreaChange((_oldValue: Area, newValue: Area) => {
+      this.onWindowAreaHeightChanged(newValue.height as number);
+    })
+    .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.hostScale, y: this.hostScale, centerX: 0, centerY: 0 })
+    .offset(this.useDocked ? { x: 0, y: this.dockedTopOffsetVp } : this.hostOffset)
+    .gesture(
+      PinchGesture({ fingers: 2 })
+        .onActionStart((_event: GestureEvent) => {
+          if (this.tempoDialogOpen) {
+            return;
+          }
+          this.onHostPinchStart();
         })
-        .margin(this.useDocked ? 0 : ContainerPadding)
-        .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
-        .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
-        .align(Alignment.TopStart)
-        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
-        .onAreaChange((_oldValue: Area, newValue: Area) => this.handleFloatingWindowAreaChange(newValue))
-        .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.floatingScale, y: this.floatingScale, centerX: 0, centerY: 0 })
-        .offset(this.useDocked ? { x: 0, y: 0 } : this.getClampedFloatingOffset())
-        .gesture(
-          PinchGesture({ fingers: 2 })
-            .onActionStart((_event: GestureEvent) => this.handleFloatingPinchStart())
-            .onActionUpdate((event: GestureEvent) => this.handleFloatingPinchUpdate(event))
-            .onActionEnd((_event: GestureEvent) => this.handleFloatingPinchEnd())
-            .onActionCancel(() => this.handleFloatingPinchEnd())
-        )
+        .onActionUpdate((event: GestureEvent) => {
+          if (this.tempoDialogOpen) {
+            return;
+          }
+          this.onHostPinchUpdate(event);
+        })
+        .onActionEnd((_event: GestureEvent) => {
+          if (this.tempoDialogOpen) {
+            return;
+          }
+          this.onHostPinchEnd();
+        })
+        .onActionCancel(() => {
+          if (this.tempoDialogOpen) {
+            return;
+          }
+          this.onHostPinchEnd();
+        })
+    )
+  }
+}
+
+@ComponentV2
+export struct PDFMetronomePanel {
+  @Param controller: PDFMetronomeController | undefined = undefined;
+  @Param useDocked: boolean = false;
+  @Param dockedTopOffsetVp: number = 0;
+  @Param floatingMinYVp: number = 0;
+  @Param initialFloatingScale: number = FloatingMetronomeDefaultScale;
+  @Param floatingViewportWidthVp: number = 0;
+  @Param floatingViewportHeightVp: number = 0;
+  @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
+  };
+  @Event onInteraction: () => void = () => {
+  };
+  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {
+  };
+  @Local floatingScale: number = FloatingMetronomeDefaultScale;
+  @Local floatingOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
+  private floatingDragStartOffset: FloatingMetronomeOffset = { x: 0, y: 0 };
+  private pinchStartScale: number = FloatingMetronomeDefaultScale;
+  private floatingPinchActive: boolean = false;
+  private floatingWindowAreaWidthVp: number = MetronomeWindowWidth;
+  private floatingWindowContentHeightVp: number = 0;
+
+  aboutToAppear(): void {
+    this.floatingScale = clampFloatingMetronomeScale(this.initialFloatingScale);
+    this.pinchStartScale = this.floatingScale;
+  }
+
+  private getFloatingButtonScale(): number {
+    if (!(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0) {
+      return 1;
+    }
+    return this.controller?.floatingButtonPulseScale ?? 1;
+  }
+
+  private getFloatingButtonColor(isActive: boolean = true): string {
+    if (!isActive || !(this.controller?.isPlaying ?? false) || (this.controller?.currentBeat ?? -1) < 0) {
+      return 'rgba(35, 42, 53, 0.62)';
+    }
+    return this.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)';
+  }
+
+  private getFloatingButtonTransitionDurationMs(): number {
+    return this.controller?.floatingButtonTransitionDurationMs ?? 0;
+  }
+
+  private updateFloatingScale(scale: number): void {
+    const nextScale = clampFloatingMetronomeScale(scale);
+    if (Math.abs(nextScale - this.floatingScale) < 0.001) {
+      return;
+    }
+    this.floatingScale = nextScale;
+    this.syncFloatingOffsetToBounds();
+    this.onFloatingScaleChanged(nextScale);
+  }
+
+  private clampFloatingOffset(offset: FloatingMetronomeOffset): FloatingMetronomeOffset {
+    if (this.useDocked) {
+      return { x: 0, y: this.dockedTopOffsetVp };
+    }
+
+    const scaledWidthVp: number = this.floatingWindowAreaWidthVp * this.floatingScale;
+    const scaledHeightVp: number = this.floatingWindowContentHeightVp * this.floatingScale;
+    const minX: number = 0;
+    const minY: number = this.floatingMinYVp;
+    const maxX: number = this.floatingViewportWidthVp - scaledWidthVp - MetronomeWindowMargin;
+    const maxY: number = this.floatingViewportHeightVp - scaledHeightVp - MetronomeWindowMargin;
+    return {
+      x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+    };
+  }
+
+  private getClampedFloatingOffset(): FloatingMetronomeOffset {
+    return this.clampFloatingOffset(this.floatingOffset);
+  }
+
+  private syncFloatingOffsetToBounds(): void {
+    const nextOffset = this.getClampedFloatingOffset();
+    if (Math.abs(nextOffset.x - this.floatingOffset.x) < 0.001
+      && Math.abs(nextOffset.y - this.floatingOffset.y) < 0.001) {
+      return;
+    }
+
+    this.floatingOffset = nextOffset;
+    this.floatingDragStartOffset = { x: nextOffset.x, y: nextOffset.y };
+  }
+
+  private handleFloatingWindowAreaChange(heightVp: number): void {
+    if (Math.abs(heightVp - this.floatingWindowContentHeightVp) < 0.001) {
+      return;
+    }
+
+    this.floatingWindowContentHeightVp = heightVp;
+    this.onWindowAreaHeightChanged(heightVp);
+    this.syncFloatingOffsetToBounds();
+  }
+
+  private handleFloatingDragStart(): void {
+    if (this.useDocked) {
+      return;
+    }
+
+    const clampedOffset = this.getClampedFloatingOffset();
+    this.floatingOffset = clampedOffset;
+    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+  }
+
+  private handleFloatingDragUpdate(event: GestureEvent): void {
+    if (this.useDocked || this.floatingPinchActive) {
+      return;
+    }
+
+    const visualDragScale: number = this.floatingScale;
+    this.floatingOffset = this.clampFloatingOffset({
+      x: this.floatingDragStartOffset.x + event.offsetX * visualDragScale,
+      y: this.floatingDragStartOffset.y + event.offsetY * visualDragScale
+    });
+  }
+
+  private handleFloatingDragEnd(): void {
+    if (this.useDocked) {
+      return;
+    }
+
+    const clampedOffset = this.getClampedFloatingOffset();
+    this.floatingOffset = clampedOffset;
+    this.floatingDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+  }
+
+  private handleFloatingPinchStart(): void {
+    this.floatingPinchActive = true;
+    this.pinchStartScale = this.floatingScale;
+  }
+
+  private handleFloatingPinchUpdate(event: GestureEvent): void {
+    this.updateFloatingScale(this.pinchStartScale * event.scale);
+  }
+
+  private handleFloatingPinchEnd(): void {
+    this.floatingPinchActive = false;
+    this.pinchStartScale = this.floatingScale;
+    this.syncFloatingOffsetToBounds();
+  }
+
+  build() {
+    Column() {
+      if (this.controller?.showWindow ?? false) {
+        PDFMetronomePanelContent({
+          controller: this.controller,
+          useDocked: this.useDocked,
+          dockedTopOffsetVp: this.dockedTopOffsetVp,
+          hostScale: this.floatingScale,
+          hostOffset: this.getClampedFloatingOffset(),
+          showDragHandle: !this.useDocked,
+          onInteraction: this.onInteraction,
+          onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
+          onHostDragStart: () => this.handleFloatingDragStart(),
+          onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
+          onHostDragEnd: () => this.handleFloatingDragEnd(),
+          onHostPinchStart: () => this.handleFloatingPinchStart(),
+          onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
+          onHostPinchEnd: () => this.handleFloatingPinchEnd(),
+          onClose: () => this.controller?.closeWindow()
+        })
       }
 
       if (!(this.controller?.showWindow ?? false) && (this.controller?.isPlaying ?? false)) {
@@ -719,7 +819,10 @@ export struct PDFMetronomePanel {
           icon: $r('sys.symbol.clock'),
           alternateColor: this.getFloatingButtonColor(),
           backgroundAnimationDurationMs: this.getFloatingButtonTransitionDurationMs(),
-          onClickCallback: () => this.controller?.openWindow()
+          onClickCallback: () => {
+            this.onInteraction();
+            this.controller?.openWindow();
+          }
         })
           .scale({
             x: this.getFloatingButtonScale(),
@@ -732,6 +835,5 @@ export struct PDFMetronomePanel {
           .margin(ContainerPadding)
       }
     }
-    .alignContent(Alignment.TopStart)
   }
 }

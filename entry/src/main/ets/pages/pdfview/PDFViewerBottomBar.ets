@@ -1,4 +1,6 @@
 import {
+ContainerCfg,
+ContainerSpacing,
   StyleButton,
   StyleIconBadgeButton,
   StyleIconButton,
@@ -22,7 +24,7 @@ export struct PDFViewerBottomBar {
   @Param onNextPage: () => void = () => {};
 
   build() {
-    Row() {
+    Row(ContainerCfg) {
       StyleIconBadgeButton({
         icon: $r('sys.symbol.undo'),
         count: this.undoHistoryCount,

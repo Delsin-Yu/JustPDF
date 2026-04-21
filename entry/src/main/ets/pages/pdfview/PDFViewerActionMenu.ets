@@ -18,11 +18,13 @@ export struct PDFViewerActionMenu {
   @Param onToggleFullscreen: () => void = () => {};
   @Param onShare: () => void = () => {};
   @Param onToggleMetronome: () => void = () => {};
+  @Param onToggleTuner: () => void = () => {};
 
   private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
   private readonly settingsIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.gearshape')).fontSize('20vp');
   private readonly shareIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.share')).fontSize('20vp');
   private readonly metronomeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.clock')).fontSize('20vp');
+  private readonly tunerIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.mic')).fontSize('20vp');
   private readonly displayModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')).fontSize('20vp');
   private readonly flipModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.rectangle_rotate')).fontSize('20vp');
   private readonly jumpIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.arrow_right')).fontSize('20vp');
@@ -95,6 +97,12 @@ export struct PDFViewerActionMenu {
           symbolStartIcon: this.metronomeIcon
         })
           .onClick(() => this.onToggleMetronome())
+
+        MenuItem({
+          content: '调音器',
+          symbolStartIcon: this.tunerIcon
+        })
+          .onClick(() => this.onToggleTuner())
       }
 
       MenuItemGroup() {

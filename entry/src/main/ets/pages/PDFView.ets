@@ -1,5 +1,5 @@
-import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
-import { LengthMetricsUnit, window } from '@kit.ArkUI';
+import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, StyleIconButton, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
+import { ComponentContent, LengthMetricsUnit, OverlayManager, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fromArea, mul, toSizePx, Vec2, Vector2 } from '../components/Numbers';
@@ -19,8 +19,13 @@ import { PDFPageSlot } from './pdfview/PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
   getFloatingMetronomeTotalWidth,
-  PDFMetronomePanel
+  PDFMetronomePanelContent
 } from './pdfview/PDFMetronomePanel';
+import {
+  FloatingTunerDefaultScale,
+  getFloatingTunerTotalWidth,
+  PDFTunerPanelContent
+} from './pdfview/PDFTunerPanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
 import { PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
@@ -32,6 +37,216 @@ const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
+const DockedPanelSpacing: number = 16;
+const FloatingPanelMarginVp: number = 16;
+const FloatingMetronomeContentWidthVp: number = 400;
+const FloatingTunerContentWidthVp: number = 360;
+const DefaultTunerOffsetX: number = 24;
+const DefaultTunerOffsetY: number = 112;
+
+type OverlayPanelKey = 'metronome' | 'tuner';
+interface FloatingPanelOffset {
+  x: number;
+  y: number;
+}
+
+interface MetronomeOverlayOptions {
+  controller: PDFMetronomeController | undefined;
+  showWindow: boolean;
+  showFloatingButton: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  floatingButtonScale: number;
+  floatingButtonColor: string;
+  floatingButtonTransitionDurationMs: number;
+  onInteraction: () => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onClose: () => void;
+  onOpenWindow: () => void;
+}
+
+interface TunerOverlayOptions {
+  showWindow: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onInteraction: () => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onClose: () => void;
+}
+
+class MetronomeOverlayParams {
+  controller: PDFMetronomeController | undefined;
+  showWindow: boolean;
+  showFloatingButton: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  floatingButtonScale: number;
+  floatingButtonColor: string;
+  floatingButtonTransitionDurationMs: number;
+  onInteraction: () => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onClose: () => void;
+  onOpenWindow: () => void;
+
+  constructor(options: MetronomeOverlayOptions) {
+    this.controller = options.controller;
+    this.showWindow = options.showWindow;
+    this.showFloatingButton = options.showFloatingButton;
+    this.useDocked = options.useDocked;
+    this.dockedTopOffsetVp = options.dockedTopOffsetVp;
+    this.hostScale = options.hostScale;
+    this.hostOffset = options.hostOffset;
+    this.floatingButtonScale = options.floatingButtonScale;
+    this.floatingButtonColor = options.floatingButtonColor;
+    this.floatingButtonTransitionDurationMs = options.floatingButtonTransitionDurationMs;
+    this.onInteraction = options.onInteraction;
+    this.onHostDragStart = options.onHostDragStart;
+    this.onHostDragUpdate = options.onHostDragUpdate;
+    this.onHostDragEnd = options.onHostDragEnd;
+    this.onHostPinchStart = options.onHostPinchStart;
+    this.onHostPinchUpdate = options.onHostPinchUpdate;
+    this.onHostPinchEnd = options.onHostPinchEnd;
+    this.onWindowAreaHeightChanged = options.onWindowAreaHeightChanged;
+    this.onClose = options.onClose;
+    this.onOpenWindow = options.onOpenWindow;
+  }
+}
+
+class TunerOverlayParams {
+  showWindow: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onInteraction: () => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onClose: () => void;
+
+  constructor(options: TunerOverlayOptions) {
+    this.showWindow = options.showWindow;
+    this.useDocked = options.useDocked;
+    this.dockedTopOffsetVp = options.dockedTopOffsetVp;
+    this.hostScale = options.hostScale;
+    this.hostOffset = options.hostOffset;
+    this.onInteraction = options.onInteraction;
+    this.onHostDragStart = options.onHostDragStart;
+    this.onHostDragUpdate = options.onHostDragUpdate;
+    this.onHostDragEnd = options.onHostDragEnd;
+    this.onHostPinchStart = options.onHostPinchStart;
+    this.onHostPinchUpdate = options.onHostPinchUpdate;
+    this.onHostPinchEnd = options.onHostPinchEnd;
+    this.onWindowAreaHeightChanged = options.onWindowAreaHeightChanged;
+    this.onClose = options.onClose;
+  }
+}
+
+@Builder
+function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
+  Stack() {
+    if (params.showWindow) {
+      PDFMetronomePanelContent({
+        controller: params.controller,
+        useDocked: params.useDocked,
+        dockedTopOffsetVp: params.dockedTopOffsetVp,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        showDragHandle: !params.useDocked,
+        onInteraction: params.onInteraction,
+        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd,
+        onClose: params.onClose
+      })
+    }
+
+    if (!params.showWindow && params.showFloatingButton) {
+      StyleIconButton({
+        icon: $r('sys.symbol.clock'),
+        alternateColor: params.floatingButtonColor,
+        backgroundAnimationDurationMs: params.floatingButtonTransitionDurationMs,
+        onClickCallback: () => {
+          params.onInteraction();
+          params.onOpenWindow();
+        }
+      })
+        .scale({
+          x: params.floatingButtonScale,
+          y: params.floatingButtonScale,
+          centerX: 22,
+          centerY: 22
+        })
+        .animation({ duration: params.floatingButtonTransitionDurationMs, curve: Curve.EaseOut })
+        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+        .margin(ContainerPadding)
+    }
+  }
+  .width('100%')
+  .height('100%')
+  .alignContent(Alignment.TopStart)
+  .hitTestBehavior(HitTestMode.Transparent)
+}
+
+@Builder
+function BuildTunerOverlay(params: TunerOverlayParams) {
+  Stack() {
+    if (params.showWindow) {
+      PDFTunerPanelContent({
+        useDocked: params.useDocked,
+        dockedTopOffsetVp: params.dockedTopOffsetVp,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        showDragHandle: !params.useDocked,
+        onInteraction: params.onInteraction,
+        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd,
+        onClose: params.onClose
+      })
+    }
+  }
+  .width('100%')
+  .height('100%')
+  .alignContent(Alignment.TopStart)
+  .hitTestBehavior(HitTestMode.Transparent)
+}
 
 @Entry
 @ComponentV2
@@ -95,15 +310,33 @@ struct PDFView {
     getUIContext: () => this.getUIContext(),
     getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
   });
+  @Local showTunerPanel: boolean = false;
   @Local useDockedMetronomePanel: boolean = false;
   @Local metronomePanelScale: number = FloatingMetronomeDefaultScale;
+  @Local metronomePanelOffset: FloatingPanelOffset = { x: 0, y: 0 };
   @Local metronomeViewportWidthVp: number = 0;
   @Local metronomeViewportHeightVp: number = 0;
+  @Local metronomePanelHeightVp: number = 0;
+  @Local useDockedTunerPanel: boolean = false;
+  @Local tunerPanelScale: number = FloatingTunerDefaultScale;
+  @Local tunerPanelOffset: FloatingPanelOffset = { x: DefaultTunerOffsetX, y: DefaultTunerOffsetY };
+  @Local tunerViewportWidthVp: number = 0;
+  @Local tunerViewportHeightVp: number = 0;
+  @Local tunerPanelHeightVp: number = 0;
+  @Local activePanel: OverlayPanelKey = 'metronome';
+  @Local isPanelGestureActive: boolean = false;
   @Local isExclusiveFullScreen: boolean = false;
   @Local isInFreeWindowMode: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
+  private overlayManager: OverlayManager | undefined = undefined;
+  private metronomeOverlayContent: ComponentContent<MetronomeOverlayParams> | undefined = undefined;
+  private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
+  private metronomeDragStartOffset: FloatingPanelOffset = { x: 0, y: 0 };
+  private tunerDragStartOffset: FloatingPanelOffset = { x: DefaultTunerOffsetX, y: DefaultTunerOffsetY };
+  private metronomePinchStartScale: number = FloatingMetronomeDefaultScale;
+  private tunerPinchStartScale: number = FloatingTunerDefaultScale;
   private lastWindowWidthPx: number = 0;
   // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
   // 避免快速翻页后显示内容与当前页码不符。
@@ -147,13 +380,28 @@ struct PDFView {
     this.useDockedMetronomePanel = windowWidthPx <= totalWidthPx;
   }
 
+  private updateTunerDocking(windowWidthPx: number): void {
+    this.lastWindowWidthPx = windowWidthPx;
+    const totalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerPanelScale));
+    this.useDockedTunerPanel = windowWidthPx <= totalWidthPx;
+  }
+
   private updateMetronomeViewportFromArea(area: Area): void {
     this.metronomeViewportWidthVp = area.width as number;
     this.metronomeViewportHeightVp = area.height as number;
   }
 
+  private updateTunerViewportFromArea(area: Area): void {
+    this.tunerViewportWidthVp = area.width as number;
+    this.tunerViewportHeightVp = area.height as number;
+  }
+
   private updateMetronomeViewport(windowSize: window.Size): void {
     this.updateMetronomeDocking(windowSize.width);
+  }
+
+  private updateTunerViewport(windowSize: window.Size): void {
+    this.updateTunerDocking(windowSize.width);
   }
 
   private refreshMetronomeDockingForCurrentWindow(): void {
@@ -165,6 +413,374 @@ struct PDFView {
       });
     } catch (error) {
       hilog.error(0, 'PDFView', `刷新节拍器停靠状态出错: ${error}.`);
+    }
+  }
+
+  private refreshTunerDockingForCurrentWindow(): void {
+    try {
+      const rect = this.mainWindow.getWindowProperties().windowRect;
+      this.updateTunerViewport({
+        width: rect.width,
+        height: rect.height
+      });
+    } catch (error) {
+      hilog.error(0, 'PDFView', `刷新调音器停靠状态出错: ${error}.`);
+    }
+  }
+
+  private focusPanel(panel: OverlayPanelKey): void {
+    if (this.activePanel === panel) {
+      return;
+    }
+
+    this.activePanel = panel;
+    this.syncPanelOverlays();
+  }
+
+  private handleMetronomePanelHeightChanged(heightVp: number): void {
+    if (Math.abs(this.metronomePanelHeightVp - heightVp) < 0.001) {
+      return;
+    }
+
+    this.metronomePanelHeightVp = heightVp;
+    this.syncPanelOverlays();
+  }
+
+  private handleTunerPanelHeightChanged(heightVp: number): void {
+    if (Math.abs(this.tunerPanelHeightVp - heightVp) < 0.001) {
+      return;
+    }
+
+    this.tunerPanelHeightVp = heightVp;
+    this.syncPanelOverlays();
+  }
+
+  private isMetronomePanelVisible(): boolean {
+    return this.metronomeController.showWindow ?? false;
+  }
+
+  private isTunerPanelVisible(): boolean {
+    return this.showTunerPanel;
+  }
+
+  private getDockedMetronomeTopOffsetVp(): number {
+    return 0;
+  }
+
+  private getDockedTunerTopOffsetVp(): number {
+    if (this.useDockedMetronomePanel && this.isMetronomePanelVisible()) {
+      return this.metronomePanelHeightVp + DockedPanelSpacing;
+    }
+
+    return 0;
+  }
+
+  private getFloatingMetronomeMinYVp(): number {
+    if (this.useDockedTunerPanel && this.isTunerPanelVisible()) {
+      return this.getDockedTunerTopOffsetVp() + this.tunerPanelHeightVp;
+    }
+
+    return 0;
+  }
+
+  private getFloatingTunerMinYVp(): number {
+    if (this.useDockedMetronomePanel && this.isMetronomePanelVisible()) {
+      return this.getDockedMetronomeTopOffsetVp() + this.metronomePanelHeightVp;
+    }
+
+    return 0;
+  }
+
+  private clampMetronomeScale(scale: number): number {
+    return Math.max(0.35, Math.min(1.5, scale));
+  }
+
+  private clampTunerScale(scale: number): number {
+    return Math.max(0.4, Math.min(1.6, scale));
+  }
+
+  private getClampedMetronomeOffset(offset: FloatingPanelOffset = this.metronomePanelOffset): FloatingPanelOffset {
+    if (this.useDockedMetronomePanel) {
+      return { x: 0, y: this.getDockedMetronomeTopOffsetVp() };
+    }
+
+    const scaledWidthVp = FloatingMetronomeContentWidthVp * this.metronomePanelScale;
+    const scaledHeightVp = this.metronomePanelHeightVp * this.metronomePanelScale;
+    const minX = 0;
+    const minY = this.getFloatingMetronomeMinYVp();
+    const maxX = this.metronomeViewportWidthVp - scaledWidthVp - FloatingPanelMarginVp;
+    const maxY = this.metronomeViewportHeightVp - scaledHeightVp - FloatingPanelMarginVp;
+    return {
+      x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+    };
+  }
+
+  private getClampedTunerOffset(offset: FloatingPanelOffset = this.tunerPanelOffset): FloatingPanelOffset {
+    if (this.useDockedTunerPanel) {
+      return { x: 0, y: this.getDockedTunerTopOffsetVp() };
+    }
+
+    const scaledWidthVp = FloatingTunerContentWidthVp * this.tunerPanelScale;
+    const scaledHeightVp = this.tunerPanelHeightVp * this.tunerPanelScale;
+    const minX = 0;
+    const minY = this.getFloatingTunerMinYVp();
+    const maxX = this.tunerViewportWidthVp - scaledWidthVp - FloatingPanelMarginVp;
+    const maxY = this.tunerViewportHeightVp - scaledHeightVp - FloatingPanelMarginVp;
+    return {
+      x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+    };
+  }
+
+  private syncPanelOffsetsToBounds(): void {
+    const nextMetronomeOffset = this.getClampedMetronomeOffset();
+    if (Math.abs(nextMetronomeOffset.x - this.metronomePanelOffset.x) >= 0.001
+      || Math.abs(nextMetronomeOffset.y - this.metronomePanelOffset.y) >= 0.001) {
+      this.metronomePanelOffset = nextMetronomeOffset;
+      this.metronomeDragStartOffset = { x: nextMetronomeOffset.x, y: nextMetronomeOffset.y };
+    }
+
+    const nextTunerOffset = this.getClampedTunerOffset();
+    if (Math.abs(nextTunerOffset.x - this.tunerPanelOffset.x) >= 0.001
+      || Math.abs(nextTunerOffset.y - this.tunerPanelOffset.y) >= 0.001) {
+      this.tunerPanelOffset = nextTunerOffset;
+      this.tunerDragStartOffset = { x: nextTunerOffset.x, y: nextTunerOffset.y };
+    }
+  }
+
+  private getMetronomeFloatingButtonScale(): number {
+    if (!(this.metronomeController.isPlaying ?? false) || (this.metronomeController.currentBeat ?? -1) < 0) {
+      return 1;
+    }
+    return this.metronomeController.floatingButtonPulseScale ?? 1;
+  }
+
+  private getMetronomeFloatingButtonColor(): string {
+    if (!(this.metronomeController.isPlaying ?? false) || (this.metronomeController.currentBeat ?? -1) < 0) {
+      return 'rgba(35, 42, 53, 0.62)';
+    }
+    return this.metronomeController.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)';
+  }
+
+  private getMetronomeFloatingButtonTransitionDurationMs(): number {
+    return this.metronomeController.floatingButtonTransitionDurationMs ?? 0;
+  }
+
+  private beginPanelGesture(panel: OverlayPanelKey): void {
+    this.focusPanel(panel);
+    this.isPanelGestureActive = true;
+  }
+
+  private endPanelGesture(): void {
+    this.isPanelGestureActive = false;
+    this.syncPanelOffsetsToBounds();
+    this.syncPanelOverlays();
+  }
+
+  private handleMetronomeHostDragStart(): void {
+    if (this.useDockedMetronomePanel) {
+      return;
+    }
+    this.beginPanelGesture('metronome');
+    const clampedOffset = this.getClampedMetronomeOffset();
+    this.metronomePanelOffset = clampedOffset;
+    this.metronomeDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+    this.syncPanelOverlays();
+  }
+
+  private handleMetronomeHostDragUpdate(event: GestureEvent): void {
+    if (this.useDockedMetronomePanel) {
+      return;
+    }
+    this.metronomePanelOffset = this.getClampedMetronomeOffset({
+      x: this.metronomeDragStartOffset.x + event.offsetX * this.metronomePanelScale,
+      y: this.metronomeDragStartOffset.y + event.offsetY * this.metronomePanelScale
+    });
+    this.syncPanelOverlays();
+  }
+
+  private handleMetronomeHostDragEnd(): void {
+    this.endPanelGesture();
+  }
+
+  private handleMetronomeHostPinchStart(): void {
+    this.beginPanelGesture('metronome');
+    this.metronomePinchStartScale = this.metronomePanelScale;
+  }
+
+  private handleMetronomeHostPinchUpdate(event: GestureEvent): void {
+    this.metronomePanelScale = this.clampMetronomeScale(this.metronomePinchStartScale * event.scale);
+    if (this.lastWindowWidthPx > 0) {
+      this.updateMetronomeDocking(this.lastWindowWidthPx);
+    } else {
+      this.refreshMetronomeDockingForCurrentWindow();
+    }
+    this.syncPanelOffsetsToBounds();
+    this.syncPanelOverlays();
+  }
+
+  private handleMetronomeHostPinchEnd(): void {
+    this.metronomePinchStartScale = this.metronomePanelScale;
+    this.endPanelGesture();
+  }
+
+  private handleTunerHostDragStart(): void {
+    if (this.useDockedTunerPanel) {
+      return;
+    }
+    this.beginPanelGesture('tuner');
+    const clampedOffset = this.getClampedTunerOffset();
+    this.tunerPanelOffset = clampedOffset;
+    this.tunerDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+    this.syncPanelOverlays();
+  }
+
+  private handleTunerHostDragUpdate(event: GestureEvent): void {
+    if (this.useDockedTunerPanel) {
+      return;
+    }
+    this.tunerPanelOffset = this.getClampedTunerOffset({
+      x: this.tunerDragStartOffset.x + event.offsetX * this.tunerPanelScale,
+      y: this.tunerDragStartOffset.y + event.offsetY * this.tunerPanelScale
+    });
+    this.syncPanelOverlays();
+  }
+
+  private handleTunerHostDragEnd(): void {
+    this.endPanelGesture();
+  }
+
+  private handleTunerHostPinchStart(): void {
+    this.beginPanelGesture('tuner');
+    this.tunerPinchStartScale = this.tunerPanelScale;
+  }
+
+  private handleTunerHostPinchUpdate(event: GestureEvent): void {
+    this.tunerPanelScale = this.clampTunerScale(this.tunerPinchStartScale * event.scale);
+    if (this.lastWindowWidthPx > 0) {
+      this.updateTunerDocking(this.lastWindowWidthPx);
+    } else {
+      this.refreshTunerDockingForCurrentWindow();
+    }
+    this.syncPanelOffsetsToBounds();
+    this.syncPanelOverlays();
+  }
+
+  private handleTunerHostPinchEnd(): void {
+    this.tunerPinchStartScale = this.tunerPanelScale;
+    this.endPanelGesture();
+  }
+
+  private createMetronomeOverlayParams(): MetronomeOverlayParams {
+    return new MetronomeOverlayParams({
+      controller: this.metronomeController,
+      showWindow: this.metronomeController.showWindow ?? false,
+      showFloatingButton: !(this.metronomeController.showWindow ?? false) && (this.metronomeController.isPlaying ?? false),
+      useDocked: this.useDockedMetronomePanel,
+      dockedTopOffsetVp: this.getDockedMetronomeTopOffsetVp(),
+      hostScale: this.metronomePanelScale,
+      hostOffset: this.getClampedMetronomeOffset(),
+      floatingButtonScale: this.getMetronomeFloatingButtonScale(),
+      floatingButtonColor: this.getMetronomeFloatingButtonColor(),
+      floatingButtonTransitionDurationMs: this.getMetronomeFloatingButtonTransitionDurationMs(),
+      onInteraction: () => this.focusPanel('metronome'),
+      onHostDragStart: () => this.handleMetronomeHostDragStart(),
+      onHostDragUpdate: (event: GestureEvent) => this.handleMetronomeHostDragUpdate(event),
+      onHostDragEnd: () => this.handleMetronomeHostDragEnd(),
+      onHostPinchStart: () => this.handleMetronomeHostPinchStart(),
+      onHostPinchUpdate: (event: GestureEvent) => this.handleMetronomeHostPinchUpdate(event),
+      onHostPinchEnd: () => this.handleMetronomeHostPinchEnd(),
+      onWindowAreaHeightChanged: (heightVp: number) => this.handleMetronomePanelHeightChanged(heightVp),
+      onClose: () => {
+        this.metronomeController.closeWindow();
+        this.syncPanelOverlays();
+      },
+      onOpenWindow: () => {
+        this.metronomeController.openWindow();
+        this.syncPanelOverlays();
+      }
+    });
+  }
+
+  private createTunerOverlayParams(): TunerOverlayParams {
+    return new TunerOverlayParams({
+      showWindow: this.showTunerPanel,
+      useDocked: this.useDockedTunerPanel,
+      dockedTopOffsetVp: this.getDockedTunerTopOffsetVp(),
+      hostScale: this.tunerPanelScale,
+      hostOffset: this.getClampedTunerOffset(),
+      onInteraction: () => this.focusPanel('tuner'),
+      onHostDragStart: () => this.handleTunerHostDragStart(),
+      onHostDragUpdate: (event: GestureEvent) => this.handleTunerHostDragUpdate(event),
+      onHostDragEnd: () => this.handleTunerHostDragEnd(),
+      onHostPinchStart: () => this.handleTunerHostPinchStart(),
+      onHostPinchUpdate: (event: GestureEvent) => this.handleTunerHostPinchUpdate(event),
+      onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
+      onWindowAreaHeightChanged: (heightVp: number) => this.handleTunerPanelHeightChanged(heightVp),
+      onClose: () => {
+        this.showTunerPanel = false;
+        this.syncPanelOverlays();
+      }
+    });
+  }
+
+  private ensurePanelOverlays(): void {
+    try {
+      this.overlayManager = this.getUIContext().getOverlayManager();
+      if (!this.metronomeOverlayContent) {
+        this.metronomeOverlayContent = new ComponentContent(
+          this.getUIContext(),
+          wrapBuilder<[MetronomeOverlayParams]>(BuildMetronomeOverlay),
+          this.createMetronomeOverlayParams()
+        );
+      }
+      if (!this.tunerOverlayContent) {
+        this.tunerOverlayContent = new ComponentContent(
+          this.getUIContext(),
+          wrapBuilder<[TunerOverlayParams]>(BuildTunerOverlay),
+          this.createTunerOverlayParams()
+        );
+      }
+      this.syncPanelOverlays();
+    } catch (error) {
+      hilog.error(0, 'PDFView', `初始化浮层管理器出错: ${error}.`);
+    }
+  }
+
+  private syncPanelOverlays(): void {
+    if (!this.overlayManager || !this.metronomeOverlayContent || !this.tunerOverlayContent) {
+      return;
+    }
+
+    try {
+      this.syncPanelOffsetsToBounds();
+      this.metronomeOverlayContent.update(this.createMetronomeOverlayParams());
+      this.tunerOverlayContent.update(this.createTunerOverlayParams());
+
+      const lowerContent = this.activePanel === 'metronome' ? this.tunerOverlayContent : this.metronomeOverlayContent;
+      const upperContent = this.activePanel === 'metronome' ? this.metronomeOverlayContent : this.tunerOverlayContent;
+      this.overlayManager.addComponentContent(lowerContent, 0);
+      this.overlayManager.addComponentContent(upperContent, 1);
+    } catch (error) {
+      hilog.error(0, 'PDFView', `同步浮层状态出错: ${error}.`);
+    }
+  }
+
+  private disposePanelOverlays(): void {
+    if (!this.overlayManager) {
+      return;
+    }
+
+    try {
+      if (this.metronomeOverlayContent) {
+        this.overlayManager.removeComponentContent(this.metronomeOverlayContent);
+      }
+      if (this.tunerOverlayContent) {
+        this.overlayManager.removeComponentContent(this.tunerOverlayContent);
+      }
+    } catch (error) {
+      hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
     }
   }
 
@@ -198,14 +814,18 @@ struct PDFView {
       this.mainWindow.on('freeWindowModeChange', this.freeWindowModeCallback);
       this.isInFreeWindowMode = this.mainWindow.isInFreeWindowMode();
       this.useDockedMetronomePanel = false;
+      this.useDockedTunerPanel = false;
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
         this.updateMetronomeViewport(_windowSize);
+        this.updateTunerViewport(_windowSize);
+        this.syncPanelOverlays();
       };
       this.mainWindow.on('windowSizeChange', this.windowSizeChangeCallback);
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
 
+    this.ensurePanelOverlays();
     this.immersiveListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
@@ -231,6 +851,7 @@ struct PDFView {
         width: rect.width,
         height: rect.height
       });
+      this.syncPanelOverlays();
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口大小出错: ${error}.`);
     }
@@ -261,6 +882,7 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
+    this.disposePanelOverlays();
     this.metronomeController.cleanup();
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
@@ -749,6 +1371,10 @@ struct PDFView {
   }
 
   handleViewAction(event: TouchEvent): void {
+    if (this.isPanelGestureActive) {
+      return;
+    }
+
     const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
     const isTripleTouch =
@@ -1003,6 +1629,7 @@ struct PDFView {
           .size({ width: '100%', height: '100%' })
           .onAreaChange((_, newVal) => {
             this.updateMetronomeViewportFromArea(newVal);
+            this.updateTunerViewportFromArea(newVal);
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             this.resetViewToFit();
           })
@@ -1054,23 +1681,6 @@ struct PDFView {
             ],
             repeating: false
           })
-        PDFMetronomePanel({
-          controller: this.metronomeController,
-          useDocked: this.useDockedMetronomePanel,
-          initialFloatingScale: this.metronomePanelScale,
-          floatingViewportWidthVp: this.metronomeViewportWidthVp,
-          floatingViewportHeightVp: this.metronomeViewportHeightVp,
-          onFloatingScaleChanged: (scale: number) => {
-            this.metronomePanelScale = scale;
-            if (this.lastWindowWidthPx > 0) {
-              this.updateMetronomeDocking(this.lastWindowWidthPx);
-            } else {
-              this.refreshMetronomeDockingForCurrentWindow();
-            }
-          }
-        }).alignRules(TopLeft)
-
-
         Stack() {
           // Slider - positioned at right, vertically centered, independent of bottom bar
           Column(ContainerCfg) {
@@ -1130,7 +1740,14 @@ struct PDFView {
                   this.executeShare();
                 },
                 onToggleMetronome: () => {
+                  this.focusPanel('metronome');
                   this.metronomeController.toggleWindow();
+                  this.syncPanelOverlays();
+                },
+                onToggleTuner: () => {
+                  this.focusPanel('tuner');
+                  this.showTunerPanel = !this.showTunerPanel;
+                  this.syncPanelOverlays();
                 }
               })
 
