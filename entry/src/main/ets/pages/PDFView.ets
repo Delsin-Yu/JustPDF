@@ -37,7 +37,7 @@ const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
 const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
-const DockedPanelSpacing: number = 16;
+const UnifiedDockTabBarHeightVp: number = 56;
 const FloatingPanelMarginVp: number = 16;
 const FloatingMetronomeContentWidthVp: number = 400;
 const FloatingTunerContentWidthVp: number = 360;
@@ -179,7 +179,7 @@ class TunerOverlayParams {
 @Builder
 function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
   Stack() {
-    if (params.showWindow) {
+    if (params.showWindow && !params.useDocked) {
       PDFMetronomePanelContent({
         controller: params.controller,
         useDocked: params.useDocked,
@@ -230,7 +230,7 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
 @Builder
 function BuildTunerOverlay(params: TunerOverlayParams) {
   Stack() {
-    if (params.showWindow) {
+    if (params.showWindow && !params.useDocked) {
       PDFTunerPanelContent({
         useDocked: params.useDocked,
         dockedTopOffsetVp: params.dockedTopOffsetVp,
@@ -331,6 +331,7 @@ struct PDFView {
   @Local tunerViewportWidthVp: number = 0;
   @Local tunerViewportHeightVp: number = 0;
   @Local tunerPanelHeightVp: number = 0;
+  @Local dockedPanelHeightVp: number = 0;
   @Local activePanel: OverlayPanelKey = 'metronome';
   @Local isPanelGestureActive: boolean = false;
   @Local isExclusiveFullScreen: boolean = false;
@@ -392,6 +393,39 @@ struct PDFView {
     this.lastWindowWidthPx = windowWidthPx;
     const totalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerPanelScale));
     this.useDockedTunerPanel = windowWidthPx <= totalWidthPx;
+  }
+
+  private isMetronomeDockedVisible(): boolean {
+    return this.useDockedMetronomePanel && this.isMetronomePanelVisible();
+  }
+
+  private isTunerDockedVisible(): boolean {
+    return this.useDockedTunerPanel && this.isTunerPanelVisible();
+  }
+
+  private hasAnyDockedVisiblePanel(): boolean {
+    return this.isMetronomeDockedVisible() || this.isTunerDockedVisible();
+  }
+
+  private isUnifiedDockedPanelVisible(): boolean {
+    return this.isMetronomeDockedVisible() && this.isTunerDockedVisible();
+  }
+
+  private getActiveDockedPanel(): OverlayPanelKey {
+    if (this.activePanel === 'metronome' && this.isMetronomeDockedVisible()) {
+      return 'metronome';
+    }
+    if (this.activePanel === 'tuner' && this.isTunerDockedVisible()) {
+      return 'tuner';
+    }
+    if (this.isMetronomeDockedVisible()) {
+      return 'metronome';
+    }
+    return 'tuner';
+  }
+
+  private isDockedPanelTabActive(panel: OverlayPanelKey): boolean {
+    return this.getActiveDockedPanel() === panel;
   }
 
   private updateMetronomeViewportFromArea(area: Area): void {
@@ -476,27 +510,41 @@ struct PDFView {
   }
 
   private getDockedTunerTopOffsetVp(): number {
-    if (this.useDockedMetronomePanel && this.isMetronomePanelVisible()) {
-      return this.metronomePanelHeightVp + DockedPanelSpacing;
-    }
-
     return 0;
+  }
+
+  private getCurrentDockedPanelHeightVp(): number {
+    if (!this.hasAnyDockedVisiblePanel()) {
+      return 0;
+    }
+    if (this.dockedPanelHeightVp > 0) {
+      return this.dockedPanelHeightVp;
+    }
+    if (this.isUnifiedDockedPanelVisible()) {
+      return (this.getActiveDockedPanel() === 'metronome' ? this.metronomePanelHeightVp : this.tunerPanelHeightVp)
+        + UnifiedDockTabBarHeightVp;
+    }
+    if (this.isMetronomeDockedVisible()) {
+      return this.metronomePanelHeightVp;
+    }
+    return this.tunerPanelHeightVp;
+  }
+
+  private handleDockedPanelHeightChanged(heightVp: number): void {
+    if (Math.abs(this.dockedPanelHeightVp - heightVp) < 0.001) {
+      return;
+    }
+    this.dockedPanelHeightVp = heightVp;
+    this.syncPanelOffsetsToBounds();
+    this.syncPanelOverlays();
   }
 
   private getFloatingMetronomeMinYVp(): number {
-    if (this.useDockedTunerPanel && this.isTunerPanelVisible()) {
-      return this.getDockedTunerTopOffsetVp() + this.tunerPanelHeightVp;
-    }
-
-    return 0;
+    return this.getCurrentDockedPanelHeightVp();
   }
 
   private getFloatingTunerMinYVp(): number {
-    if (this.useDockedMetronomePanel && this.isMetronomePanelVisible()) {
-      return this.getDockedMetronomeTopOffsetVp() + this.metronomePanelHeightVp;
-    }
-
-    return 0;
+    return this.getCurrentDockedPanelHeightVp();
   }
 
   private clampMetronomeScale(scale: number): number {
@@ -768,6 +816,9 @@ struct PDFView {
     }
 
     try {
+      if (!this.hasAnyDockedVisiblePanel()) {
+        this.dockedPanelHeightVp = 0;
+      }
       this.syncPanelOffsetsToBounds();
       this.metronomeOverlayContent.update(this.createMetronomeOverlayParams());
       this.tunerOverlayContent.update(this.createTunerOverlayParams());
@@ -796,6 +847,108 @@ struct PDFView {
     } catch (error) {
       hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
     }
+  }
+
+  @Builder
+  private buildDockedPanelTab(label: string, panel: OverlayPanelKey) {
+    Button(label)
+      .type(ButtonType.Capsule)
+      .layoutWeight(1)
+      .height(34)
+      .fontSize(14)
+      .fontWeight(this.isDockedPanelTabActive(panel) ? FontWeight.Bold : FontWeight.Medium)
+      .fontColor(Color.White)
+      .backgroundColor(this.isDockedPanelTabActive(panel) ? 'rgba(77, 166, 255, 0.32)' : 'rgba(255, 255, 255, 0.08)')
+      .border({
+        width: 1,
+        color: this.isDockedPanelTabActive(panel) ? 'rgba(77, 166, 255, 0.48)' : 'rgba(255, 255, 255, 0.05)'
+      })
+      .onClick(() => this.focusPanel(panel))
+  }
+
+  @Builder
+  private buildDockedPanels() {
+    Column() {
+      if (this.hasAnyDockedVisiblePanel()) {
+        Column({ space: 0 }) {
+          if (this.isUnifiedDockedPanelVisible()) {
+            Row({ space: 10 }) {
+              this.buildDockedPanelTab('节拍器', 'metronome')
+              this.buildDockedPanelTab('调音器', 'tuner')
+            }
+            .width('100%')
+            .padding({
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: 10
+            })
+            .backgroundColor('rgba(8, 10, 14, 0.84)')
+            .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
+          }
+
+          if (this.getActiveDockedPanel() === 'metronome' && this.isMetronomeDockedVisible()) {
+            PDFMetronomePanelContent({
+              controller: this.metronomeController,
+              useDocked: true,
+              dockedTopOffsetVp: 0,
+              hostScale: this.metronomePanelScale,
+              hostOffset: { x: 0, y: 0 },
+              showDragHandle: false,
+              onInteraction: () => this.focusPanel('metronome'),
+              onTouchStateChanged: (active: boolean) => {
+                this.isPanelGestureActive = active;
+              },
+              onWindowAreaHeightChanged: (heightVp: number) => this.handleMetronomePanelHeightChanged(heightVp),
+              onHostDragStart: () => this.handleMetronomeHostDragStart(),
+              onHostDragUpdate: (event: GestureEvent) => this.handleMetronomeHostDragUpdate(event),
+              onHostDragEnd: () => this.handleMetronomeHostDragEnd(),
+              onHostPinchStart: () => this.handleMetronomeHostPinchStart(),
+              onHostPinchUpdate: (event: GestureEvent) => this.handleMetronomeHostPinchUpdate(event),
+              onHostPinchEnd: () => this.handleMetronomeHostPinchEnd(),
+              onClose: () => {
+                this.metronomeController.closeWindow();
+                this.syncPanelOverlays();
+              }
+            })
+          } else if (this.isTunerDockedVisible()) {
+            PDFTunerPanelContent({
+              useDocked: true,
+              dockedTopOffsetVp: 0,
+              hostScale: this.tunerPanelScale,
+              hostOffset: { x: 0, y: 0 },
+              showDragHandle: false,
+              onInteraction: () => this.focusPanel('tuner'),
+              onTouchStateChanged: (active: boolean) => {
+                this.isPanelGestureActive = active;
+              },
+              onWindowAreaHeightChanged: (heightVp: number) => this.handleTunerPanelHeightChanged(heightVp),
+              onHostDragStart: () => this.handleTunerHostDragStart(),
+              onHostDragUpdate: (event: GestureEvent) => this.handleTunerHostDragUpdate(event),
+              onHostDragEnd: () => this.handleTunerHostDragEnd(),
+              onHostPinchStart: () => this.handleTunerHostPinchStart(),
+              onHostPinchUpdate: (event: GestureEvent) => this.handleTunerHostPinchUpdate(event),
+              onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
+              onClose: () => {
+                this.showTunerPanel = false;
+                this.syncPanelOverlays();
+              }
+            })
+          }
+        }
+        .width('100%')
+        .align(Alignment.TopStart)
+        .onAreaChange((_oldValue: Area, newValue: Area) => {
+          this.handleDockedPanelHeightChanged(newValue.height as number);
+        })
+        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Start)
+    .alignItems(HorizontalAlign.Start)
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   aboutToAppear(): void {
@@ -1843,6 +1996,8 @@ struct PDFView {
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.white'))
       }
+
+      this.buildDockedPanels()
     }
     .hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
