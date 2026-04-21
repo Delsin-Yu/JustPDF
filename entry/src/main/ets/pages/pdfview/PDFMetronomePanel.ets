@@ -1,6 +1,6 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ButtonColor, ContainerPadding, StyleIconButton } from '../../components/UIComponents';
+import { ButtonColor, ContainerPadding, StyleIconButton, toVisibility } from '../../components/UIComponents';
 import { PDFMetronomeController } from './PDFMetronomeController';
 
 const MetronomeBeatSpacing: Length = `10vp`;
@@ -309,29 +309,28 @@ export struct PDFMetronomePanelContent {
     Column({ space: 14 }) {
           Row({ space: MetronomeHeaderGap }) {
             Row({ space: this.useDocked ? 0 : 10 }) {
-              if (this.showDragHandle && !this.useDocked) {
-                Column({ space: 3 }) {
-                  Row({ space: 3 }) {
-                    ForEach([0, 1, 2, 3], (index: number) => {
-                      Text('')
-                        .width(4)
-                        .height(4)
-                        .borderRadius(2)
-                        .backgroundColor('rgba(255, 255, 255, 0.26)')
-                    }, (index: number) => `metronome-drag-grip-top-${index}`)
-                  }
+              Column({ space: 3 }) {
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.26)')
+                  }, (index: number) => `metronome-drag-grip-top-${index}`)
+                }
 
-                  Row({ space: 3 }) {
-                    ForEach([0, 1, 2, 3], (index: number) => {
-                      Text('')
-                        .width(4)
-                        .height(4)
-                        .borderRadius(2)
-                        .backgroundColor('rgba(255, 255, 255, 0.16)')
-                    }, (index: number) => `metronome-drag-grip-bottom-${index}`)
-                  }
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.16)')
+                  }, (index: number) => `metronome-drag-grip-bottom-${index}`)
                 }
               }
+              .visibility(toVisibility(this.showDragHandle && !this.useDocked))
 
               Text('节拍器')
                 .fontSize(18)
@@ -486,16 +485,15 @@ export struct PDFMetronomePanelContent {
 
             GridItem() {
               Row({ space: 6 }) {
-                if (!this.useDocked) {
-                  Button('-10')
-                    .type(ButtonType.Capsule)
-                    .flexGrow(1)
-                    .height(34)
-                    .fontSize(13)
-                    .fontColor(Color.White)
-                    .backgroundColor('rgba(255, 255, 255, 0.1)')
-                    .onClick(() => this.controller?.adjustBpm(-10))
-                }
+                Button('-10')
+                  .type(ButtonType.Capsule)
+                  .flexGrow(1)
+                  .height(34)
+                  .fontSize(13)
+                  .fontColor(Color.White)
+                  .backgroundColor('rgba(255, 255, 255, 0.1)')
+                  .visibility(toVisibility(!this.useDocked))
+                  .onClick(() => this.controller?.adjustBpm(-10))
 
                 Button('预设')
                   .type(ButtonType.Capsule)
@@ -511,16 +509,15 @@ export struct PDFMetronomePanelContent {
                     placement: Placement.BottomRight
                   })
 
-                if (!this.useDocked) {
-                  Button('+10')
-                    .type(ButtonType.Capsule)
-                    .flexGrow(1)
-                    .height(34)
-                    .fontSize(13)
-                    .fontColor(Color.White)
-                    .backgroundColor('rgba(255, 255, 255, 0.1)')
-                    .onClick(() => this.controller?.adjustBpm(+10))
-                }
+                Button('+10')
+                  .type(ButtonType.Capsule)
+                  .flexGrow(1)
+                  .height(34)
+                  .fontSize(13)
+                  .fontColor(Color.White)
+                  .backgroundColor('rgba(255, 255, 255, 0.1)')
+                  .visibility(toVisibility(!this.useDocked))
+                  .onClick(() => this.controller?.adjustBpm(+10))
               }
             }
 
@@ -799,46 +796,46 @@ export struct PDFMetronomePanel {
 
   build() {
     Column() {
-      if (this.controller?.showWindow ?? false) {
-        PDFMetronomePanelContent({
-          controller: this.controller,
-          useDocked: this.useDocked,
-          dockedTopOffsetVp: this.dockedTopOffsetVp,
-          hostScale: this.floatingScale,
-          hostOffset: this.getClampedFloatingOffset(),
-          showDragHandle: !this.useDocked,
-          onInteraction: this.onInteraction,
-          onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
-          onHostDragStart: () => this.handleFloatingDragStart(),
-          onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
-          onHostDragEnd: () => this.handleFloatingDragEnd(),
-          onHostPinchStart: () => this.handleFloatingPinchStart(),
-          onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
-          onHostPinchEnd: () => this.handleFloatingPinchEnd(),
-          onClose: () => this.controller?.closeWindow()
-        })
-      }
+      PDFMetronomePanelContent({
+        controller: this.controller,
+        useDocked: this.useDocked,
+        dockedTopOffsetVp: this.dockedTopOffsetVp,
+        hostScale: this.floatingScale,
+        hostOffset: this.getClampedFloatingOffset(),
+        showDragHandle: !this.useDocked,
+        onInteraction: this.onInteraction,
+        onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
+        onHostDragStart: () => this.handleFloatingDragStart(),
+        onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
+        onHostDragEnd: () => this.handleFloatingDragEnd(),
+        onHostPinchStart: () => this.handleFloatingPinchStart(),
+        onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
+        onHostPinchEnd: () => this.handleFloatingPinchEnd(),
+        onClose: () => this.controller?.closeWindow()
+      })
+        .visibility((this.controller?.showWindow ?? false) ? Visibility.Visible : Visibility.None)
 
-      if (!(this.controller?.showWindow ?? false) && (this.controller?.isPlaying ?? false)) {
-        StyleIconButton({
-          icon: $r('sys.symbol.clock'),
-          alternateColor: this.getFloatingButtonColor(),
-          backgroundAnimationDurationMs: this.getFloatingButtonTransitionDurationMs(),
-          onClickCallback: () => {
-            this.onInteraction();
-            this.controller?.openWindow();
-          }
+      StyleIconButton({
+        icon: $r('sys.symbol.clock'),
+        alternateColor: this.getFloatingButtonColor(),
+        backgroundAnimationDurationMs: this.getFloatingButtonTransitionDurationMs(),
+        onClickCallback: () => {
+          this.onInteraction();
+          this.controller?.openWindow();
+        }
+      })
+        .visibility((!(this.controller?.showWindow ?? false) && (this.controller?.isPlaying ?? false))
+          ? Visibility.Visible
+          : Visibility.None)
+        .scale({
+          x: this.getFloatingButtonScale(),
+          y: this.getFloatingButtonScale(),
+          centerX: 22,
+          centerY: 22
         })
-          .scale({
-            x: this.getFloatingButtonScale(),
-            y: this.getFloatingButtonScale(),
-            centerX: 22,
-            centerY: 22
-          })
-          .animation({ duration: this.getFloatingButtonTransitionDurationMs(), curve: Curve.EaseOut })
-          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
-          .margin(ContainerPadding)
-      }
+        .animation({ duration: this.getFloatingButtonTransitionDurationMs(), curve: Curve.EaseOut })
+        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+        .margin(ContainerPadding)
     }
   }
 }

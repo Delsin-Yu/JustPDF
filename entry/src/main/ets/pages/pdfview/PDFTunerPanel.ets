@@ -1,5 +1,5 @@
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ContainerPadding } from '../../components/UIComponents';
+import { ContainerPadding, toVisibility } from '../../components/UIComponents';
 
 const TunerWindowMargin: number = 16;
 const TunerWindowWidth: number = 360;
@@ -166,29 +166,28 @@ export struct PDFTunerPanelContent {
     Column({ space: 14 }) {
           Row({ space: TunerHeaderGap }) {
             Row({ space: this.useDocked ? 0 : 10 }) {
-              if (this.showDragHandle && !this.useDocked) {
-                Column({ space: 3 }) {
-                  Row({ space: 3 }) {
-                    ForEach([0, 1, 2, 3], (index: number) => {
-                      Text('')
-                        .width(4)
-                        .height(4)
-                        .borderRadius(2)
-                        .backgroundColor('rgba(255, 255, 255, 0.26)')
-                    }, (index: number) => `tuner-drag-grip-top-${index}`)
-                  }
+              Column({ space: 3 }) {
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.26)')
+                  }, (index: number) => `tuner-drag-grip-top-${index}`)
+                }
 
-                  Row({ space: 3 }) {
-                    ForEach([0, 1, 2, 3], (index: number) => {
-                      Text('')
-                        .width(4)
-                        .height(4)
-                        .borderRadius(2)
-                        .backgroundColor('rgba(255, 255, 255, 0.16)')
-                    }, (index: number) => `tuner-drag-grip-bottom-${index}`)
-                  }
+                Row({ space: 3 }) {
+                  ForEach([0, 1, 2, 3], (index: number) => {
+                    Text('')
+                      .width(4)
+                      .height(4)
+                      .borderRadius(2)
+                      .backgroundColor('rgba(255, 255, 255, 0.16)')
+                  }, (index: number) => `tuner-drag-grip-bottom-${index}`)
                 }
               }
+              .visibility(toVisibility(this.showDragHandle && !this.useDocked))
 
               Text('调音器')
                 .fontSize(18)
@@ -595,24 +594,23 @@ export struct PDFTunerPanel {
 
   build() {
     Column() {
-      if (this.showWindow) {
-        PDFTunerPanelContent({
-          useDocked: this.useDocked,
-          dockedTopOffsetVp: this.dockedTopOffsetVp,
-          hostScale: this.floatingScale,
-          hostOffset: this.getClampedFloatingOffset(),
-          showDragHandle: !this.useDocked,
-          onInteraction: this.onInteraction,
-          onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
-          onHostDragStart: () => this.handleFloatingDragStart(),
-          onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
-          onHostDragEnd: () => this.handleFloatingDragEnd(),
-          onHostPinchStart: () => this.handleFloatingPinchStart(),
-          onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
-          onHostPinchEnd: () => this.handleFloatingPinchEnd(),
-          onClose: this.onClose
-        })
-      }
+      PDFTunerPanelContent({
+        useDocked: this.useDocked,
+        dockedTopOffsetVp: this.dockedTopOffsetVp,
+        hostScale: this.floatingScale,
+        hostOffset: this.getClampedFloatingOffset(),
+        showDragHandle: !this.useDocked,
+        onInteraction: this.onInteraction,
+        onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
+        onHostDragStart: () => this.handleFloatingDragStart(),
+        onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
+        onHostDragEnd: () => this.handleFloatingDragEnd(),
+        onHostPinchStart: () => this.handleFloatingPinchStart(),
+        onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
+        onHostPinchEnd: () => this.handleFloatingPinchEnd(),
+        onClose: this.onClose
+      })
+        .visibility(this.showWindow ? Visibility.Visible : Visibility.None)
     }
   }
 }

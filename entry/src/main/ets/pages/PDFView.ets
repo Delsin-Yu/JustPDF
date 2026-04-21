@@ -179,47 +179,45 @@ class TunerOverlayParams {
 @Builder
 function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
   Stack() {
-    if (params.showWindow && !params.useDocked) {
-      PDFMetronomePanelContent({
-        controller: params.controller,
-        useDocked: params.useDocked,
-        dockedTopOffsetVp: params.dockedTopOffsetVp,
-        hostScale: params.hostScale,
-        hostOffset: params.hostOffset,
-        showDragHandle: !params.useDocked,
-        onInteraction: params.onInteraction,
-        onTouchStateChanged: params.onTouchStateChanged,
-        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
-        onHostDragStart: params.onHostDragStart,
-        onHostDragUpdate: params.onHostDragUpdate,
-        onHostDragEnd: params.onHostDragEnd,
-        onHostPinchStart: params.onHostPinchStart,
-        onHostPinchUpdate: params.onHostPinchUpdate,
-        onHostPinchEnd: params.onHostPinchEnd,
-        onClose: params.onClose
-      })
-    }
+    PDFMetronomePanelContent({
+      controller: params.controller,
+      useDocked: params.useDocked,
+      dockedTopOffsetVp: params.dockedTopOffsetVp,
+      hostScale: params.hostScale,
+      hostOffset: params.hostOffset,
+      showDragHandle: !params.useDocked,
+      onInteraction: params.onInteraction,
+      onTouchStateChanged: params.onTouchStateChanged,
+      onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+      onHostDragStart: params.onHostDragStart,
+      onHostDragUpdate: params.onHostDragUpdate,
+      onHostDragEnd: params.onHostDragEnd,
+      onHostPinchStart: params.onHostPinchStart,
+      onHostPinchUpdate: params.onHostPinchUpdate,
+      onHostPinchEnd: params.onHostPinchEnd,
+      onClose: params.onClose
+    })
+      .visibility(toVisibility(params.showWindow && !params.useDocked))
 
-    if (!params.showWindow && params.showFloatingButton) {
-      StyleIconButton({
-        icon: $r('sys.symbol.clock'),
-        alternateColor: params.floatingButtonColor,
-        backgroundAnimationDurationMs: params.floatingButtonTransitionDurationMs,
-        onTouchDownCallback: () => params.onInteraction(),
-        onClickCallback: () => {
-          params.onOpenWindow();
-        }
+    StyleIconButton({
+      icon: $r('sys.symbol.clock'),
+      alternateColor: params.floatingButtonColor,
+      backgroundAnimationDurationMs: params.floatingButtonTransitionDurationMs,
+      onTouchDownCallback: () => params.onInteraction(),
+      onClickCallback: () => {
+        params.onOpenWindow();
+      }
+    })
+      .visibility(toVisibility(!params.showWindow && params.showFloatingButton))
+      .scale({
+        x: params.floatingButtonScale,
+        y: params.floatingButtonScale,
+        centerX: 22,
+        centerY: 22
       })
-        .scale({
-          x: params.floatingButtonScale,
-          y: params.floatingButtonScale,
-          centerX: 22,
-          centerY: 22
-        })
-        .animation({ duration: params.floatingButtonTransitionDurationMs, curve: Curve.EaseOut })
-        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
-        .margin(ContainerPadding)
-    }
+      .animation({ duration: params.floatingButtonTransitionDurationMs, curve: Curve.EaseOut })
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+      .margin(ContainerPadding)
   }
   .width('100%')
   .height('100%')
@@ -230,25 +228,24 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
 @Builder
 function BuildTunerOverlay(params: TunerOverlayParams) {
   Stack() {
-    if (params.showWindow && !params.useDocked) {
-      PDFTunerPanelContent({
-        useDocked: params.useDocked,
-        dockedTopOffsetVp: params.dockedTopOffsetVp,
-        hostScale: params.hostScale,
-        hostOffset: params.hostOffset,
-        showDragHandle: !params.useDocked,
-        onInteraction: params.onInteraction,
-        onTouchStateChanged: params.onTouchStateChanged,
-        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
-        onHostDragStart: params.onHostDragStart,
-        onHostDragUpdate: params.onHostDragUpdate,
-        onHostDragEnd: params.onHostDragEnd,
-        onHostPinchStart: params.onHostPinchStart,
-        onHostPinchUpdate: params.onHostPinchUpdate,
-        onHostPinchEnd: params.onHostPinchEnd,
-        onClose: params.onClose
-      })
-    }
+    PDFTunerPanelContent({
+      useDocked: params.useDocked,
+      dockedTopOffsetVp: params.dockedTopOffsetVp,
+      hostScale: params.hostScale,
+      hostOffset: params.hostOffset,
+      showDragHandle: !params.useDocked,
+      onInteraction: params.onInteraction,
+      onTouchStateChanged: params.onTouchStateChanged,
+      onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+      onHostDragStart: params.onHostDragStart,
+      onHostDragUpdate: params.onHostDragUpdate,
+      onHostDragEnd: params.onHostDragEnd,
+      onHostPinchStart: params.onHostPinchStart,
+      onHostPinchUpdate: params.onHostPinchUpdate,
+      onHostPinchEnd: params.onHostPinchEnd,
+      onClose: params.onClose
+    })
+      .visibility(toVisibility(params.showWindow && !params.useDocked))
   }
   .width('100%')
   .height('100%')
