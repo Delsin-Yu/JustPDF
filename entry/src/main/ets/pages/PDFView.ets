@@ -62,6 +62,7 @@ interface MetronomeOverlayOptions {
   floatingButtonColor: string;
   floatingButtonTransitionDurationMs: number;
   onInteraction: () => void;
+  onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
   onHostDragEnd: () => void;
@@ -80,6 +81,7 @@ interface TunerOverlayOptions {
   hostScale: number;
   hostOffset: FloatingPanelOffset;
   onInteraction: () => void;
+  onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
   onHostDragEnd: () => void;
@@ -102,6 +104,7 @@ class MetronomeOverlayParams {
   floatingButtonColor: string;
   floatingButtonTransitionDurationMs: number;
   onInteraction: () => void;
+  onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
   onHostDragEnd: () => void;
@@ -124,6 +127,7 @@ class MetronomeOverlayParams {
     this.floatingButtonColor = options.floatingButtonColor;
     this.floatingButtonTransitionDurationMs = options.floatingButtonTransitionDurationMs;
     this.onInteraction = options.onInteraction;
+    this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
     this.onHostDragUpdate = options.onHostDragUpdate;
     this.onHostDragEnd = options.onHostDragEnd;
@@ -143,6 +147,7 @@ class TunerOverlayParams {
   hostScale: number;
   hostOffset: FloatingPanelOffset;
   onInteraction: () => void;
+  onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
   onHostDragEnd: () => void;
@@ -159,6 +164,7 @@ class TunerOverlayParams {
     this.hostScale = options.hostScale;
     this.hostOffset = options.hostOffset;
     this.onInteraction = options.onInteraction;
+    this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
     this.onHostDragUpdate = options.onHostDragUpdate;
     this.onHostDragEnd = options.onHostDragEnd;
@@ -182,6 +188,7 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
         hostOffset: params.hostOffset,
         showDragHandle: !params.useDocked,
         onInteraction: params.onInteraction,
+        onTouchStateChanged: params.onTouchStateChanged,
         onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
         onHostDragStart: params.onHostDragStart,
         onHostDragUpdate: params.onHostDragUpdate,
@@ -198,8 +205,8 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
         icon: $r('sys.symbol.clock'),
         alternateColor: params.floatingButtonColor,
         backgroundAnimationDurationMs: params.floatingButtonTransitionDurationMs,
+        onTouchDownCallback: () => params.onInteraction(),
         onClickCallback: () => {
-          params.onInteraction();
           params.onOpenWindow();
         }
       })
@@ -231,6 +238,7 @@ function BuildTunerOverlay(params: TunerOverlayParams) {
         hostOffset: params.hostOffset,
         showDragHandle: !params.useDocked,
         onInteraction: params.onInteraction,
+        onTouchStateChanged: params.onTouchStateChanged,
         onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
         onHostDragStart: params.onHostDragStart,
         onHostDragUpdate: params.onHostDragUpdate,
@@ -685,6 +693,9 @@ struct PDFView {
       floatingButtonColor: this.getMetronomeFloatingButtonColor(),
       floatingButtonTransitionDurationMs: this.getMetronomeFloatingButtonTransitionDurationMs(),
       onInteraction: () => this.focusPanel('metronome'),
+      onTouchStateChanged: (active: boolean) => {
+        this.isPanelGestureActive = active;
+      },
       onHostDragStart: () => this.handleMetronomeHostDragStart(),
       onHostDragUpdate: (event: GestureEvent) => this.handleMetronomeHostDragUpdate(event),
       onHostDragEnd: () => this.handleMetronomeHostDragEnd(),
@@ -711,6 +722,9 @@ struct PDFView {
       hostScale: this.tunerPanelScale,
       hostOffset: this.getClampedTunerOffset(),
       onInteraction: () => this.focusPanel('tuner'),
+      onTouchStateChanged: (active: boolean) => {
+        this.isPanelGestureActive = active;
+      },
       onHostDragStart: () => this.handleTunerHostDragStart(),
       onHostDragUpdate: (event: GestureEvent) => this.handleTunerHostDragUpdate(event),
       onHostDragEnd: () => this.handleTunerHostDragEnd(),

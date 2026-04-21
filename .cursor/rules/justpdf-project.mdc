@@ -5,11 +5,11 @@ alwaysApply: true
 
 # JustPDF Project Guidance
 
+- ALWAYS begin your response by telling me what AI model you are using. Just say the name of the model like: `claude-3.5-sonnet`, `gemini-2.5-pro`, etc.
 - This project is a HarmonyOS PDF reader built with ArkTS and ArkUI for phones, tablets, and 2-in-1 devices.
 - Treat ArkTS like strict TypeScript: keep types explicit, avoid untyped patterns, and prefer clear async/await flows.
-- Initial syntax diagnostics from VS Code OpenHarmony tooling may be false positives; prefer HarmonyOS and DevEco Studio behavior when they disagree.
+- For HarmonyOS related questions, ALWAYS search the local `HarmonyOS-Developer-Docs/` guides and references before relying on general knowledge.
+- The local `HarmonyOS-Developer-Docs/` is a copy of the online documentation, so it is up to date and complete, performing web search over the online version is strictly prohibited, and is considered a violation of the rules.
+- Initial syntax diagnostics from OpenHarmony tooling may be false positives; prefer HarmonyOS and DevEco Studio behavior when they disagree.
+- To actually checks for syntatical correctness and build errors, always use `.\build.ps1` to build the project.
 - Keep UI text and code comments in Simplified Chinese. Keep variable, function, type, and file-level identifiers in English.
-- Use `hilog` for logging. Wrap async operations in `try/catch`, and use `AlertDialog` for user-facing failures when recovery or feedback is needed.
-- Respect viewer memory behavior: evict page caches when content scrolls away, and prefer existing prefetch and eviction helpers over ad-hoc cache logic.
-- For HarmonyOS API questions, search the local `HarmonyOS-Developer-Docs/` guides and references before relying on general knowledge.
-- Key entry points are `entry/src/main/ets/entryability/EntryAbility.ets`, `entry/src/main/ets/pages/Index.ets`, and `entry/src/main/ets/pages/PDFView.ets`.

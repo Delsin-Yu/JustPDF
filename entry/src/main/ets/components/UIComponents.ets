@@ -188,6 +188,8 @@ export struct StyleIconButton {
   @Param label: string = '';
   @Param onClickCallback: () => void = () => {
   };
+  @Param onTouchDownCallback: () => void = () => {
+  };
   @Param alternateColor: ResourceColor | undefined = undefined;
   @Param backgroundAnimationDurationMs: number = 0;
   @Param menuElement: MenuElement[] | undefined = undefined;
@@ -211,6 +213,11 @@ export struct StyleIconButton {
       backgroundColor: ButtonColor,
       outlineColor: Color.Transparent,
       placement: this.menuPlacement
+    })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.onTouchDownCallback();
+      }
     })
     .onClick(() => this.onClickCallback())
   }

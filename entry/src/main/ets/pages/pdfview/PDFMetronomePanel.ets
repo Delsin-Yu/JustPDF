@@ -149,6 +149,8 @@ export struct PDFMetronomePanelContent {
   @Param showDragHandle: boolean = true;
   @Event onInteraction: () => void = () => {
   };
+  @Event onTouchStateChanged: (active: boolean) => void = (_active: boolean) => {
+  };
   @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {
   };
   @Event onHostDragStart: () => void = () => {
@@ -610,6 +612,9 @@ export struct PDFMetronomePanelContent {
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.onInteraction();
+        this.onTouchStateChanged(true);
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.onTouchStateChanged(false);
       }
     })
     .onAreaChange((_oldValue: Area, newValue: Area) => {
