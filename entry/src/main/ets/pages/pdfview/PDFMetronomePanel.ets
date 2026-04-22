@@ -170,6 +170,8 @@ export struct PDFMetronomePanelContent {
   @Event onClose: () => void = () => {
   };
   private tempoDialogOpen: boolean = false;
+  @Local showBpmPresetPopup: boolean = false;
+  @Local showTimeSignaturePresetPopup: boolean = false;
   tempoInputDialogController: CustomDialogController = new CustomDialogController({
     builder: TempoInputDialogBuilder()
   });
@@ -307,6 +309,25 @@ export struct PDFMetronomePanelContent {
   private applyTempoInputValue(value: number): void {
     this.controller?.setBpm(value);
     this.handleTempoDialogClosed();
+  }
+
+  @Builder
+  private buildPopupMenu(items: MenuElement[], onSelected: () => void) {
+    Menu() {
+      ForEach(items, (item: MenuElement, index: number) => {
+        MenuItem({
+          content: item.value,
+          startIcon: item.icon,
+          symbolStartIcon: item.symbolIcon
+        })
+          .enabled(item.enabled ?? true)
+          .onClick(() => {
+            item.action();
+            onSelected();
+          });
+      }, (_item: MenuElement, index: number) => `metronome-popup-item-${index}`);
+    }
+    .backgroundColor(ButtonColor)
   }
 
   build() {
@@ -507,10 +528,22 @@ export struct PDFMetronomePanelContent {
                   .width(this.useDocked ? '100%' : 'auto')
                   .fontColor(Color.White)
                   .backgroundColor('rgba(255, 255, 255, 0.1)')
-                  .bindMenu(this.controller?.getBpmMenu() ?? [], {
-                    backgroundColor: ButtonColor,
-                    outlineColor: Color.Transparent,
-                    placement: Placement.BottomRight
+                  .onClick(() => {
+                    this.showBpmPresetPopup = true;
+                  })
+                  .bindPopup(this.showBpmPresetPopup, {
+                    builder: () => {
+                      this.buildPopupMenu(this.controller?.getBpmMenu() ?? [], () => {
+                        this.showBpmPresetPopup = false;
+                      });
+                    },
+                    placement: Placement.BottomRight,
+                    autoCancel: true,
+                    showInSubWindow: false,
+                    followTransformOfTarget: true,
+                    onStateChange: (event) => {
+                      this.showBpmPresetPopup = event.isVisible;
+                    }
                   })
 
                 Button('+10')
@@ -533,10 +566,22 @@ export struct PDFMetronomePanelContent {
                 .fontSize(13)
                 .fontColor(Color.White)
                 .backgroundColor('rgba(255, 255, 255, 0.1)')
-                .bindMenu(this.controller?.getTimeSignatureMenu() ?? [], {
-                  backgroundColor: ButtonColor,
-                  outlineColor: Color.Transparent,
-                  placement: Placement.BottomRight
+                .onClick(() => {
+                  this.showTimeSignaturePresetPopup = true;
+                })
+                .bindPopup(this.showTimeSignaturePresetPopup, {
+                  builder: () => {
+                    this.buildPopupMenu(this.controller?.getTimeSignatureMenu() ?? [], () => {
+                      this.showTimeSignaturePresetPopup = false;
+                    });
+                  },
+                  placement: Placement.BottomRight,
+                  autoCancel: true,
+                  showInSubWindow: false,
+                  followTransformOfTarget: true,
+                  onStateChange: (event) => {
+                    this.showTimeSignaturePresetPopup = event.isVisible;
+                  }
                 })
             }
 
