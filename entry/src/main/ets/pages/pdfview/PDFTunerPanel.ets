@@ -447,16 +447,16 @@ export struct PDFTunerPanelContent {
                     values: this.getReferenceNoteValues(),
                     labels: this.getReferenceNoteLabels(),
                     canLoop: true,
-                    valueFontSize: 32,
+                    valueFontSize: 40,
                     debounceMs: 100,
                     onValueChange: (value: number) => {
                       this.handleReferenceNoteChanged(value);
                     },
-                    itemHeight: 34,
+                    itemHeight: 40,
                     gradientHeight: 30,
                   })
                     .width(168)
-                    .height(92)
+                    .height(96)
                 } else {
                   Text(this.getFormattedDetectedNote())
                     .fontSize(40)
@@ -535,7 +535,7 @@ export struct PDFTunerPanelContent {
           .borderRadius(18)
           .backgroundColor("rgba(255, 255, 255, 0.08)")
           .border({ width: 1, color: "rgba(255, 255, 255, 0.05)" })
-        }
+        }.visibility(this.isReferenceToneEnabled() ? Visibility.None : Visibility.Visible)
         GridItem() {
           Text("参考频率")
             .fontSize(12)
@@ -678,7 +678,7 @@ export struct PDFTunerPanelContent {
                 this.controller?.setMicrophoneGain(value);
               })
           }.width("100%")
-        }
+        }.visibility(this.isReferenceToneEnabled() ? Visibility.None : Visibility.Visible)
       }
       .columnsTemplate("1fr 1fr")
       .columnsGap(10)
