@@ -3,7 +3,8 @@ export struct ScrollSpinBox {
   @Prop value: number = 0;
   @Prop itemHeight: number | undefined = 0;
   @Prop gradientHeight: Dimension | undefined = 0;
-  values: number[] = [];
+  @Prop values: number[] = [];
+  @Prop labels: string[] = [];
   canLoop: boolean = false;
   min: number = 0;
   max: number = 100;
@@ -21,6 +22,9 @@ export struct ScrollSpinBox {
 
   private getPickerRange(): string[] {
     if (this.values.length > 0) {
+      if (this.labels.length === this.values.length) {
+        return this.labels;
+      }
       return this.values.map((item: number) => `${item}`);
     }
 

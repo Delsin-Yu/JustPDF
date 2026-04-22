@@ -1,5 +1,12 @@
-import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ContainerPadding, toVisibility } from '../../components/UIComponents';
+import { ScrollSpinBox } from "../../components/ScrollSpinBox";
+import { ButtonColor, ContainerPadding, getCheckIcon, toVisibility } from "../../components/UIComponents";
+import { SymbolGlyphModifier } from '@kit.ArkUI';
+import { uiEffect } from '@kit.ArkGraphics2D';
+import {
+  SharedPanelBackgroundBlurRadius,
+  SharedPanelBackgroundColor,
+  SharedPanelControlHighlightColor,
+} from './PDFPanelVisualConstants';
 
 const TunerWindowMargin: number = 16;
 const TunerWindowWidth: number = 360;
@@ -14,11 +21,85 @@ const TunerHeaderDragMaxWidth: Length = `calc(100% - ${TunerHeaderCloseButtonWid
 const TunerDefaultOffsetX: number = 24;
 const TunerDefaultOffsetY: number = 112;
 const TunerMeterSegments: number = 11;
+const TunerSpectrumBars: number = 20;
+
+type TunerNoteDisplayMode = "standard" | "sharp" | "flat";
+type TunerNoteNamingMode = "pitch" | "solfege";
 
 interface FloatingTunerOffset {
   x: number;
   y: number;
 }
+
+interface TunerNoteDisplayModeOption {
+  mode: TunerNoteDisplayMode;
+  label: string;
+  notes: string[];
+}
+
+interface TunerNoteNamingModeOption {
+  mode: TunerNoteNamingMode;
+  label: string;
+}
+
+interface TunerSolfegeDisplayModeSet {
+  standard: string[];
+  sharp: string[];
+  flat: string[];
+}
+
+const TunerNoteDisplayModes: TunerNoteDisplayModeOption[] = [
+  {
+    mode: "standard",
+    label: "标准",
+    notes: ["C", "C #", "D", "E b", "E", "F", "G b", "G", "G #", "A", "B b", "B"],
+  },
+  {
+    mode: "sharp",
+    label: "升号",
+    notes: ["C", "C #", "D", "D #", "E", "F", "F #", "G", "G #", "A", "A #", "B"],
+  },
+  {
+    mode: "flat",
+    label: "降号",
+    notes: ["C", "D b", "D", "E b", "E", "F b", "G b", "A b", "A", "B b", "C b", "D b"],
+  },
+];
+
+const TunerSolfegeDisplayModes: TunerSolfegeDisplayModeSet = {
+  standard: ["Do", "Do #", "Re", "Mi b", "Mi", "Fa", "Sol b", "Sol", "Sol #", "La", "Si b", "Si"],
+  sharp: ["Do", "Do #", "Re", "Re #", "Mi", "Fa", "Fa #", "Sol", "Sol #", "La", "La #", "Si"],
+  flat: ["Do", "Re b", "Re", "Mi b", "Mi", "Fa b", "Sol b", "La b", "La", "Si b", "Do b", "Do"],
+};
+
+const TunerNoteNamingModes: TunerNoteNamingModeOption[] = [
+  { mode: "pitch", label: "音高" },
+  { mode: "solfege", label: "唱名" },
+];
+
+const TunerNoteSemitoneMap: Record<string, number> = {
+  "C": 0,
+  "B#": 0,
+  "C#": 1,
+  "Db": 1,
+  "D": 2,
+  "D#": 3,
+  "Eb": 3,
+  "E": 4,
+  "Fb": 4,
+  "E#": 5,
+  "F": 5,
+  "F#": 6,
+  "Gb": 6,
+  "G": 7,
+  "G#": 8,
+  "Ab": 8,
+  "A": 9,
+  "A#": 10,
+  "Bb": 10,
+  "B": 11,
+  "Cb": 11,
+};
 
 function clampFloatingTunerScale(scale: number): number {
   return Math.max(FloatingTunerMinScale, Math.min(FloatingTunerMaxScale, scale));
@@ -27,7 +108,6 @@ function clampFloatingTunerScale(scale: number): number {
 export function getFloatingTunerTotalWidth(scale: number): number {
   return TunerTotalWidth * clampFloatingTunerScale(scale);
 }
-
 @ComponentV2
 export struct PDFTunerPanelContent {
   @Param useDocked: boolean = false;
@@ -35,173 +115,247 @@ export struct PDFTunerPanelContent {
   @Param hostScale: number = FloatingTunerDefaultScale;
   @Param hostOffset: FloatingTunerOffset = { x: TunerDefaultOffsetX, y: TunerDefaultOffsetY };
   @Param showDragHandle: boolean = true;
-  @Event onInteraction: () => void = () => {
-  };
-  @Event onTouchStateChanged: (active: boolean) => void = (_active: boolean) => {
-  };
-  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {
-  };
-  @Event onHostDragStart: () => void = () => {
-  };
-  @Event onHostDragUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {
-  };
-  @Event onHostDragEnd: () => void = () => {
-  };
-  @Event onHostPinchStart: () => void = () => {
-  };
-  @Event onHostPinchUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {
-  };
-  @Event onHostPinchEnd: () => void = () => {
-  };
-  @Event onClose: () => void = () => {
-  };
-  @Local mockDetectedNote: string = 'A4';
+  @Event onInteraction: () => void = () => {};
+  @Event onTouchStateChanged: (active: boolean) => void = (_active: boolean) => {};
+  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {};
+  @Event onHostDragStart: () => void = () => {};
+  @Event onHostDragUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {};
+  @Event onHostDragEnd: () => void = () => {};
+  @Event onHostPinchStart: () => void = () => {};
+  @Event onHostPinchUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {};
+  @Event onHostPinchEnd: () => void = () => {};
+  @Event onClose: () => void = () => {};
+  @Local mockDetectedNote: string = "A4";
+  @Local mockNoteDisplayMode: TunerNoteDisplayMode = "standard";
+  @Local mockNoteNamingMode: TunerNoteNamingMode = "pitch";
   @Local mockDetuneCents: number = 3;
   @Local mockReferenceHz: number = 440;
-  @Local mockModeIndex: number = 0;
-  @Local mockSelectedStringIndex: number = 0;
-  @Local mockSensitivity: number = 2;
-  @Local mockMonitoringEnabled: boolean = true;
-  @Local mockHoldEnabled: boolean = false;
-
-  private getModeOptions(): string[] {
-    return ['自动', '吉他', '尤克里里'];
-  }
-
-  private getStringOptions(): string[] {
-    switch (this.mockModeIndex) {
-      case 1:
-        return ['E2', 'A2', 'D3', 'G3', 'B3', 'E4'];
-      case 2:
-        return ['G4', 'C4', 'E4', 'A4'];
-      default:
-        return ['C3', 'D3', 'E3', 'F3', 'G3', 'A3'];
-    }
-  }
-
-  private clampStringIndex(): void {
-    const optionsLength: number = this.getStringOptions().length;
-    if (optionsLength <= 0) {
-      this.mockSelectedStringIndex = 0;
-      return;
-    }
-
-    if (this.mockSelectedStringIndex >= optionsLength) {
-      this.mockSelectedStringIndex = optionsLength - 1;
-    }
-  }
-
-  private selectMode(index: number): void {
-    if (this.mockModeIndex === index) {
-      return;
-    }
-
-    this.mockModeIndex = index;
-    this.clampStringIndex();
-    this.mockDetectedNote = this.getStringOptions()[this.mockSelectedStringIndex] ?? 'A4';
-  }
-
-  private selectString(index: number): void {
-    this.mockSelectedStringIndex = index;
-    this.mockDetectedNote = this.getStringOptions()[index] ?? this.mockDetectedNote;
-    const centsPattern: number[] = [-18, -9, -3, 0, 4, 11];
-    this.mockDetuneCents = centsPattern[index % centsPattern.length];
-  }
-
-  private adjustMockDetune(delta: number): void {
-    this.mockDetuneCents = Math.max(-50, Math.min(50, this.mockDetuneCents + delta));
-  }
-
-  private setMockDetune(value: number): void {
-    this.mockDetuneCents = Math.max(-50, Math.min(50, value));
-  }
+  @Local mockTransposeIndex: number = 0;
+  @Local mockSensitivity: number = 0.65;
+  private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
+    .fontSize('18vp')
+    .padding('2vp');
+  private readonly panelBackgroundBlurFilter: uiEffect.Filter =
+    uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
+  private readonly tunerGridLayout: GridLayoutOptions = {
+    regularSize: [1, 1],
+    irregularIndexes: [0, 1, 2, 9],
+    onGetIrregularSizeByIndex: (): [number, number] => [1, 2],
+  };
 
   private getDetuneSummary(): string {
     if (Math.abs(this.mockDetuneCents) <= 1) {
-      return '音高稳定';
+      return "音高稳定";
     }
-    return this.mockDetuneCents > 0 ? '略高' : '略低';
+    return this.mockDetuneCents > 0 ? "略高" : "略低";
   }
 
   private getDetuneColor(): string {
     if (Math.abs(this.mockDetuneCents) <= 4) {
-      return '#42D392';
+      return "#42D392";
     }
     if (Math.abs(this.mockDetuneCents) <= 12) {
-      return '#FFB347';
+      return "#FFB347";
     }
-    return '#FF7A7A';
+    return "#FF7A7A";
   }
 
   private getMeterSegmentColor(index: number): string {
     const centeredIndex: number = Math.floor(TunerMeterSegments / 2);
-    const activeIndex: number = Math.max(0,
-      Math.min(TunerMeterSegments - 1, Math.round((this.mockDetuneCents + 50) / 100 * (TunerMeterSegments - 1))));
+    const activeIndex: number = Math.max(
+      0,
+      Math.min(
+        TunerMeterSegments - 1,
+        Math.round(((this.mockDetuneCents + 50) / 100) * (TunerMeterSegments - 1)),
+      ),
+    );
     if (index === centeredIndex) {
-      return Math.abs(this.mockDetuneCents) <= 4 ? '#42D392' : 'rgba(255, 255, 255, 0.16)';
+      return Math.abs(this.mockDetuneCents) <= 4 ? "#42D392" : "rgba(255, 255, 255, 0.16)";
     }
-    if ((this.mockDetuneCents < 0 && index >= activeIndex && index < centeredIndex)
-      || (this.mockDetuneCents > 0 && index <= activeIndex && index > centeredIndex)) {
+    if (
+      (this.mockDetuneCents < 0 && index >= activeIndex && index < centeredIndex) ||
+      (this.mockDetuneCents > 0 && index <= activeIndex && index > centeredIndex)
+    ) {
       return this.getDetuneColor();
     }
-    return 'rgba(255, 255, 255, 0.12)';
+    return "rgba(255, 255, 255, 0.12)";
+  }
+
+  private getSpectrumBarHeight(index: number): number {
+    const center: number = (TunerSpectrumBars - 1) / 2;
+    const distanceRatio: number = Math.abs(index - center) / center;
+    const envelope: number = Math.max(0.2, 1 - distanceRatio * 0.75);
+    const wave: number = 0.58 + 0.42 * Math.sin(index * 0.7 + this.mockDetuneCents * 0.08);
+    const sensitivityGain: number = 0.45 + this.mockSensitivity * 0.55;
+    return 10 + envelope * wave * sensitivityGain * 48;
+  }
+
+  private getReferencePresetMenu(): MenuElement[] {
+    const presets: number[] = [415, 430, 432, 440, 442, 445];
+    return presets.map(
+      (preset: number): MenuElement => ({
+        value: `${preset} Hz`,
+        action: () => {
+          this.mockReferenceHz = preset;
+        },
+      }),
+    );
+  }
+
+  private getCurrentNoteDisplayMode(): TunerNoteDisplayModeOption {
+    return TunerNoteDisplayModes.find(
+      (option: TunerNoteDisplayModeOption) => option.mode === this.mockNoteDisplayMode,
+    ) ?? TunerNoteDisplayModes[0];
+  }
+
+  private getCurrentTransposeNotes(): string[] {
+    if (this.mockNoteNamingMode === "pitch") {
+      return this.getCurrentNoteDisplayMode().notes;
+    }
+    if (this.mockNoteDisplayMode === "standard") {
+      return TunerSolfegeDisplayModes.standard;
+    }
+    if (this.mockNoteDisplayMode === "sharp") {
+      return TunerSolfegeDisplayModes.sharp;
+    }
+    return TunerSolfegeDisplayModes.flat;
+  }
+
+  private getFormattedDetectedNote(): string {
+    const match: RegExpMatchArray | null = this.mockDetectedNote.match(/^([A-G](?:#|b)?)(.*)$/);
+    if (match === null) {
+      return this.mockDetectedNote;
+    }
+    const sourceNote: string = match[1];
+    const suffix: string = match[2];
+    const semitone: number | undefined = TunerNoteSemitoneMap[sourceNote];
+    if (semitone === undefined) {
+      return this.mockDetectedNote;
+    }
+    const displayNote: string = this.getCurrentTransposeNotes()[semitone] ?? sourceNote;
+    return `${displayNote}${suffix}`;
+  }
+
+  private getTransposePresetMenu(): MenuElement[] {
+    return this.getCurrentTransposeNotes().map(
+      (note: string, index: number): MenuElement => ({
+        value: note,
+        action: () => {
+          this.mockTransposeIndex = index;
+        },
+      }),
+    );
+  }
+
+  private getNoteDisplayModeMenu(): MenuElement[] {
+    return TunerNoteDisplayModes.map(
+      (option: TunerNoteDisplayModeOption): MenuElement => ({
+        value: option.label,
+        action: () => {
+          this.mockNoteDisplayMode = option.mode;
+        },
+        symbolIcon: getCheckIcon(this.mockNoteDisplayMode === option.mode),
+      }),
+    );
+  }
+
+  private getNoteNamingModeMenu(): MenuElement[] {
+    return TunerNoteNamingModes.map(
+      (option: TunerNoteNamingModeOption): MenuElement => ({
+        value: option.label,
+        action: () => {
+          this.mockNoteNamingMode = option.mode;
+        },
+        symbolIcon: getCheckIcon(this.mockNoteNamingMode === option.mode),
+      }),
+    );
   }
 
   @Builder
-  private buildCapsuleButton(label: string, isActive: boolean, onClick: () => void, height: number = 34,
-    fillWidth: boolean = false) {
-    Button(label)
-      .type(ButtonType.Capsule)
-      .height(height)
-      .width(fillWidth ? '100%' : 'auto')
-      .fontSize(13)
-      .fontWeight(isActive ? FontWeight.Bold : FontWeight.Regular)
-      .fontColor(Color.White)
-      .backgroundColor(isActive ? 'rgba(77, 166, 255, 0.28)' : 'rgba(255, 255, 255, 0.1)')
-      .border({ width: 1, color: isActive ? 'rgba(77, 166, 255, 0.45)' : 'rgba(255, 255, 255, 0.05)' })
-      .onClick(onClick)
+  private buildLeafMenu(items: MenuElement[]) {
+    ForEach(items, (item: MenuElement, index: number) => {
+      MenuItem({
+        content: item.value,
+        startIcon: item.icon,
+        symbolStartIcon: item.symbolIcon,
+      })
+        .enabled(item.enabled ?? true)
+        .onClick(() => item.action());
+    }, (_item: MenuElement, index: number) => index.toString());
+  }
+
+  @Builder
+  private buildSubMenu(items: MenuElement[]) {
+    Menu() {
+      this.buildLeafMenu(items);
+    }
+    .backgroundColor(ButtonColor)
+  }
+
+  @Builder
+  private buildNestedModeMenu() {
+    Menu() {
+      MenuItem({
+        content: "升降",
+        symbolEndIcon: this.submenuArrowIcon,
+        builder: (): void => this.buildSubMenu(this.getNoteDisplayModeMenu()),
+      });
+      MenuItem({
+        content: "音名",
+        symbolEndIcon: this.submenuArrowIcon,
+        builder: (): void => this.buildSubMenu(this.getNoteNamingModeMenu()),
+      });
+    }
+    .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND);
   }
 
   build() {
-    Column({ space: 14 }) {
+    Column() {
+      Grid(undefined, this.tunerGridLayout) {
+        GridItem() {
           Row({ space: TunerHeaderGap }) {
             Row({ space: this.useDocked ? 0 : 10 }) {
               Column({ space: 3 }) {
                 Row({ space: 3 }) {
-                  ForEach([0, 1, 2, 3], (index: number) => {
-                    Text('')
-                      .width(4)
-                      .height(4)
-                      .borderRadius(2)
-                      .backgroundColor('rgba(255, 255, 255, 0.26)')
-                  }, (index: number) => `tuner-drag-grip-top-${index}`)
+                  ForEach(
+                    [0, 1, 2, 3],
+                    (index: number) => {
+                      Text("")
+                        .width(4)
+                        .height(4)
+                        .borderRadius(2)
+                        .backgroundColor("rgba(255, 255, 255, 0.26)");
+                    },
+                    (index: number) => `tuner-drag-grip-top-${index}`,
+                  )
                 }
-
                 Row({ space: 3 }) {
-                  ForEach([0, 1, 2, 3], (index: number) => {
-                    Text('')
-                      .width(4)
-                      .height(4)
-                      .borderRadius(2)
-                      .backgroundColor('rgba(255, 255, 255, 0.16)')
-                  }, (index: number) => `tuner-drag-grip-bottom-${index}`)
+                  ForEach(
+                    [0, 1, 2, 3],
+                    (index: number) => {
+                      Text("")
+                        .width(4)
+                        .height(4)
+                        .borderRadius(2)
+                        .backgroundColor("rgba(255, 255, 255, 0.16)");
+                    },
+                    (index: number) => `tuner-drag-grip-bottom-${index}`,
+                  )
                 }
-              }
-              .visibility(toVisibility(this.showDragHandle && !this.useDocked))
-
-              Text('调音器')
+              }.visibility(toVisibility(this.showDragHandle && !this.useDocked))
+              Text("调音器")
                 .fontSize(18)
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Color.White)
             }
-            .height('auto')
-            .width('100%')
+            .height("auto")
+            .width("100%")
             .constraintSize({ maxWidth: TunerHeaderDragMaxWidth })
             .padding(ContainerPadding)
             .alignItems(VerticalAlign.Center)
             .borderRadius(10)
-            .backgroundColor('rgba(255, 255, 255, 0.05)')
-            .border({ width: 1, color: 'rgba(255, 255, 255, 0.06)' })
+            .backgroundColor("rgba(255, 255, 255, 0.05)")
+            .border({ width: 1, color: "rgba(255, 255, 255, 0.06)" })
             .gesture(
               PanGesture({ fingers: 1, distance: FloatingTunerDragDistanceVp })
                 .onActionStart((_event: GestureEvent) => {
@@ -227,11 +381,10 @@ export struct PDFTunerPanelContent {
                     return;
                   }
                   this.onHostDragEnd();
-                })
+                }),
             )
-
             Button({ type: ButtonType.Normal }) {
-              SymbolGlyph($r('sys.symbol.xmark'))
+              SymbolGlyph($r("sys.symbol.xmark"))
                 .fontSize(14)
                 .fontWeight(FontWeight.Bold)
                 .fontColor([Color.White])
@@ -239,203 +392,234 @@ export struct PDFTunerPanelContent {
             .width(TunerHeaderCloseButtonWidth)
             .height(LayoutPolicy.matchParent)
             .borderRadius(10)
-            .backgroundColor('rgba(255, 255, 255, 0.16)')
+            .backgroundColor("rgba(255, 255, 255, 0.16)")
             .onClick(() => this.onClose())
           }
-          .width('100%')
+          .width("100%")
           .hitTestBehavior(HitTestMode.Default)
-
-          Column({ space: 12 }) {
-            Column({ space: 4 }) {
-              Text(this.mockDetectedNote)
-                .fontSize(40)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Color.White)
-
-              Text(`${this.mockDetuneCents > 0 ? '+' : ''}${this.mockDetuneCents} cents`)
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(this.getDetuneColor())
-
-              Text(this.getDetuneSummary())
-                .fontSize(12)
-                .fontColor('rgba(255, 255, 255, 0.54)')
-            }
-            .width('100%')
-            .padding({ top: 6, bottom: 6 })
-            .alignItems(HorizontalAlign.Center)
-
-            Column({ space: 8 }) {
-              Row({ space: 6 }) {
-                Text('-50')
-                  .fontSize(11)
-                  .fontColor('rgba(255, 255, 255, 0.4)')
-
-                Blank().layoutWeight(1)
-
-                Text('0')
-                  .fontSize(11)
-                  .fontColor('rgba(255, 255, 255, 0.52)')
-
-                Blank().layoutWeight(1)
-
-                Text('+50')
-                  .fontSize(11)
-                  .fontColor('rgba(255, 255, 255, 0.4)')
-              }
-              .width('100%')
-
-              Row({ space: 6 }) {
-                ForEach(Array.from({ length: TunerMeterSegments }, (_value: number, index: number) => index),
-                  (index: number) => {
-                    Column() {}
-                      .layoutWeight(1)
-                      .height(index === Math.floor(TunerMeterSegments / 2) ? 36 : 24)
-                      .borderRadius(6)
-                      .backgroundColor(this.getMeterSegmentColor(index))
-                  }, (index: number) => `tuner-meter-${index}`)
-              }
-              .width('100%')
-
-              Row({ space: 8 }) {
-                this.buildCapsuleButton('-5c', false, () => this.adjustMockDetune(-5))
-                this.buildCapsuleButton('居中', Math.abs(this.mockDetuneCents) <= 1, () => this.setMockDetune(0))
-                this.buildCapsuleButton('+5c', false, () => this.adjustMockDetune(5))
-              }
-              .width('100%')
-            }
-            .padding(14)
-            .borderRadius(18)
-            .backgroundColor('rgba(255, 255, 255, 0.08)')
-            .border({ width: 1, color: 'rgba(255, 255, 255, 0.05)' })
-
-            Column({ space: 8 }) {
-              Row() {
-                Text('参考频率')
-                  .fontSize(12)
-                  .fontColor('rgba(255, 255, 255, 0.62)')
-
-                Blank()
-
-                Text(`${this.mockReferenceHz} Hz`)
-                  .fontSize(12)
-                  .fontColor('rgba(255, 255, 255, 0.46)')
-              }
-              .width('100%')
-
-              ScrollSpinBox({
-                value: this.mockReferenceHz,
-                canLoop: false,
-                min: 430,
-                max: 450,
-                step: 1,
-                valueFontSize: 28,
-                debounceMs: 100,
-                onValueChange: (value: number) => {
-                  this.mockReferenceHz = value;
-                },
-                itemHeight: 26,
-                gradientHeight: 32
-              })
-                .width('100%')
-                .height(96)
-                .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-                .borderRadius(16)
-                .backgroundColor('rgba(255, 255, 255, 0.12)')
-            }
-
-            Column({ space: 8 }) {
-              Text('模式')
-                .fontSize(12)
-                .fontColor('rgba(255, 255, 255, 0.62)')
-                .width('100%')
-                .textAlign(TextAlign.Start)
-
-              Row({ space: 8 }) {
-                ForEach(this.getModeOptions(), (label: string, index: number) => {
-                  Column() {
-                    this.buildCapsuleButton(label, this.mockModeIndex === index, () => this.selectMode(index), 34, true)
-                  }
-                    .layoutWeight(1)
-                }, (label: string) => `tuner-mode-${label}`)
-              }
-              .width('100%')
-            }
-
-            Column({ space: 8 }) {
-              Text('弦位预设')
-                .fontSize(12)
-                .fontColor('rgba(255, 255, 255, 0.62)')
-                .width('100%')
-                .textAlign(TextAlign.Start)
-
-              Grid() {
-                ForEach(this.getStringOptions(), (label: string, index: number) => {
-                  GridItem() {
-                    this.buildCapsuleButton(label, this.mockSelectedStringIndex === index, () => this.selectString(index), 34, true)
-                  }
-                }, (label: string) => `tuner-string-${label}`)
-              }
-              .columnsTemplate('1fr 1fr 1fr')
-              .columnsGap(8)
-              .rowsGap(8)
-              .width('100%')
-              .height(LayoutPolicy.wrapContent)
-            }
-
-            Column({ space: 8 }) {
-              Text('灵敏度')
-                .fontSize(12)
-                .fontColor('rgba(255, 255, 255, 0.62)')
-                .width('100%')
-                .textAlign(TextAlign.Start)
-
-              Row({ space: 8 }) {
-                ForEach(['低', '中', '高'], (label: string, index: number) => {
-                  Column() {
-                    this.buildCapsuleButton(label, this.mockSensitivity === index, () => {
-                      this.mockSensitivity = index;
-                    }, 34, true)
-                  }
-                    .layoutWeight(1)
-                }, (label: string) => `tuner-sensitivity-${label}`)
-              }
-              .width('100%')
-            }
-
-            Row({ space: 8 }) {
-              Column() {
-                this.buildCapsuleButton(this.mockMonitoringEnabled ? '监听中' : '开始监听', this.mockMonitoringEnabled, () => {
-                  this.mockMonitoringEnabled = !this.mockMonitoringEnabled;
-                }, 40, true)
-              }
-                .layoutWeight(1)
-
-              Column() {
-                this.buildCapsuleButton(this.mockHoldEnabled ? '已保持' : '保持读数', this.mockHoldEnabled, () => {
-                  this.mockHoldEnabled = !this.mockHoldEnabled;
-                }, 40, true)
-              }
-                .layoutWeight(1)
-            }
-            .width('100%')
+        }
+        GridItem() {
+          Column({ space: 4 }) {
+            Text(this.getFormattedDetectedNote())
+              .fontSize(40)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(Color.White)
+            Text(`${this.mockDetuneCents > 0 ? "+" : ""}${this.mockDetuneCents} cents`)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.getDetuneColor())
+            Text(this.getDetuneSummary())
+              .fontSize(12)
+              .fontColor("rgba(255, 255, 255, 0.54)")
           }
-          .width('100%')
-          .height(LayoutPolicy.wrapContent)
+          .width("100%")
+          .padding({ top: 12, bottom: 12 })
+          .alignItems(HorizontalAlign.Center)
+          .borderRadius(18)
+          .backgroundColor("rgba(255, 255, 255, 0.05)")
+          .border({ width: 1, color: "rgba(255, 255, 255, 0.05)" })
+        }
+        GridItem() {
+          Column({ space: 8 }) {
+            Row({ space: 6 }) {
+              Text("-50")
+                .fontSize(11)
+                .fontColor("rgba(255, 255, 255, 0.4)")
+              Blank().layoutWeight(1)
+              Text("0")
+                .fontSize(11)
+                .fontColor("rgba(255, 255, 255, 0.52)")
+              Blank().layoutWeight(1)
+              Text("+50")
+                .fontSize(11)
+                .fontColor("rgba(255, 255, 255, 0.4)")
+            }.width("100%")
+            Row({ space: 6 }) {
+              ForEach(
+                Array.from(
+                  { length: TunerMeterSegments },
+                  (_value: number, index: number) => index,
+                ),
+                (index: number) => {
+                  Column()
+                    .layoutWeight(1)
+                    .height(index === Math.floor(TunerMeterSegments / 2) ? 36 : 24)
+                    .borderRadius(6)
+                    .backgroundColor(this.getMeterSegmentColor(index));
+                },
+                (index: number) => `tuner-meter-${index}`,
+              )
+            }.width("100%")
+          }
+          .padding(14)
+          .borderRadius(18)
+          .backgroundColor("rgba(255, 255, 255, 0.08)")
+          .border({ width: 1, color: "rgba(255, 255, 255, 0.05)" })
+        }
+        GridItem() {
+          Text("参考频率")
+            .fontSize(12)
+            .fontColor("rgba(255, 255, 255, 0.62)")
+            .width("100%")
+            .textAlign(TextAlign.Start)
+        }
+        GridItem() {
+          Text("移调")
+            .fontSize(12)
+            .fontColor("rgba(255, 255, 255, 0.62)")
+            .width("100%")
+            .textAlign(TextAlign.Start)
+        }
+        GridItem() {
+          ScrollSpinBox({
+            value: this.mockReferenceHz,
+            canLoop: false,
+            min: 430,
+            max: 450,
+            step: 1,
+            valueFontSize: 28,
+            debounceMs: 100,
+            onValueChange: (value: number) => {
+              this.mockReferenceHz = value;
+            },
+            itemHeight: 26,
+            gradientHeight: 32,
+          })
+            .width("100%")
+            .height(96)
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .borderRadius(16)
+            .backgroundColor(SharedPanelControlHighlightColor)
+        }
+        GridItem() {
+          ScrollSpinBox({
+            value: this.mockTransposeIndex,
+            values: Array.from(
+              { length: this.getCurrentTransposeNotes().length },
+              (_value: number, index: number) => index,
+            ),
+            labels: this.getCurrentTransposeNotes(),
+            canLoop: true,
+            valueFontSize: 28,
+            debounceMs: 100,
+            onValueChange: (value: number) => {
+              this.mockTransposeIndex = value;
+            },
+            itemHeight: 26,
+            gradientHeight: 32,
+          })
+            .width("100%")
+            .height(96)
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .borderRadius(16)
+            .backgroundColor(SharedPanelControlHighlightColor)
+        }
+        GridItem() {
+          Button("预设")
+            .type(ButtonType.Capsule)
+            .width("100%")
+            .height(34)
+            .fontSize(13)
+            .fontColor(Color.White)
+            .backgroundColor("rgba(255, 255, 255, 0.1)")
+            .bindMenu(this.getReferencePresetMenu(), {
+              backgroundColor: ButtonColor,
+              outlineColor: Color.Transparent,
+              placement: Placement.BottomRight,
+            })
+        }
+        GridItem() {
+          Row({ space: 6 }) {
+            Button("预设")
+              .type(ButtonType.Capsule)
+              .flexGrow(1)
+              .height(34)
+              .fontSize(13)
+              .fontColor(Color.White)
+              .backgroundColor("rgba(255, 255, 255, 0.1)")
+              .bindMenu(this.getTransposePresetMenu(), {
+                backgroundColor: ButtonColor,
+                outlineColor: Color.Transparent,
+                placement: Placement.BottomRight,
+              })
+            Button("模式")
+              .type(ButtonType.Capsule)
+              .flexGrow(1)
+              .height(34)
+              .fontSize(13)
+              .fontColor(Color.White)
+              .backgroundColor("rgba(255, 255, 255, 0.1)")
+              .bindMenu(this.buildNestedModeMenu, {
+                backgroundColor: ButtonColor,
+                outlineColor: Color.Transparent,
+                placement: Placement.BottomRight,
+              })
+          }.width("100%")
+        }
+        GridItem() {
+          Column() {
+            Text("麦克风灵敏度")
+              .fontSize(12)
+              .fontColor("rgba(255, 255, 255, 0.62)")
+              .width("100%")
+              .textAlign(TextAlign.Start)
+              .margin({ bottom: 8 })
+            Row({ space: 4 }) {
+              ForEach(
+                Array.from({ length: TunerSpectrumBars }, (_value: number, index: number) => index),
+                (index: number) => {
+                  Column()
+                    .layoutWeight(1)
+                    .height(this.getSpectrumBarHeight(index))
+                    .borderRadius(3)
+                    .backgroundColor("rgba(77, 166, 255, 0.75)");
+                },
+                (index: number) => `tuner-spectrum-${index}`,
+              )
+            }
+            .width("100%")
+            .height(64)
+            .alignItems(VerticalAlign.Bottom)
+            .padding({ left: 6, right: 6, top: 6, bottom: 0 })
+            .borderRadius(12)
+            .backgroundColor("rgba(255, 255, 255, 0.08)")
+            Slider({
+              value: this.mockSensitivity,
+              min: 0,
+              max: 1,
+              step: 0.01,
+              style: SliderStyle.OutSet,
+            })
+              .width("100%")
+              .selectedColor("rgba(77, 166, 255, 0.9)")
+              .trackColor("rgba(255, 255, 255, 0.2)")
+              .showTips(false)
+              .onChange((value: number, _mode: SliderChangeMode) => {
+                this.mockSensitivity = value;
+              })
+          }.width("100%")
+        }
+      }
+      .columnsTemplate("1fr 1fr")
+      .columnsGap(10)
+      .rowsGap(10)
+      .width("100%")
+      .height(LayoutPolicy.wrapContent)
     }
-    .width(this.useDocked ? '100%' : TunerWindowWidth)
+    .width(this.useDocked ? "100%" : TunerWindowWidth)
     .height(LayoutPolicy.wrapContent)
     .padding(16)
-    .backgroundColor('rgba(8, 10, 14, 0.82)')
+    .backgroundColor(SharedPanelBackgroundColor)
+    .backgroundFilter(this.panelBackgroundBlurFilter)
     .borderRadius({
       topLeft: this.useDocked ? 0 : 18,
       topRight: this.useDocked ? 0 : 18,
       bottomLeft: 18,
-      bottomRight: 18
+      bottomRight: 18,
     })
     .margin(this.useDocked ? 0 : ContainerPadding)
-    .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
-    .shadow({ radius: 16, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
+    .border({ width: 1, color: "rgba(255, 255, 255, 0.07)" })
+    .shadow({ radius: 16, color: "rgba(0, 0, 0, 0.24)", offsetY: 4 })
     .align(Alignment.TopStart)
     .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: -14 })))
     .onTouch((event: TouchEvent) => {
@@ -449,18 +633,21 @@ export struct PDFTunerPanelContent {
     .onAreaChange((_oldValue: Area, newValue: Area) => {
       this.onWindowAreaHeightChanged(newValue.height as number);
     })
-    .scale(this.useDocked ? { x: 1, y: 1 } : { x: this.hostScale, y: this.hostScale, centerX: 0, centerY: 0 })
+    .scale(
+      this.useDocked
+        ? { x: 1, y: 1 }
+        : { x: this.hostScale, y: this.hostScale, centerX: 0, centerY: 0 },
+    )
     .offset(this.useDocked ? { x: 0, y: this.dockedTopOffsetVp } : this.hostOffset)
     .gesture(
       PinchGesture({ fingers: 2 })
         .onActionStart((_event: GestureEvent) => this.onHostPinchStart())
         .onActionUpdate((event: GestureEvent) => this.onHostPinchUpdate(event))
         .onActionEnd((_event: GestureEvent) => this.onHostPinchEnd())
-        .onActionCancel(() => this.onHostPinchEnd())
-    )
+        .onActionCancel(() => this.onHostPinchEnd()),
+    );
   }
 }
-
 @ComponentV2
 export struct PDFTunerPanel {
   @Param showWindow: boolean = false;
@@ -470,17 +657,16 @@ export struct PDFTunerPanel {
   @Param initialFloatingScale: number = FloatingTunerDefaultScale;
   @Param floatingViewportWidthVp: number = 0;
   @Param floatingViewportHeightVp: number = 0;
-  @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {
-  };
-  @Event onInteraction: () => void = () => {
-  };
-  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {
-  };
-  @Event onClose: () => void = () => {
-  };
+  @Event onFloatingScaleChanged: (scale: number) => void = (_scale: number) => {};
+  @Event onInteraction: () => void = () => {};
+  @Event onWindowAreaHeightChanged: (heightVp: number) => void = (_heightVp: number) => {};
+  @Event onClose: () => void = () => {};
   @Local floatingScale: number = FloatingTunerDefaultScale;
   @Local floatingOffset: FloatingTunerOffset = { x: TunerDefaultOffsetX, y: TunerDefaultOffsetY };
-  private floatingDragStartOffset: FloatingTunerOffset = { x: TunerDefaultOffsetX, y: TunerDefaultOffsetY };
+  private floatingDragStartOffset: FloatingTunerOffset = {
+    x: TunerDefaultOffsetX,
+    y: TunerDefaultOffsetY,
+  };
   private pinchStartScale: number = FloatingTunerDefaultScale;
   private floatingPinchActive: boolean = false;
   private floatingWindowAreaWidthVp: number = TunerWindowWidth;
@@ -489,7 +675,10 @@ export struct PDFTunerPanel {
   aboutToAppear(): void {
     this.floatingScale = clampFloatingTunerScale(this.initialFloatingScale);
     this.pinchStartScale = this.floatingScale;
-    this.floatingOffset = this.clampFloatingOffset({ x: TunerDefaultOffsetX, y: TunerDefaultOffsetY });
+    this.floatingOffset = this.clampFloatingOffset({
+      x: TunerDefaultOffsetX,
+      y: TunerDefaultOffsetY,
+    });
     this.floatingDragStartOffset = { x: this.floatingOffset.x, y: this.floatingOffset.y };
   }
 
@@ -517,7 +706,7 @@ export struct PDFTunerPanel {
     const maxY: number = this.floatingViewportHeightVp - scaledHeightVp - TunerWindowMargin;
     return {
       x: Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
-      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY))),
     };
   }
 
@@ -527,8 +716,10 @@ export struct PDFTunerPanel {
 
   private syncFloatingOffsetToBounds(): void {
     const nextOffset = this.getClampedFloatingOffset();
-    if (Math.abs(nextOffset.x - this.floatingOffset.x) < 0.001
-      && Math.abs(nextOffset.y - this.floatingOffset.y) < 0.001) {
+    if (
+      Math.abs(nextOffset.x - this.floatingOffset.x) < 0.001 &&
+      Math.abs(nextOffset.y - this.floatingOffset.y) < 0.001
+    ) {
       return;
     }
 
@@ -563,7 +754,7 @@ export struct PDFTunerPanel {
 
     this.floatingOffset = this.clampFloatingOffset({
       x: this.floatingDragStartOffset.x + event.offsetX * this.floatingScale,
-      y: this.floatingDragStartOffset.y + event.offsetY * this.floatingScale
+      y: this.floatingDragStartOffset.y + event.offsetY * this.floatingScale,
     });
   }
 
@@ -601,16 +792,16 @@ export struct PDFTunerPanel {
         hostOffset: this.getClampedFloatingOffset(),
         showDragHandle: !this.useDocked,
         onInteraction: this.onInteraction,
-        onWindowAreaHeightChanged: (heightVp: number) => this.handleFloatingWindowAreaChange(heightVp),
+        onWindowAreaHeightChanged: (heightVp: number) =>
+          this.handleFloatingWindowAreaChange(heightVp),
         onHostDragStart: () => this.handleFloatingDragStart(),
         onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
         onHostDragEnd: () => this.handleFloatingDragEnd(),
         onHostPinchStart: () => this.handleFloatingPinchStart(),
         onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
         onHostPinchEnd: () => this.handleFloatingPinchEnd(),
-        onClose: this.onClose
-      })
-        .visibility(this.showWindow ? Visibility.Visible : Visibility.None)
-    }
+        onClose: this.onClose,
+      }).visibility(this.showWindow ? Visibility.Visible : Visibility.None)
+    };
   }
 }

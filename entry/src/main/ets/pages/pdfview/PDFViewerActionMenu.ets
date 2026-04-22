@@ -59,7 +59,7 @@ export struct PDFViewerActionMenu {
     Menu() {
       this.buildLeafMenuItems(items)
     }
-      .backgroundColor(ButtonColorSemiTransparent)
+      .backgroundColor(ButtonColor)
   }
 
   @Builder

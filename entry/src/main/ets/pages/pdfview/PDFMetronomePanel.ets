@@ -1,7 +1,9 @@
 import { LengthMetrics } from '@kit.ArkUI';
+import { uiEffect } from '@kit.ArkGraphics2D';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
 import { ButtonColor, ContainerPadding, StyleIconButton, toVisibility } from '../../components/UIComponents';
 import { PDFMetronomeController } from './PDFMetronomeController';
+import { SharedPanelBackgroundBlurRadius, SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
 
 const MetronomeBeatSpacing: Length = `10vp`;
 const MetronomeSpinBoxSettleMs: number = 160;
@@ -173,6 +175,8 @@ export struct PDFMetronomePanelContent {
   });
   private resumeMetronomeAfterInteraction: boolean = false;
   private activeSpinInteractionCount: number = 0;
+  private readonly panelBackgroundBlurFilter: uiEffect.Filter =
+    uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
   metronomeGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [6, 7, 8],
@@ -594,7 +598,8 @@ export struct PDFMetronomePanelContent {
     }
     .width(this.useDocked ? "100%" : MetronomeWindowWidth)
     .padding(16)
-    .backgroundColor('rgba(8, 10, 14, 0.78)')
+    .backgroundColor(SharedPanelBackgroundColor)
+    .backgroundFilter(this.panelBackgroundBlurFilter)
     .borderRadius({
       topLeft: this.useDocked ? 0 : 18,
       topRight: this.useDocked ? 0 : 18,
