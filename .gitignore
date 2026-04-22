@@ -13,3 +13,4 @@
 certs
 entry/patch.json
 build*.ps1
+deploy.ps1
