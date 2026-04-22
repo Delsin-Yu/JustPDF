@@ -6,6 +6,8 @@ const TunerTransposeIndexPreferenceKey: string = 'tunerTransposeIndex';
 const TunerNoteDisplayModePreferenceKey: string = 'tunerNoteDisplayMode';
 const TunerNoteNamingModePreferenceKey: string = 'tunerNoteNamingMode';
 const TunerMicrophoneGainPreferenceKey: string = 'tunerMicrophoneGain';
+const TunerReferenceToneEnabledPreferenceKey: string = 'tunerReferenceToneEnabled';
+const TunerReferenceNoteMidiPreferenceKey: string = 'tunerReferenceNoteMidi';
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -22,6 +24,8 @@ export class PDFTunerController {
   @Trace public noteDisplayMode: TunerNoteDisplayMode = 'standard';
   @Trace public noteNamingMode: TunerNoteNamingMode = 'pitch';
   @Trace public microphoneGain: number = 0.65;
+  @Trace public referenceToneEnabled: boolean = false;
+  @Trace public referenceNoteMidi: number = 69;
 
   initialize(preferenceStore: preferences.Preferences): void {
     this.preferenceStore = preferenceStore;
@@ -75,6 +79,23 @@ export class PDFTunerController {
     this.savePreferences();
   }
 
+  setReferenceToneEnabled(value: boolean): void {
+    if (this.referenceToneEnabled === value) {
+      return;
+    }
+    this.referenceToneEnabled = value;
+    this.savePreferences();
+  }
+
+  setReferenceNoteMidi(value: number): void {
+    const nextValue = this.clampReferenceNoteMidi(value);
+    if (this.referenceNoteMidi === nextValue) {
+      return;
+    }
+    this.referenceNoteMidi = nextValue;
+    this.savePreferences();
+  }
+
   private loadPreferences(preferenceStore: preferences.Preferences): void {
     try {
       this.referenceHz = this.clampReferenceHz(preferenceStore.getSync(TunerReferenceHzPreferenceKey, 440) as number);
@@ -92,6 +113,10 @@ export class PDFTunerController {
       this.microphoneGain = this.clampMicrophoneGain(
         preferenceStore.getSync(TunerMicrophoneGainPreferenceKey, 0.65) as number,
       );
+      this.referenceToneEnabled = !!preferenceStore.getSync(TunerReferenceToneEnabledPreferenceKey, false);
+      this.referenceNoteMidi = this.clampReferenceNoteMidi(
+        preferenceStore.getSync(TunerReferenceNoteMidiPreferenceKey, 69) as number,
+      );
     } catch (error) {
       hilog.error(0, 'PDFTunerController', `加载调音器偏好出错: ${error}.`);
     }
@@ -107,6 +132,8 @@ export class PDFTunerController {
       this.preferenceStore.putSync(TunerNoteDisplayModePreferenceKey, this.noteDisplayMode);
       this.preferenceStore.putSync(TunerNoteNamingModePreferenceKey, this.noteNamingMode);
       this.preferenceStore.putSync(TunerMicrophoneGainPreferenceKey, this.microphoneGain);
+      this.preferenceStore.putSync(TunerReferenceToneEnabledPreferenceKey, this.referenceToneEnabled);
+      this.preferenceStore.putSync(TunerReferenceNoteMidiPreferenceKey, this.referenceNoteMidi);
       this.preferenceStore.flushSync();
     } catch (error) {
       hilog.error(0, 'PDFTunerController', `保存调音器偏好出错: ${error}.`);
@@ -123,5 +150,9 @@ export class PDFTunerController {
 
   private clampMicrophoneGain(value: number): number {
     return Math.max(0, Math.min(1, value));
+  }
+
+  private clampReferenceNoteMidi(value: number): number {
+    return Math.max(24, Math.min(84, Math.round(value)));
   }
 }

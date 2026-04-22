@@ -27,6 +27,9 @@ const TunerDefaultOffsetX: number = 24;
 const TunerDefaultOffsetY: number = 112;
 const TunerMeterSegments: number = 11;
 const TunerSpectrumBars: number = 20;
+const TunerReferenceNoteMinMidi: number = 24;
+const TunerReferenceNoteMaxMidi: number = 84;
+const TunerReferenceNoteDefaultMidi: number = 69;
 
 interface FloatingTunerOffset {
   x: number;
@@ -235,6 +238,43 @@ export struct PDFTunerPanelContent {
     return `${displayNote}${suffix}`;
   }
 
+  private isReferenceToneEnabled(): boolean {
+    return this.controller?.referenceToneEnabled ?? false;
+  }
+
+  private getReferenceNoteValues(): number[] {
+    return Array.from(
+      { length: TunerReferenceNoteMaxMidi - TunerReferenceNoteMinMidi + 1 },
+      (_value: number, index: number) => TunerReferenceNoteMinMidi + index,
+    );
+  }
+
+  private getReferenceNoteLabel(midi: number): string {
+    const semitone: number = ((midi % 12) + 12) % 12;
+    const octave: number = Math.floor(midi / 12) - 1;
+    const noteLabel: string = this.getCurrentTransposeNotes()[semitone] ?? 'C';
+    return `${noteLabel}${octave}`;
+  }
+
+  private getReferenceNoteLabels(): string[] {
+    return this.getReferenceNoteValues().map((midi: number) => this.getReferenceNoteLabel(midi));
+  }
+
+  private getReferenceNoteMidi(): number {
+    return this.controller?.referenceNoteMidi ?? TunerReferenceNoteDefaultMidi;
+  }
+
+  private toggleReferenceToneEnabled(): void {
+    const nextValue: boolean = !this.isReferenceToneEnabled();
+    this.controller?.setReferenceToneEnabled(nextValue);
+    // TODO: 在这里接入参考音播放/停止逻辑。
+  }
+
+  private handleReferenceNoteChanged(value: number): void {
+    this.controller?.setReferenceNoteMidi(value);
+    // TODO: 在这里接入参考音切换后的发声音高更新逻辑。
+  }
+
   private getTransposePresetMenu(): MenuElement[] {
     return this.getCurrentTransposeNotes().map(
       (note: string, index: number): MenuElement => ({
@@ -398,22 +438,63 @@ export struct PDFTunerPanelContent {
           .hitTestBehavior(HitTestMode.Default)
         }
         GridItem() {
-          Column({ space: 4 }) {
-            Text(this.getFormattedDetectedNote())
-              .fontSize(40)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Color.White)
-            Text(`${this.detuneCents > 0 ? "+" : ""}${this.detuneCents} cents`)
-              .fontSize(15)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(this.getDetuneColor())
-            Text(this.getDetuneSummary())
-              .fontSize(12)
-              .fontColor("rgba(255, 255, 255, 0.54)")
+          Column() {
+            Stack({ alignContent: Alignment.TopEnd }) {
+              Column({ space: this.isReferenceToneEnabled() ? 0 : 4 }) {
+                if (this.isReferenceToneEnabled()) {
+                  ScrollSpinBox({
+                    value: this.getReferenceNoteMidi(),
+                    values: this.getReferenceNoteValues(),
+                    labels: this.getReferenceNoteLabels(),
+                    canLoop: true,
+                    valueFontSize: 32,
+                    debounceMs: 100,
+                    onValueChange: (value: number) => {
+                      this.handleReferenceNoteChanged(value);
+                    },
+                    itemHeight: 34,
+                    gradientHeight: 30,
+                  })
+                    .width(168)
+                    .height(92)
+                } else {
+                  Text(this.getFormattedDetectedNote())
+                    .fontSize(40)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Color.White)
+                  Text(`${this.detuneCents > 0 ? "+" : ""}${this.detuneCents} cents`)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.getDetuneColor())
+                  Text(this.getDetuneSummary())
+                    .fontSize(12)
+                    .fontColor("rgba(255, 255, 255, 0.54)")
+                }
+              }
+              .width("100%")
+              .padding({ top: 12, bottom: 12, left: 8, right: 8 })
+              .alignItems(HorizontalAlign.Center)
+              .hitTestBehavior(HitTestMode.Transparent)
+              Button({ type: ButtonType.Circle }) {
+                SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+                  .fontSize(18)
+                  .fontColor([Color.White])
+              }
+              .width(36)
+              .height(36)
+              .margin({ top: 10, right: 10 })
+              .backgroundColor(
+                this.isReferenceToneEnabled() ? "rgba(77, 166, 255, 0.92)" : "rgba(255, 255, 255, 0.12)",
+              )
+              .border({
+                width: 1,
+                color: this.isReferenceToneEnabled() ? "rgba(255, 255, 255, 0.24)" : "rgba(255, 255, 255, 0.08)",
+              })
+              .onClick(() => this.toggleReferenceToneEnabled())
+            }
+            .width("100%")
           }
           .width("100%")
-          .padding({ top: 12, bottom: 12, left: 8, right: 8 })
-          .alignItems(HorizontalAlign.Center)
           .borderRadius(18)
           .backgroundColor("rgba(255, 255, 255, 0.05)")
           .border({ width: 1, color: "rgba(255, 255, 255, 0.05)" })
