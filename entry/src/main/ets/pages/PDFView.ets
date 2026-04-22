@@ -436,10 +436,14 @@ struct PDFView {
   }
 
   private updateMetronomeViewport(windowSize: window.Size): void {
+    this.metronomeViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
+    this.metronomeViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
     this.updateMetronomeDocking(windowSize.width);
   }
 
   private updateTunerViewport(windowSize: window.Size): void {
+    this.tunerViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
+    this.tunerViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
     this.updateTunerDocking(windowSize.width);
   }
 
@@ -982,6 +986,7 @@ struct PDFView {
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
         this.updateMetronomeViewport(_windowSize);
         this.updateTunerViewport(_windowSize);
+        this.syncPanelOffsetsToBounds();
         this.syncPanelOverlays();
       };
       this.mainWindow.on('windowSizeChange', this.windowSizeChangeCallback);
@@ -1794,6 +1799,7 @@ struct PDFView {
           .onAreaChange((_, newVal) => {
             this.updateMetronomeViewportFromArea(newVal);
             this.updateTunerViewportFromArea(newVal);
+            this.syncPanelOverlays();
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             this.resetViewToFit();
           })
