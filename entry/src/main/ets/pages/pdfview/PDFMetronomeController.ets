@@ -35,6 +35,7 @@ const MetronomeTimeSignaturePresets: Array<[number, number]> = [
 interface PDFMetronomeControllerDependencies {
   getUIContext: () => UIContext;
   getHostContext: () => common.UIAbilityContext;
+  onVisualStateChanged?: () => void;
 }
 
 interface MetronomeClickInstance {
@@ -78,6 +79,10 @@ export class PDFMetronomeController {
   private noiseFloorState: number = MetronomeAudioNoiseFloorSeed;
   private floatingButtonPulseToken: number = 0;
   private floatingButtonPulseResetTimeoutId: number | undefined = undefined;
+
+  private notifyVisualStateChanged(): void {
+    this.dependencies.onVisualStateChanged?.();
+  }
 
   @Trace public showWindow: boolean = false;
   @Trace public bpm: number = 120;
@@ -760,6 +765,7 @@ export class PDFMetronomeController {
       this.floatingButtonTransitionDurationMs = 0;
       this.floatingButtonPulseScale = 1.12;
       this.floatingButtonColor = this.currentBeat === 0 ? 'rgba(255, 159, 67, 0.78)' : 'rgba(77, 166, 255, 0.76)';
+      this.notifyVisualStateChanged();
 
       this.floatingButtonPulseResetTimeoutId = setTimeout(() => {
         this.floatingButtonPulseResetTimeoutId = undefined;
@@ -774,6 +780,7 @@ export class PDFMetronomeController {
         this.floatingButtonTransitionDurationMs = pulseDurationMs;
         this.floatingButtonColor = MetronomeFloatingButtonBaseColor;
         this.floatingButtonPulseScale = 1;
+        this.notifyVisualStateChanged();
       }, 16);
     };
 
@@ -789,5 +796,6 @@ export class PDFMetronomeController {
     this.floatingButtonTransitionDurationMs = 0;
     this.floatingButtonPulseScale = 1;
     this.floatingButtonColor = MetronomeFloatingButtonBaseColor;
+    this.notifyVisualStateChanged();
   }
 }

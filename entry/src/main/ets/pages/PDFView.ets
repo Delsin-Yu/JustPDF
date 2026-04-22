@@ -53,14 +53,10 @@ interface FloatingPanelOffset {
 interface MetronomeOverlayOptions {
   controller: PDFMetronomeController | undefined;
   showWindow: boolean;
-  showFloatingButton: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
-  floatingButtonScale: number;
-  floatingButtonColor: string;
-  floatingButtonTransitionDurationMs: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -95,14 +91,10 @@ interface TunerOverlayOptions {
 class MetronomeOverlayParams {
   controller: PDFMetronomeController | undefined;
   showWindow: boolean;
-  showFloatingButton: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
-  floatingButtonScale: number;
-  floatingButtonColor: string;
-  floatingButtonTransitionDurationMs: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -118,14 +110,10 @@ class MetronomeOverlayParams {
   constructor(options: MetronomeOverlayOptions) {
     this.controller = options.controller;
     this.showWindow = options.showWindow;
-    this.showFloatingButton = options.showFloatingButton;
     this.useDocked = options.useDocked;
     this.dockedTopOffsetVp = options.dockedTopOffsetVp;
     this.hostScale = options.hostScale;
     this.hostOffset = options.hostOffset;
-    this.floatingButtonScale = options.floatingButtonScale;
-    this.floatingButtonColor = options.floatingButtonColor;
-    this.floatingButtonTransitionDurationMs = options.floatingButtonTransitionDurationMs;
     this.onInteraction = options.onInteraction;
     this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
@@ -201,21 +189,27 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
 
     StyleIconButton({
       icon: $r('sys.symbol.clock'),
-      alternateColor: params.floatingButtonColor,
-      backgroundAnimationDurationMs: params.floatingButtonTransitionDurationMs,
+      alternateColor: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+        ? 'rgba(35, 42, 53, 0.62)'
+        : (params.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)'),
+      backgroundAnimationDurationMs: params.controller?.floatingButtonTransitionDurationMs ?? 0,
       onTouchDownCallback: () => params.onInteraction(),
       onClickCallback: () => {
         params.onOpenWindow();
       }
     })
-      .visibility(toVisibility(!params.showWindow && params.showFloatingButton))
+      .visibility(toVisibility(!params.showWindow && (params.controller?.isPlaying ?? false)))
       .scale({
-        x: params.floatingButtonScale,
-        y: params.floatingButtonScale,
+        x: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+          ? 1
+          : (params.controller?.floatingButtonPulseScale ?? 1),
+        y: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+          ? 1
+          : (params.controller?.floatingButtonPulseScale ?? 1),
         centerX: 22,
         centerY: 22
       })
-      .animation({ duration: params.floatingButtonTransitionDurationMs, curve: Curve.EaseOut })
+      .animation({ duration: params.controller?.floatingButtonTransitionDurationMs ?? 0, curve: Curve.EaseOut })
       .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
       .margin(ContainerPadding)
   }
@@ -313,7 +307,8 @@ struct PDFView {
   }, CanvasOverSampling);
   @Local metronomeController: PDFMetronomeController = new PDFMetronomeController({
     getUIContext: () => this.getUIContext(),
-    getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext
+    getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext,
+    onVisualStateChanged: () => this.syncPanelOverlays()
   });
   @Local showTunerPanel: boolean = false;
   @Local useDockedMetronomePanel: boolean = false;
@@ -380,16 +375,13 @@ struct PDFView {
     });
   }
 
-  private updateMetronomeDocking(windowWidthPx: number): void {
+  private updatePanelDocking(windowWidthPx: number): void {
     this.lastWindowWidthPx = windowWidthPx;
-    const totalWidthPx = this.getUIContext().vp2px(getFloatingMetronomeTotalWidth(this.metronomePanelScale));
-    this.useDockedMetronomePanel = windowWidthPx <= totalWidthPx;
-  }
-
-  private updateTunerDocking(windowWidthPx: number): void {
-    this.lastWindowWidthPx = windowWidthPx;
-    const totalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerPanelScale));
-    this.useDockedTunerPanel = windowWidthPx <= totalWidthPx;
+    const metronomeTotalWidthPx = this.getUIContext().vp2px(getFloatingMetronomeTotalWidth(this.metronomePanelScale));
+    const tunerTotalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerPanelScale));
+    const shouldDockBoth = windowWidthPx <= metronomeTotalWidthPx || windowWidthPx <= tunerTotalWidthPx;
+    this.useDockedMetronomePanel = shouldDockBoth;
+    this.useDockedTunerPanel = shouldDockBoth;
   }
 
   private isMetronomeDockedVisible(): boolean {
@@ -438,13 +430,13 @@ struct PDFView {
   private updateMetronomeViewport(windowSize: window.Size): void {
     this.metronomeViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
     this.metronomeViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
-    this.updateMetronomeDocking(windowSize.width);
+    this.updatePanelDocking(windowSize.width);
   }
 
   private updateTunerViewport(windowSize: window.Size): void {
     this.tunerViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
     this.tunerViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
-    this.updateTunerDocking(windowSize.width);
+    this.updatePanelDocking(windowSize.width);
   }
 
   private refreshMetronomeDockingForCurrentWindow(): void {
@@ -606,24 +598,6 @@ struct PDFView {
     }
   }
 
-  private getMetronomeFloatingButtonScale(): number {
-    if (!(this.metronomeController.isPlaying ?? false) || (this.metronomeController.currentBeat ?? -1) < 0) {
-      return 1;
-    }
-    return this.metronomeController.floatingButtonPulseScale ?? 1;
-  }
-
-  private getMetronomeFloatingButtonColor(): string {
-    if (!(this.metronomeController.isPlaying ?? false) || (this.metronomeController.currentBeat ?? -1) < 0) {
-      return 'rgba(35, 42, 53, 0.62)';
-    }
-    return this.metronomeController.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)';
-  }
-
-  private getMetronomeFloatingButtonTransitionDurationMs(): number {
-    return this.metronomeController.floatingButtonTransitionDurationMs ?? 0;
-  }
-
   private beginPanelGesture(panel: OverlayPanelKey): void {
     this.focusPanel(panel);
     this.isPanelGestureActive = true;
@@ -662,14 +636,20 @@ struct PDFView {
   }
 
   private handleMetronomeHostPinchStart(): void {
+    if (this.useDockedMetronomePanel) {
+      return;
+    }
     this.beginPanelGesture('metronome');
     this.metronomePinchStartScale = this.metronomePanelScale;
   }
 
   private handleMetronomeHostPinchUpdate(event: GestureEvent): void {
+    if (this.useDockedMetronomePanel) {
+      return;
+    }
     this.metronomePanelScale = this.clampMetronomeScale(this.metronomePinchStartScale * event.scale);
     if (this.lastWindowWidthPx > 0) {
-      this.updateMetronomeDocking(this.lastWindowWidthPx);
+      this.updatePanelDocking(this.lastWindowWidthPx);
     } else {
       this.refreshMetronomeDockingForCurrentWindow();
     }
@@ -709,14 +689,20 @@ struct PDFView {
   }
 
   private handleTunerHostPinchStart(): void {
+    if (this.useDockedTunerPanel) {
+      return;
+    }
     this.beginPanelGesture('tuner');
     this.tunerPinchStartScale = this.tunerPanelScale;
   }
 
   private handleTunerHostPinchUpdate(event: GestureEvent): void {
+    if (this.useDockedTunerPanel) {
+      return;
+    }
     this.tunerPanelScale = this.clampTunerScale(this.tunerPinchStartScale * event.scale);
     if (this.lastWindowWidthPx > 0) {
-      this.updateTunerDocking(this.lastWindowWidthPx);
+      this.updatePanelDocking(this.lastWindowWidthPx);
     } else {
       this.refreshTunerDockingForCurrentWindow();
     }
@@ -733,14 +719,10 @@ struct PDFView {
     return new MetronomeOverlayParams({
       controller: this.metronomeController,
       showWindow: this.metronomeController.showWindow ?? false,
-      showFloatingButton: !(this.metronomeController.showWindow ?? false) && (this.metronomeController.isPlaying ?? false),
       useDocked: this.useDockedMetronomePanel,
       dockedTopOffsetVp: this.getDockedMetronomeTopOffsetVp(),
-      hostScale: this.metronomePanelScale,
+      hostScale: this.useDockedMetronomePanel ? 1 : this.metronomePanelScale,
       hostOffset: this.getClampedMetronomeOffset(),
-      floatingButtonScale: this.getMetronomeFloatingButtonScale(),
-      floatingButtonColor: this.getMetronomeFloatingButtonColor(),
-      floatingButtonTransitionDurationMs: this.getMetronomeFloatingButtonTransitionDurationMs(),
       onInteraction: () => this.focusPanel('metronome'),
       onTouchStateChanged: (active: boolean) => {
         this.isPanelGestureActive = active;
@@ -768,7 +750,7 @@ struct PDFView {
       showWindow: this.showTunerPanel,
       useDocked: this.useDockedTunerPanel,
       dockedTopOffsetVp: this.getDockedTunerTopOffsetVp(),
-      hostScale: this.tunerPanelScale,
+      hostScale: this.useDockedTunerPanel ? 1 : this.tunerPanelScale,
       hostOffset: this.getClampedTunerOffset(),
       onInteraction: () => this.focusPanel('tuner'),
       onTouchStateChanged: (active: boolean) => {
@@ -888,56 +870,70 @@ struct PDFView {
             .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
           }
 
-          if (this.getActiveDockedPanel() === 'metronome' && this.isMetronomeDockedVisible()) {
-            PDFMetronomePanelContent({
-              controller: this.metronomeController,
-              useDocked: true,
-              dockedTopOffsetVp: 0,
-              hostScale: this.metronomePanelScale,
-              hostOffset: { x: 0, y: 0 },
-              showDragHandle: false,
-              onInteraction: () => this.focusPanel('metronome'),
-              onTouchStateChanged: (active: boolean) => {
-                this.isPanelGestureActive = active;
-              },
-              onWindowAreaHeightChanged: (heightVp: number) => this.handleMetronomePanelHeightChanged(heightVp),
-              onHostDragStart: () => this.handleMetronomeHostDragStart(),
-              onHostDragUpdate: (event: GestureEvent) => this.handleMetronomeHostDragUpdate(event),
-              onHostDragEnd: () => this.handleMetronomeHostDragEnd(),
-              onHostPinchStart: () => this.handleMetronomeHostPinchStart(),
-              onHostPinchUpdate: (event: GestureEvent) => this.handleMetronomeHostPinchUpdate(event),
-              onHostPinchEnd: () => this.handleMetronomeHostPinchEnd(),
-              onClose: () => {
-                this.metronomeController.closeWindow();
-                this.syncPanelOverlays();
+          Scroll() {
+            Column() {
+              if (this.getActiveDockedPanel() === 'metronome' && this.isMetronomeDockedVisible()) {
+                PDFMetronomePanelContent({
+                  controller: this.metronomeController,
+                  useDocked: true,
+                  dockedTopOffsetVp: 0,
+                  hostScale: 1,
+                  hostOffset: { x: 0, y: 0 },
+                  showDragHandle: false,
+                  onInteraction: () => this.focusPanel('metronome'),
+                  onTouchStateChanged: (active: boolean) => {
+                    this.isPanelGestureActive = active;
+                  },
+                  onWindowAreaHeightChanged: (heightVp: number) => this.handleMetronomePanelHeightChanged(heightVp),
+                  onHostDragStart: () => this.handleMetronomeHostDragStart(),
+                  onHostDragUpdate: (event: GestureEvent) => this.handleMetronomeHostDragUpdate(event),
+                  onHostDragEnd: () => this.handleMetronomeHostDragEnd(),
+                  onHostPinchStart: () => this.handleMetronomeHostPinchStart(),
+                  onHostPinchUpdate: (event: GestureEvent) => this.handleMetronomeHostPinchUpdate(event),
+                  onHostPinchEnd: () => this.handleMetronomeHostPinchEnd(),
+                  onClose: () => {
+                    this.metronomeController.closeWindow();
+                    this.syncPanelOverlays();
+                  }
+                })
+              } else if (this.isTunerDockedVisible()) {
+                PDFTunerPanelContent({
+                  useDocked: true,
+                  dockedTopOffsetVp: 0,
+                  hostScale: 1,
+                  hostOffset: { x: 0, y: 0 },
+                  showDragHandle: false,
+                  onInteraction: () => this.focusPanel('tuner'),
+                  onTouchStateChanged: (active: boolean) => {
+                    this.isPanelGestureActive = active;
+                  },
+                  onWindowAreaHeightChanged: (heightVp: number) => this.handleTunerPanelHeightChanged(heightVp),
+                  onHostDragStart: () => this.handleTunerHostDragStart(),
+                  onHostDragUpdate: (event: GestureEvent) => this.handleTunerHostDragUpdate(event),
+                  onHostDragEnd: () => this.handleTunerHostDragEnd(),
+                  onHostPinchStart: () => this.handleTunerHostPinchStart(),
+                  onHostPinchUpdate: (event: GestureEvent) => this.handleTunerHostPinchUpdate(event),
+                  onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
+                  onClose: () => {
+                    this.showTunerPanel = false;
+                    this.syncPanelOverlays();
+                  }
+                })
               }
-            })
-          } else if (this.isTunerDockedVisible()) {
-            PDFTunerPanelContent({
-              useDocked: true,
-              dockedTopOffsetVp: 0,
-              hostScale: this.tunerPanelScale,
-              hostOffset: { x: 0, y: 0 },
-              showDragHandle: false,
-              onInteraction: () => this.focusPanel('tuner'),
-              onTouchStateChanged: (active: boolean) => {
-                this.isPanelGestureActive = active;
-              },
-              onWindowAreaHeightChanged: (heightVp: number) => this.handleTunerPanelHeightChanged(heightVp),
-              onHostDragStart: () => this.handleTunerHostDragStart(),
-              onHostDragUpdate: (event: GestureEvent) => this.handleTunerHostDragUpdate(event),
-              onHostDragEnd: () => this.handleTunerHostDragEnd(),
-              onHostPinchStart: () => this.handleTunerHostPinchStart(),
-              onHostPinchUpdate: (event: GestureEvent) => this.handleTunerHostPinchUpdate(event),
-              onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
-              onClose: () => {
-                this.showTunerPanel = false;
-                this.syncPanelOverlays();
-              }
-            })
+            }
+            .width('100%')
+            .height(LayoutPolicy.wrapContent)
+            .justifyContent(FlexAlign.Start)
+            .alignItems(HorizontalAlign.Start)
           }
+          .width('100%')
+          .layoutWeight(1)
+          .align(Alignment.TopStart)
+          .scrollable(ScrollDirection.Vertical)
+          .scrollBar(BarState.Auto)
         }
         .width('100%')
+        .constraintSize({ maxHeight: '100%' })
         .align(Alignment.TopStart)
         .onAreaChange((_oldValue: Area, newValue: Area) => {
           this.handleDockedPanelHeightChanged(newValue.height as number);
