@@ -15,6 +15,7 @@ import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
 import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
+import { PDFTunerController } from './pdfview/PDFTunerController';
 import { PDFPageSlot } from './pdfview/PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
@@ -71,6 +72,7 @@ interface MetronomeOverlayOptions {
 }
 
 interface TunerOverlayOptions {
+  controller: PDFTunerController | undefined;
   showWindow: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
@@ -129,6 +131,7 @@ class MetronomeOverlayParams {
 }
 
 class TunerOverlayParams {
+  controller: PDFTunerController | undefined;
   showWindow: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
@@ -146,6 +149,7 @@ class TunerOverlayParams {
   onClose: () => void;
 
   constructor(options: TunerOverlayOptions) {
+    this.controller = options.controller;
     this.showWindow = options.showWindow;
     this.useDocked = options.useDocked;
     this.dockedTopOffsetVp = options.dockedTopOffsetVp;
@@ -223,6 +227,7 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
 function BuildTunerOverlay(params: TunerOverlayParams) {
   Stack() {
     PDFTunerPanelContent({
+      controller: params.controller,
       useDocked: params.useDocked,
       dockedTopOffsetVp: params.dockedTopOffsetVp,
       hostScale: params.hostScale,
@@ -310,6 +315,7 @@ struct PDFView {
     getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext,
     onVisualStateChanged: () => this.syncPanelOverlays()
   });
+  @Local tunerController: PDFTunerController = new PDFTunerController();
   @Local showTunerPanel: boolean = false;
   @Local useDockedMetronomePanel: boolean = false;
   @Local metronomePanelScale: number = FloatingMetronomeDefaultScale;
@@ -747,6 +753,7 @@ struct PDFView {
 
   private createTunerOverlayParams(): TunerOverlayParams {
     return new TunerOverlayParams({
+      controller: this.tunerController,
       showWindow: this.showTunerPanel,
       useDocked: this.useDockedTunerPanel,
       dockedTopOffsetVp: this.getDockedTunerTopOffsetVp(),
@@ -898,6 +905,7 @@ struct PDFView {
                 })
               } else if (this.isTunerDockedVisible()) {
                 PDFTunerPanelContent({
+                  controller: this.tunerController,
                   useDocked: true,
                   dockedTopOffsetVp: 0,
                   hostScale: 1,
@@ -965,6 +973,7 @@ struct PDFView {
       this.viewerViewModel.loadPreferences(this.preferences);
       this.rebuildSettingsDialogController();
       this.metronomeController.initialize(this.preferences);
+      this.tunerController.initialize(this.preferences);
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -1049,6 +1058,7 @@ struct PDFView {
   aboutToDisappear(): void {
     this.disposePanelOverlays();
     this.metronomeController.cleanup();
+    this.tunerController.cleanup();
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);

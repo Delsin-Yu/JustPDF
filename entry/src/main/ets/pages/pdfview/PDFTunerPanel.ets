@@ -3,6 +3,11 @@ import { ButtonColor, ContainerPadding, getCheckIcon, toVisibility } from "../..
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { uiEffect } from '@kit.ArkGraphics2D';
 import {
+  PDFTunerController,
+  TunerNoteDisplayMode,
+  TunerNoteNamingMode,
+} from './PDFTunerController';
+import {
   SharedPanelBackgroundBlurRadius,
   SharedPanelBackgroundColor,
   SharedPanelControlHighlightColor,
@@ -22,9 +27,6 @@ const TunerDefaultOffsetX: number = 24;
 const TunerDefaultOffsetY: number = 112;
 const TunerMeterSegments: number = 11;
 const TunerSpectrumBars: number = 20;
-
-type TunerNoteDisplayMode = "standard" | "sharp" | "flat";
-type TunerNoteNamingMode = "pitch" | "solfege";
 
 interface FloatingTunerOffset {
   x: number;
@@ -125,13 +127,9 @@ export struct PDFTunerPanelContent {
   @Event onHostPinchUpdate: (event: GestureEvent) => void = (_event: GestureEvent) => {};
   @Event onHostPinchEnd: () => void = () => {};
   @Event onClose: () => void = () => {};
-  @Local mockDetectedNote: string = "A4";
-  @Local mockNoteDisplayMode: TunerNoteDisplayMode = "standard";
-  @Local mockNoteNamingMode: TunerNoteNamingMode = "pitch";
-  @Local mockDetuneCents: number = 3;
-  @Local mockReferenceHz: number = 440;
-  @Local mockTransposeIndex: number = 0;
-  @Local mockSensitivity: number = 0.65;
+  @Param controller: PDFTunerController | undefined = undefined;
+  @Local detectedNote: string = "A4";
+  @Local detuneCents: number = 3;
   private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
     .fontSize('18vp')
     .padding('2vp');
@@ -144,17 +142,17 @@ export struct PDFTunerPanelContent {
   };
 
   private getDetuneSummary(): string {
-    if (Math.abs(this.mockDetuneCents) <= 1) {
+    if (Math.abs(this.detuneCents) <= 1) {
       return "音高稳定";
     }
-    return this.mockDetuneCents > 0 ? "略高" : "略低";
+    return this.detuneCents > 0 ? "略高" : "略低";
   }
 
   private getDetuneColor(): string {
-    if (Math.abs(this.mockDetuneCents) <= 4) {
+    if (Math.abs(this.detuneCents) <= 4) {
       return "#42D392";
     }
-    if (Math.abs(this.mockDetuneCents) <= 12) {
+    if (Math.abs(this.detuneCents) <= 12) {
       return "#FFB347";
     }
     return "#FF7A7A";
@@ -166,15 +164,15 @@ export struct PDFTunerPanelContent {
       0,
       Math.min(
         TunerMeterSegments - 1,
-        Math.round(((this.mockDetuneCents + 50) / 100) * (TunerMeterSegments - 1)),
+        Math.round(((this.detuneCents + 50) / 100) * (TunerMeterSegments - 1)),
       ),
     );
     if (index === centeredIndex) {
-      return Math.abs(this.mockDetuneCents) <= 4 ? "#42D392" : "rgba(255, 255, 255, 0.16)";
+      return Math.abs(this.detuneCents) <= 4 ? "#42D392" : "rgba(255, 255, 255, 0.16)";
     }
     if (
-      (this.mockDetuneCents < 0 && index >= activeIndex && index < centeredIndex) ||
-      (this.mockDetuneCents > 0 && index <= activeIndex && index > centeredIndex)
+      (this.detuneCents < 0 && index >= activeIndex && index < centeredIndex) ||
+      (this.detuneCents > 0 && index <= activeIndex && index > centeredIndex)
     ) {
       return this.getDetuneColor();
     }
@@ -185,8 +183,8 @@ export struct PDFTunerPanelContent {
     const center: number = (TunerSpectrumBars - 1) / 2;
     const distanceRatio: number = Math.abs(index - center) / center;
     const envelope: number = Math.max(0.2, 1 - distanceRatio * 0.75);
-    const wave: number = 0.58 + 0.42 * Math.sin(index * 0.7 + this.mockDetuneCents * 0.08);
-    const sensitivityGain: number = 0.45 + this.mockSensitivity * 0.55;
+    const wave: number = 0.58 + 0.42 * Math.sin(index * 0.7 + this.detuneCents * 0.08);
+    const sensitivityGain: number = 0.45 + (this.controller?.microphoneGain ?? 0.65) * 0.55;
     return 10 + envelope * wave * sensitivityGain * 48;
   }
 
@@ -196,41 +194,42 @@ export struct PDFTunerPanelContent {
       (preset: number): MenuElement => ({
         value: `${preset} Hz`,
         action: () => {
-          this.mockReferenceHz = preset;
+          this.controller?.setReferenceHz(preset);
         },
       }),
     );
   }
 
   private getCurrentNoteDisplayMode(): TunerNoteDisplayModeOption {
+    const mode: TunerNoteDisplayMode = this.controller?.noteDisplayMode ?? 'standard';
     return TunerNoteDisplayModes.find(
-      (option: TunerNoteDisplayModeOption) => option.mode === this.mockNoteDisplayMode,
+      (option: TunerNoteDisplayModeOption) => option.mode === mode,
     ) ?? TunerNoteDisplayModes[0];
   }
 
   private getCurrentTransposeNotes(): string[] {
-    if (this.mockNoteNamingMode === "pitch") {
+    if ((this.controller?.noteNamingMode ?? 'pitch') === "pitch") {
       return this.getCurrentNoteDisplayMode().notes;
     }
-    if (this.mockNoteDisplayMode === "standard") {
+    if ((this.controller?.noteDisplayMode ?? 'standard') === "standard") {
       return TunerSolfegeDisplayModes.standard;
     }
-    if (this.mockNoteDisplayMode === "sharp") {
+    if ((this.controller?.noteDisplayMode ?? 'standard') === "sharp") {
       return TunerSolfegeDisplayModes.sharp;
     }
     return TunerSolfegeDisplayModes.flat;
   }
 
   private getFormattedDetectedNote(): string {
-    const match: RegExpMatchArray | null = this.mockDetectedNote.match(/^([A-G](?:#|b)?)(.*)$/);
+    const match: RegExpMatchArray | null = this.detectedNote.match(/^([A-G](?:#|b)?)(.*)$/);
     if (match === null) {
-      return this.mockDetectedNote;
+      return this.detectedNote;
     }
     const sourceNote: string = match[1];
     const suffix: string = match[2];
     const semitone: number | undefined = TunerNoteSemitoneMap[sourceNote];
     if (semitone === undefined) {
-      return this.mockDetectedNote;
+      return this.detectedNote;
     }
     const displayNote: string = this.getCurrentTransposeNotes()[semitone] ?? sourceNote;
     return `${displayNote}${suffix}`;
@@ -241,7 +240,7 @@ export struct PDFTunerPanelContent {
       (note: string, index: number): MenuElement => ({
         value: note,
         action: () => {
-          this.mockTransposeIndex = index;
+          this.controller?.setTransposeIndex(index);
         },
       }),
     );
@@ -252,9 +251,9 @@ export struct PDFTunerPanelContent {
       (option: TunerNoteDisplayModeOption): MenuElement => ({
         value: option.label,
         action: () => {
-          this.mockNoteDisplayMode = option.mode;
+          this.controller?.setNoteDisplayMode(option.mode);
         },
-        symbolIcon: getCheckIcon(this.mockNoteDisplayMode === option.mode),
+        symbolIcon: getCheckIcon((this.controller?.noteDisplayMode ?? 'standard') === option.mode),
       }),
     );
   }
@@ -264,9 +263,9 @@ export struct PDFTunerPanelContent {
       (option: TunerNoteNamingModeOption): MenuElement => ({
         value: option.label,
         action: () => {
-          this.mockNoteNamingMode = option.mode;
+          this.controller?.setNoteNamingMode(option.mode);
         },
-        symbolIcon: getCheckIcon(this.mockNoteNamingMode === option.mode),
+        symbolIcon: getCheckIcon((this.controller?.noteNamingMode ?? 'pitch') === option.mode),
       }),
     );
   }
@@ -404,7 +403,7 @@ export struct PDFTunerPanelContent {
               .fontSize(40)
               .fontWeight(FontWeight.Bold)
               .fontColor(Color.White)
-            Text(`${this.mockDetuneCents > 0 ? "+" : ""}${this.mockDetuneCents} cents`)
+            Text(`${this.detuneCents > 0 ? "+" : ""}${this.detuneCents} cents`)
               .fontSize(15)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.getDetuneColor())
@@ -413,7 +412,7 @@ export struct PDFTunerPanelContent {
               .fontColor("rgba(255, 255, 255, 0.54)")
           }
           .width("100%")
-          .padding({ top: 12, bottom: 12 })
+          .padding({ top: 12, bottom: 12, left: 8, right: 8 })
           .alignItems(HorizontalAlign.Center)
           .borderRadius(18)
           .backgroundColor("rgba(255, 255, 255, 0.05)")
@@ -472,7 +471,7 @@ export struct PDFTunerPanelContent {
         }
         GridItem() {
           ScrollSpinBox({
-            value: this.mockReferenceHz,
+            value: this.controller?.referenceHz ?? 440,
             canLoop: false,
             min: 430,
             max: 450,
@@ -480,7 +479,7 @@ export struct PDFTunerPanelContent {
             valueFontSize: 28,
             debounceMs: 100,
             onValueChange: (value: number) => {
-              this.mockReferenceHz = value;
+              this.controller?.setReferenceHz(value);
             },
             itemHeight: 26,
             gradientHeight: 32,
@@ -493,7 +492,7 @@ export struct PDFTunerPanelContent {
         }
         GridItem() {
           ScrollSpinBox({
-            value: this.mockTransposeIndex,
+            value: this.controller?.transposeIndex ?? 0,
             values: Array.from(
               { length: this.getCurrentTransposeNotes().length },
               (_value: number, index: number) => index,
@@ -503,7 +502,7 @@ export struct PDFTunerPanelContent {
             valueFontSize: 28,
             debounceMs: 100,
             onValueChange: (value: number) => {
-              this.mockTransposeIndex = value;
+              this.controller?.setTransposeIndex(value);
             },
             itemHeight: 26,
             gradientHeight: 32,
@@ -584,7 +583,7 @@ export struct PDFTunerPanelContent {
             .borderRadius(12)
             .backgroundColor("rgba(255, 255, 255, 0.08)")
             Slider({
-              value: this.mockSensitivity,
+              value: this.controller?.microphoneGain ?? 0.65,
               min: 0,
               max: 1,
               step: 0.01,
@@ -595,7 +594,7 @@ export struct PDFTunerPanelContent {
               .trackColor("rgba(255, 255, 255, 0.2)")
               .showTips(false)
               .onChange((value: number, _mode: SliderChangeMode) => {
-                this.mockSensitivity = value;
+                this.controller?.setMicrophoneGain(value);
               })
           }.width("100%")
         }
@@ -650,6 +649,7 @@ export struct PDFTunerPanelContent {
 }
 @ComponentV2
 export struct PDFTunerPanel {
+  @Param controller: PDFTunerController | undefined = undefined;
   @Param showWindow: boolean = false;
   @Param useDocked: boolean = false;
   @Param dockedTopOffsetVp: number = 0;
@@ -786,6 +786,7 @@ export struct PDFTunerPanel {
   build() {
     Column() {
       PDFTunerPanelContent({
+        controller: this.controller,
         useDocked: this.useDocked,
         dockedTopOffsetVp: this.dockedTopOffsetVp,
         hostScale: this.floatingScale,
