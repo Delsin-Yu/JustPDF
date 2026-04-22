@@ -504,6 +504,14 @@ struct PDFView {
     return this.showTunerPanel;
   }
 
+  private setTunerPanelVisible(visible: boolean): void {
+    if (this.showTunerPanel === visible) {
+      return;
+    }
+    this.showTunerPanel = visible;
+    this.tunerController.setPanelVisible(visible);
+  }
+
   private getDockedMetronomeTopOffsetVp(): number {
     return 0;
   }
@@ -771,7 +779,7 @@ struct PDFView {
       onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
       onWindowAreaHeightChanged: (heightVp: number) => this.handleTunerPanelHeightChanged(heightVp),
       onClose: () => {
-        this.showTunerPanel = false;
+        this.setTunerPanelVisible(false);
         this.syncPanelOverlays();
       }
     });
@@ -923,7 +931,7 @@ struct PDFView {
                   onHostPinchUpdate: (event: GestureEvent) => this.handleTunerHostPinchUpdate(event),
                   onHostPinchEnd: () => this.handleTunerHostPinchEnd(),
                   onClose: () => {
-                    this.showTunerPanel = false;
+                    this.setTunerPanelVisible(false);
                     this.syncPanelOverlays();
                   }
                 })
@@ -974,6 +982,7 @@ struct PDFView {
       this.rebuildSettingsDialogController();
       this.metronomeController.initialize(this.preferences);
       this.tunerController.initialize(this.preferences);
+      this.tunerController.setPanelVisible(this.showTunerPanel);
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -1922,7 +1931,7 @@ struct PDFView {
                 },
                 onToggleTuner: () => {
                   this.focusPanel('tuner');
-                  this.showTunerPanel = !this.showTunerPanel;
+                  this.setTunerPanelVisible(!this.showTunerPanel);
                   this.syncPanelOverlays();
                 }
               })

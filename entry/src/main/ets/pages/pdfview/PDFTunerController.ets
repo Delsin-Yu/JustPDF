@@ -1,4 +1,5 @@
 import { preferences } from '@kit.ArkData';
+import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TunerReferenceHzPreferenceKey: string = 'tunerReferenceHz';
@@ -8,6 +9,12 @@ const TunerNoteNamingModePreferenceKey: string = 'tunerNoteNamingMode';
 const TunerMicrophoneGainPreferenceKey: string = 'tunerMicrophoneGain';
 const TunerReferenceToneEnabledPreferenceKey: string = 'tunerReferenceToneEnabled';
 const TunerReferenceNoteMidiPreferenceKey: string = 'tunerReferenceNoteMidi';
+const TunerReferenceToneSampleRateHz: number = 48000;
+const TunerReferenceToneMaxAmplitude: number = 32767;
+const TunerReferenceToneAmplitudeRatio: number = 0.16;
+const TunerReferenceToneMinHz: number = 20;
+const TunerReferenceToneMaxHz: number = 10000;
+const TunerReferenceToneFadeFactor: number = 0.0024;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -18,6 +25,18 @@ const TunerValidNamingModes: TunerNoteNamingMode[] = ['pitch', 'solfege'];
 @ObservedV2
 export class PDFTunerController {
   private preferenceStore?: preferences.Preferences;
+  private audioRenderer: audio.AudioRenderer | undefined = undefined;
+  private audioRendererLoading: boolean = false;
+  private pendingRendererStop: Promise<void> | undefined = undefined;
+  private audioRequestToken: number = 0;
+  private audioPlaybackSessionToken: number = 0;
+  private playbackStartRequested: boolean = false;
+  private panelVisible: boolean = false;
+  private oscillatorPhase: number = 0;
+  private oscillatorFrequencyHz: number = 440;
+  private oscillatorTargetFrequencyHz: number = 440;
+  private oscillatorAmplitude: number = 0;
+  private oscillatorTargetAmplitude: number = 0;
 
   @Trace public referenceHz: number = 440;
   @Trace public transposeIndex: number = 0;
@@ -30,9 +49,13 @@ export class PDFTunerController {
   initialize(preferenceStore: preferences.Preferences): void {
     this.preferenceStore = preferenceStore;
     this.loadPreferences(preferenceStore);
+    this.initializeAudio();
+    this.syncReferenceTonePlaybackState();
   }
 
   cleanup(): void {
+    this.stopReferenceTonePlayback();
+    this.releaseAudio();
     this.preferenceStore = undefined;
   }
 
@@ -42,6 +65,7 @@ export class PDFTunerController {
       return;
     }
     this.referenceHz = nextValue;
+    this.updateReferenceToneSynthesisTargets();
     this.savePreferences();
   }
 
@@ -51,6 +75,7 @@ export class PDFTunerController {
       return;
     }
     this.transposeIndex = nextValue;
+    this.updateReferenceToneSynthesisTargets();
     this.savePreferences();
   }
 
@@ -84,7 +109,16 @@ export class PDFTunerController {
       return;
     }
     this.referenceToneEnabled = value;
+    this.syncReferenceTonePlaybackState();
     this.savePreferences();
+  }
+
+  setPanelVisible(value: boolean): void {
+    if (this.panelVisible === value) {
+      return;
+    }
+    this.panelVisible = value;
+    this.syncReferenceTonePlaybackState();
   }
 
   setReferenceNoteMidi(value: number): void {
@@ -93,7 +127,69 @@ export class PDFTunerController {
       return;
     }
     this.referenceNoteMidi = nextValue;
+    this.updateReferenceToneSynthesisTargets();
     this.savePreferences();
+  }
+
+  private readonly handleAudioWriteData: audio.AudioRendererWriteDataCallback = (buffer: ArrayBuffer):
+    audio.AudioDataCallbackResult => {
+    const output: Int16Array = new Int16Array(buffer);
+    const shouldPlayTone: boolean = this.referenceToneEnabled && this.playbackStartRequested;
+
+    this.oscillatorTargetAmplitude = shouldPlayTone ? TunerReferenceToneAmplitudeRatio : 0;
+    this.oscillatorTargetFrequencyHz = this.getReferenceToneFrequencyHz();
+
+    for (let sampleIndex = 0; sampleIndex < output.length; sampleIndex++) {
+      this.oscillatorAmplitude += (this.oscillatorTargetAmplitude - this.oscillatorAmplitude) * TunerReferenceToneFadeFactor;
+      this.oscillatorFrequencyHz += (this.oscillatorTargetFrequencyHz - this.oscillatorFrequencyHz)
+        * TunerReferenceToneFadeFactor;
+      this.oscillatorFrequencyHz = Math.max(
+        TunerReferenceToneMinHz,
+        Math.min(TunerReferenceToneMaxHz, this.oscillatorFrequencyHz),
+      );
+      this.oscillatorPhase += 2 * Math.PI * this.oscillatorFrequencyHz / TunerReferenceToneSampleRateHz;
+      if (this.oscillatorPhase >= 2 * Math.PI) {
+        this.oscillatorPhase -= 2 * Math.PI;
+      }
+      const sample: number = Math.sin(this.oscillatorPhase) * this.oscillatorAmplitude;
+      output[sampleIndex] = this.clampPcmSample(Math.round(sample * TunerReferenceToneMaxAmplitude));
+    }
+
+    return audio.AudioDataCallbackResult.VALID;
+  };
+
+  private startReferenceTonePlayback(): void {
+    this.playbackStartRequested = true;
+    this.updateReferenceToneSynthesisTargets();
+    this.startAudioRendererPlayback(++this.audioPlaybackSessionToken);
+  }
+
+  private stopReferenceTonePlayback(): void {
+    this.playbackStartRequested = false;
+    this.audioPlaybackSessionToken += 1;
+    this.updateReferenceToneSynthesisTargets();
+    const stopPromise: Promise<void> = this.stopAudioRendererPlayback();
+    this.pendingRendererStop = stopPromise;
+    void stopPromise.finally(() => {
+      if (this.pendingRendererStop === stopPromise) {
+        this.pendingRendererStop = undefined;
+      }
+      this.oscillatorAmplitude = 0;
+    });
+  }
+
+  private updateReferenceToneSynthesisTargets(): void {
+    this.oscillatorTargetFrequencyHz = this.getReferenceToneFrequencyHz();
+    this.oscillatorTargetAmplitude = (this.referenceToneEnabled && this.playbackStartRequested)
+      ? TunerReferenceToneAmplitudeRatio
+      : 0;
+  }
+
+  private getReferenceToneFrequencyHz(): number {
+    const transposedMidi: number = this.referenceNoteMidi + this.transposeIndex;
+    const semitoneOffsetFromA4: number = transposedMidi - 69;
+    const computedFrequencyHz: number = this.referenceHz * Math.pow(2, semitoneOffsetFromA4 / 12);
+    return Math.max(TunerReferenceToneMinHz, Math.min(TunerReferenceToneMaxHz, computedFrequencyHz));
   }
 
   private loadPreferences(preferenceStore: preferences.Preferences): void {
@@ -117,8 +213,193 @@ export class PDFTunerController {
       this.referenceNoteMidi = this.clampReferenceNoteMidi(
         preferenceStore.getSync(TunerReferenceNoteMidiPreferenceKey, 69) as number,
       );
+      this.updateReferenceToneSynthesisTargets();
     } catch (error) {
       hilog.error(0, 'PDFTunerController', `加载调音器偏好出错: ${error}.`);
+    }
+  }
+
+  private initializeAudio(): void {
+    if (this.audioRendererLoading || this.audioRenderer) {
+      return;
+    }
+
+    this.audioRendererLoading = true;
+    const requestToken: number = ++this.audioRequestToken;
+    this.createAudioRenderer(requestToken).finally(() => {
+      if (this.audioRequestToken === requestToken) {
+        this.audioRendererLoading = false;
+      }
+    });
+  }
+
+  private async createAudioRenderer(requestToken: number): Promise<void> {
+    try {
+      const audioRendererOptions: audio.AudioRendererOptions = {
+        streamInfo: {
+          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_48000,
+          channels: audio.AudioChannel.CHANNEL_1,
+          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
+        },
+        rendererInfo: {
+          usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+          rendererFlags: 0,
+        },
+      };
+      const audioRenderer: audio.AudioRenderer = await audio.createAudioRenderer(audioRendererOptions);
+      audioRenderer.on('writeData', this.handleAudioWriteData);
+
+      if (requestToken !== this.audioRequestToken) {
+        this.releaseDetachedAudioRenderer(audioRenderer);
+        return;
+      }
+
+      this.audioRenderer = audioRenderer;
+      if (this.playbackStartRequested && this.referenceToneEnabled) {
+        this.startAudioRendererPlayback(this.audioPlaybackSessionToken);
+      }
+    } catch (error) {
+      hilog.error(0, 'PDFTunerController', `初始化参考音AudioRenderer失败: ${JSON.stringify(error)}`);
+      if (requestToken === this.audioRequestToken) {
+        this.audioRenderer = undefined;
+      }
+    }
+  }
+
+  private releaseAudio(): void {
+    this.audioRequestToken += 1;
+    this.audioRendererLoading = false;
+    const audioRenderer: audio.AudioRenderer | undefined = this.audioRenderer;
+    this.audioRenderer = undefined;
+    this.oscillatorAmplitude = 0;
+    this.oscillatorTargetAmplitude = 0;
+    this.oscillatorPhase = 0;
+    this.oscillatorFrequencyHz = this.getReferenceToneFrequencyHz();
+    this.oscillatorTargetFrequencyHz = this.oscillatorFrequencyHz;
+    if (!audioRenderer) {
+      return;
+    }
+    this.releaseDetachedAudioRenderer(audioRenderer);
+  }
+
+  private releaseDetachedAudioRenderer(audioRenderer: audio.AudioRenderer): void {
+    try {
+      audioRenderer.off('writeData', this.handleAudioWriteData);
+    } catch (error) {
+      hilog.error(0, 'PDFTunerController', `解绑参考音AudioRenderer回调失败: ${JSON.stringify(error)}`);
+    }
+
+    const releaseRenderer = async (): Promise<void> => {
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING || audioRenderer.state === audio.AudioState.STATE_PAUSED) {
+          await audioRenderer.stop();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `停止参考音AudioRenderer失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `清空参考音AudioRenderer缓冲失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state !== audio.AudioState.STATE_RELEASED) {
+          await audioRenderer.release();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `释放参考音AudioRenderer失败: ${JSON.stringify(error)}`);
+      }
+    };
+
+    void releaseRenderer();
+  }
+
+  private stopAudioRendererPlayback(): Promise<void> {
+    if (!this.audioRenderer) {
+      return Promise.resolve();
+    }
+
+    const audioRenderer: audio.AudioRenderer = this.audioRenderer;
+    return (async (): Promise<void> => {
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING || audioRenderer.state === audio.AudioState.STATE_PAUSED) {
+          await audioRenderer.stop();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `停止参考音播放失败: ${JSON.stringify(error)}`);
+      }
+
+      try {
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `清空参考音播放缓冲失败: ${JSON.stringify(error)}`);
+      }
+    })();
+  }
+
+  private startAudioRendererPlayback(playbackToken: number): void {
+    if (playbackToken !== this.audioPlaybackSessionToken || !this.playbackStartRequested || !this.referenceToneEnabled) {
+      return;
+    }
+
+    if (!this.audioRenderer) {
+      this.initializeAudio();
+      return;
+    }
+
+    const audioRenderer: audio.AudioRenderer = this.audioRenderer;
+    const startRenderer = async (): Promise<void> => {
+      try {
+        const pendingStop: Promise<void> | undefined = this.pendingRendererStop;
+        if (pendingStop) {
+          await pendingStop;
+        }
+
+        if (playbackToken !== this.audioPlaybackSessionToken || !this.playbackStartRequested || !this.referenceToneEnabled) {
+          return;
+        }
+
+        if (audioRenderer.state === audio.AudioState.STATE_RUNNING) {
+          return;
+        }
+
+        if (audioRenderer.state === audio.AudioState.STATE_STOPPED) {
+          await audioRenderer.flush();
+        }
+
+        await audioRenderer.start();
+      } catch (error) {
+        if (playbackToken === this.audioPlaybackSessionToken && this.referenceToneEnabled) {
+          hilog.error(0, 'PDFTunerController', `启动参考音播放失败: ${JSON.stringify(error)}`);
+          this.stopReferenceTonePlayback();
+        }
+      }
+    };
+
+    void startRenderer();
+  }
+
+  private syncReferenceTonePlaybackState(): void {
+    if (this.referenceToneEnabled && this.panelVisible) {
+      if (!this.playbackStartRequested) {
+        this.startReferenceTonePlayback();
+      } else {
+        this.updateReferenceToneSynthesisTargets();
+      }
+      return;
+    }
+
+    if (this.playbackStartRequested) {
+      this.stopReferenceTonePlayback();
+    } else {
+      this.updateReferenceToneSynthesisTargets();
     }
   }
 
@@ -154,5 +435,9 @@ export class PDFTunerController {
 
   private clampReferenceNoteMidi(value: number): number {
     return Math.max(24, Math.min(84, Math.round(value)));
+  }
+
+  private clampPcmSample(value: number): number {
+    return Math.max(-TunerReferenceToneMaxAmplitude - 1, Math.min(TunerReferenceToneMaxAmplitude, Math.round(value)));
   }
 }

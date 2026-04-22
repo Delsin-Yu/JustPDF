@@ -14,7 +14,7 @@ import {
 } from './PDFPanelVisualConstants';
 
 const TunerWindowMargin: number = 16;
-const TunerWindowWidth: number = 360;
+const TunerWindowWidth: number = 392;
 export const TunerTotalWidth: number = TunerWindowWidth + TunerWindowMargin * 2;
 export const FloatingTunerDefaultScale: number = 1;
 const FloatingTunerMinScale: number = 0.4;
@@ -27,9 +27,24 @@ const TunerDefaultOffsetX: number = 24;
 const TunerDefaultOffsetY: number = 112;
 const TunerMeterSegments: number = 11;
 const TunerSpectrumBars: number = 20;
-const TunerReferenceNoteMinMidi: number = 24;
+const TunerReferenceNoteMinMidi: number = 48;
 const TunerReferenceNoteMaxMidi: number = 84;
 const TunerReferenceNoteDefaultMidi: number = 69;
+const TunerPianoWhiteKeySemitones: number[] = [0, 2, 4, 5, 7, 9, 11];
+const TunerPianoBlackKeys: number[][] = [
+  [1, 0],
+  [3, 1],
+  [6, 3],
+  [8, 4],
+  [10, 5],
+];
+const TunerPianoWhiteKeyCount: number = 7;
+const TunerPianoKeyboardHeight: number = 108;
+const TunerPianoBlackKeyHeight: number = 68;
+const TunerPianoBlackKeyWidthFraction: number = 0.1;
+const TunerPianoWhiteKeyLabelBottom: number = 5;
+const TunerPianoBlackKeyLabelBottom: number = 4;
+const TunerPianoBlackKeyOffsets: number[] = [0.11, 0.245, 0.53, 0.665, 0.8];
 
 interface FloatingTunerOffset {
   x: number;
@@ -133,9 +148,9 @@ export struct PDFTunerPanelContent {
   @Param controller: PDFTunerController | undefined = undefined;
   @Local detectedNote: string = "A4";
   @Local detuneCents: number = 3;
-  private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
-    .fontSize('18vp')
-    .padding('2vp');
+  @Local showReferencePresetPopup: boolean = false;
+  @Local showTransposePresetPopup: boolean = false;
+  @Local showModePopup: boolean = false;
   private readonly panelBackgroundBlurFilter: uiEffect.Filter =
     uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
   private readonly tunerGridLayout: GridLayoutOptions = {
@@ -267,12 +282,44 @@ export struct PDFTunerPanelContent {
   private toggleReferenceToneEnabled(): void {
     const nextValue: boolean = !this.isReferenceToneEnabled();
     this.controller?.setReferenceToneEnabled(nextValue);
-    // TODO: 在这里接入参考音播放/停止逻辑。
   }
 
   private handleReferenceNoteChanged(value: number): void {
-    this.controller?.setReferenceNoteMidi(value);
-    // TODO: 在这里接入参考音切换后的发声音高更新逻辑。
+    const clampedValue: number = Math.max(TunerReferenceNoteMinMidi, Math.min(TunerReferenceNoteMaxMidi, value));
+    this.controller?.setReferenceNoteMidi(clampedValue);
+  }
+
+  private adjustReferenceOctave(deltaOctave: number): void {
+    this.handleReferenceNoteChanged(this.getReferenceNoteMidi() + deltaOctave * 12);
+  }
+
+  private getReferenceKeyboardBaseMidi(): number {
+    return Math.floor(this.getReferenceNoteMidi() / 12) * 12;
+  }
+
+  private getKeyLabel(semitone: number): string {
+    return this.getCurrentTransposeNotes()[semitone] ?? 'C';
+  }
+
+  private isKeySelected(semitone: number): boolean {
+    return ((this.getReferenceNoteMidi() % 12) + 12) % 12 === semitone;
+  }
+
+  private getWhiteKeyColor(semitone: number): string {
+    return this.isKeySelected(semitone) ? 'rgba(77, 166, 255, 0.92)' : 'rgba(215, 218, 224, 0.92)';
+  }
+
+  private getWhiteKeyFontColor(semitone: number): ResourceColor {
+    return this.isKeySelected(semitone) ? Color.White : 'rgba(28, 32, 40, 0.88)';
+  }
+
+  private getBlackKeyColor(semitone: number): string {
+    return this.isKeySelected(semitone) ? 'rgba(77, 166, 255, 0.96)' : 'rgba(18, 22, 30, 0.94)';
+  }
+
+  private pressKey(semitone: number): void {
+    const targetMidi: number = this.getReferenceKeyboardBaseMidi() + semitone;
+    this.handleReferenceNoteChanged(Math.max(TunerReferenceNoteMinMidi, Math.min(TunerReferenceNoteMaxMidi, targetMidi)));
   }
 
   private getTransposePresetMenu(): MenuElement[] {
@@ -286,32 +333,9 @@ export struct PDFTunerPanelContent {
     );
   }
 
-  private getNoteDisplayModeMenu(): MenuElement[] {
-    return TunerNoteDisplayModes.map(
-      (option: TunerNoteDisplayModeOption): MenuElement => ({
-        value: option.label,
-        action: () => {
-          this.controller?.setNoteDisplayMode(option.mode);
-        },
-        symbolIcon: getCheckIcon((this.controller?.noteDisplayMode ?? 'standard') === option.mode),
-      }),
-    );
-  }
-
-  private getNoteNamingModeMenu(): MenuElement[] {
-    return TunerNoteNamingModes.map(
-      (option: TunerNoteNamingModeOption): MenuElement => ({
-        value: option.label,
-        action: () => {
-          this.controller?.setNoteNamingMode(option.mode);
-        },
-        symbolIcon: getCheckIcon((this.controller?.noteNamingMode ?? 'pitch') === option.mode),
-      }),
-    );
-  }
 
   @Builder
-  private buildLeafMenu(items: MenuElement[]) {
+  private buildLeafMenu(items: MenuElement[], onSelected?: () => void) {
     ForEach(items, (item: MenuElement, index: number) => {
       MenuItem({
         content: item.value,
@@ -319,33 +343,66 @@ export struct PDFTunerPanelContent {
         symbolStartIcon: item.symbolIcon,
       })
         .enabled(item.enabled ?? true)
-        .onClick(() => item.action());
+        .onClick(() => {
+          item.action();
+          onSelected?.();
+        });
     }, (_item: MenuElement, index: number) => index.toString());
   }
 
   @Builder
-  private buildSubMenu(items: MenuElement[]) {
+  private buildFlatModeMenu() {
     Menu() {
-      this.buildLeafMenu(items);
+      MenuItemGroup({ header: "升降" }) {
+        ForEach(TunerNoteDisplayModes, (option: TunerNoteDisplayModeOption) => {
+          MenuItem({
+            content: option.label,
+            symbolStartIcon: getCheckIcon((this.controller?.noteDisplayMode ?? 'standard') === option.mode),
+          })
+            .onClick(() => {
+              this.controller?.setNoteDisplayMode(option.mode);
+              this.showModePopup = false;
+            });
+        }, (option: TunerNoteDisplayModeOption) => `mode-display-${option.mode}`);
+      }
+      MenuItemGroup({ header: "音名" }) {
+        ForEach(TunerNoteNamingModes, (option: TunerNoteNamingModeOption) => {
+          MenuItem({
+            content: option.label,
+            symbolStartIcon: getCheckIcon((this.controller?.noteNamingMode ?? 'pitch') === option.mode),
+          })
+            .onClick(() => {
+              this.controller?.setNoteNamingMode(option.mode);
+              this.showModePopup = false;
+            });
+        }, (option: TunerNoteNamingModeOption) => `mode-naming-${option.mode}`);
+      }
     }
     .backgroundColor(ButtonColor)
   }
 
   @Builder
-  private buildNestedModeMenu() {
+  private buildReferencePresetPopup() {
     Menu() {
-      MenuItem({
-        content: "升降",
-        symbolEndIcon: this.submenuArrowIcon,
-        builder: (): void => this.buildSubMenu(this.getNoteDisplayModeMenu()),
-      });
-      MenuItem({
-        content: "音名",
-        symbolEndIcon: this.submenuArrowIcon,
-        builder: (): void => this.buildSubMenu(this.getNoteNamingModeMenu()),
-      });
+      this.buildLeafMenu(this.getReferencePresetMenu(), () => this.hideReferencePresetPopup());
     }
-    .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND);
+    .backgroundColor(ButtonColor)
+  }
+
+  @Builder
+  private buildTransposePresetPopup() {
+    Menu() {
+      this.buildLeafMenu(this.getTransposePresetMenu(), () => this.hideTransposePresetPopup());
+    }
+    .backgroundColor(ButtonColor)
+  }
+
+  private hideReferencePresetPopup(): void {
+    this.showReferencePresetPopup = false;
+  }
+
+  private hideTransposePresetPopup(): void {
+    this.showTransposePresetPopup = false;
   }
 
   build() {
@@ -442,21 +499,110 @@ export struct PDFTunerPanelContent {
             Stack({ alignContent: Alignment.TopEnd }) {
               Column({ space: this.isReferenceToneEnabled() ? 0 : 4 }) {
                 if (this.isReferenceToneEnabled()) {
-                  ScrollSpinBox({
-                    value: this.getReferenceNoteMidi(),
-                    values: this.getReferenceNoteValues(),
-                    labels: this.getReferenceNoteLabels(),
-                    canLoop: true,
-                    valueFontSize: 40,
-                    debounceMs: 100,
-                    onValueChange: (value: number) => {
-                      this.handleReferenceNoteChanged(value);
-                    },
-                    itemHeight: 40,
-                    gradientHeight: 30,
-                  })
-                    .width(168)
-                    .height(96)
+                  Column({ space: 8 }) {
+                    ScrollSpinBox({
+                      value: this.getReferenceNoteMidi(),
+                      values: this.getReferenceNoteValues(),
+                      labels: this.getReferenceNoteLabels(),
+                      canLoop: false,
+                      valueFontSize: 40,
+                      debounceMs: 20,
+                      onValueChange: (value: number) => {
+                        this.handleReferenceNoteChanged(value);
+                      },
+                      itemHeight: 40,
+                      gradientHeight: 30,
+                    })
+                      .width(168)
+                      .height(96)
+
+                    Row({ space: 8 }) {
+                      Button('低八度')
+                        .type(ButtonType.Capsule)
+                        .layoutWeight(1)
+                        .height(30)
+                        .fontSize(12)
+                        .fontColor(Color.White)
+                        .backgroundColor('rgba(255, 255, 255, 0.12)')
+                        .onClick(() => this.adjustReferenceOctave(-1))
+                      Button('高八度')
+                        .type(ButtonType.Capsule)
+                        .layoutWeight(1)
+                        .height(30)
+                        .fontSize(12)
+                        .fontColor(Color.White)
+                        .backgroundColor('rgba(255, 255, 255, 0.12)')
+                        .onClick(() => this.adjustReferenceOctave(1))
+                    }
+                    .width('100%')
+
+                    Stack() {
+                      Row({ space: 2 }) {
+                        ForEach(
+                          TunerPianoWhiteKeySemitones,
+                          (semitone: number) => {
+                            Button() {
+                              Column() {
+                                Blank()
+                                  .layoutWeight(1)
+                                Text(this.getKeyLabel(semitone))
+                                  .fontSize(10)
+                                  .fontWeight(this.isKeySelected(semitone) ? FontWeight.Bold : FontWeight.Normal)
+                                  .fontColor(this.getWhiteKeyFontColor(semitone))
+                                  .margin({ bottom: TunerPianoWhiteKeyLabelBottom })
+                              }
+                              .width('100%')
+                              .height('100%')
+                              .justifyContent(FlexAlign.End)
+                              .alignItems(HorizontalAlign.Center)
+                            }
+                              .type(ButtonType.Normal)
+                              .layoutWeight(1)
+                              .height(TunerPianoKeyboardHeight)
+                              .backgroundColor(this.getWhiteKeyColor(semitone))
+                              .borderRadius(4)
+                              .onClick(() => this.pressKey(semitone))
+                          },
+                          (semitone: number) => `tuner-wk-${semitone}`,
+                        )
+                      }
+                      .width('100%')
+                      .height(TunerPianoKeyboardHeight)
+
+                      ForEach(
+                        TunerPianoBlackKeyOffsets,
+                        (offset: number, index: number) => {
+                          Button() {
+                            Column() {
+                              Blank()
+                                .layoutWeight(1)
+                              Text(this.getKeyLabel(TunerPianoBlackKeys[index][0]))
+                                .fontSize(8)
+                                .fontWeight(this.isKeySelected(TunerPianoBlackKeys[index][0]) ? FontWeight.Bold : FontWeight.Normal)
+                                .fontColor(Color.White)
+                                .margin({ bottom: TunerPianoBlackKeyLabelBottom })
+                            }
+                            .width('100%')
+                            .height('100%')
+                            .justifyContent(FlexAlign.End)
+                            .alignItems(HorizontalAlign.Center)
+                          }
+                            .type(ButtonType.Normal)
+                            .width(`${TunerPianoBlackKeyWidthFraction * 100}%`)
+                            .height(TunerPianoBlackKeyHeight)
+                            .backgroundColor(this.getBlackKeyColor(TunerPianoBlackKeys[index][0]))
+                            .borderRadius({ bottomLeft: 3, bottomRight: 3 })
+                            .position({ x: `${offset * 100}%`, y: 0 })
+                            .onClick(() => this.pressKey(TunerPianoBlackKeys[index][0]))
+                        },
+                        (_offset: number, index: number) => `tuner-bk-${index}`,
+                      )
+                    }
+                    .width('100%')
+                    .height(TunerPianoKeyboardHeight)
+                    .clip(true)
+                  }
+                  .width('100%')
                 } else {
                   Text(this.getFormattedDetectedNote())
                     .fontSize(40)
@@ -602,10 +748,18 @@ export struct PDFTunerPanelContent {
             .fontSize(13)
             .fontColor(Color.White)
             .backgroundColor("rgba(255, 255, 255, 0.1)")
-            .bindMenu(this.getReferencePresetMenu(), {
-              backgroundColor: ButtonColor,
-              outlineColor: Color.Transparent,
+            .onClick(() => {
+              this.showReferencePresetPopup = true;
+            })
+            .bindPopup(this.showReferencePresetPopup, {
+              builder: this.buildReferencePresetPopup,
               placement: Placement.BottomRight,
+              autoCancel: true,
+              showInSubWindow: false,
+              followTransformOfTarget: true,
+              onStateChange: (event) => {
+                this.showReferencePresetPopup = event.isVisible;
+              },
             })
         }
         GridItem() {
@@ -617,10 +771,18 @@ export struct PDFTunerPanelContent {
               .fontSize(13)
               .fontColor(Color.White)
               .backgroundColor("rgba(255, 255, 255, 0.1)")
-              .bindMenu(this.getTransposePresetMenu(), {
-                backgroundColor: ButtonColor,
-                outlineColor: Color.Transparent,
+              .onClick(() => {
+                this.showTransposePresetPopup = true;
+              })
+              .bindPopup(this.showTransposePresetPopup, {
+                builder: this.buildTransposePresetPopup,
                 placement: Placement.BottomRight,
+                autoCancel: true,
+                showInSubWindow: false,
+                followTransformOfTarget: true,
+                onStateChange: (event) => {
+                  this.showTransposePresetPopup = event.isVisible;
+                },
               })
             Button("模式")
               .type(ButtonType.Capsule)
@@ -629,10 +791,18 @@ export struct PDFTunerPanelContent {
               .fontSize(13)
               .fontColor(Color.White)
               .backgroundColor("rgba(255, 255, 255, 0.1)")
-              .bindMenu(this.buildNestedModeMenu, {
-                backgroundColor: ButtonColor,
-                outlineColor: Color.Transparent,
+              .onClick(() => {
+                this.showModePopup = true;
+              })
+              .bindPopup(this.showModePopup, {
+                builder: this.buildFlatModeMenu,
                 placement: Placement.BottomRight,
+                autoCancel: true,
+                showInSubWindow: false,
+                followTransformOfTarget: true,
+                onStateChange: (event) => {
+                  this.showModePopup = event.isVisible;
+                },
               })
           }.width("100%")
         }
