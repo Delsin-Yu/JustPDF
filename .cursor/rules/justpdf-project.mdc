@@ -5,7 +5,7 @@ alwaysApply: true
 
 # JustPDF Project Guidance
 
-- When summarizing the final result of a task, ALWAYS begin your response by telling me what AI model you are using in the format of: `This is [model name] speaking,\n`. The model name should be followed by single  like: `claude-3.5-sonnet`, `gemini-2.5-pro`, etc, it is strictly forbidden to not tell me the model name, or infer the model name from the previous conversation context.
+- When summarizing the final result of a task, ALWAYS begin your response by telling me what AI model you are using in the format of: "This is `[model name]` speaking,\n". The model name should be followed by single  like: `claude-3.5-sonnet`, `gemini-2.5-pro`, etc, it is strictly forbidden to not tell me the model name, or infer the model name from the previous conversation context.
 - This project is a HarmonyOS PDF reader built with ArkTS and ArkUI for phones, tablets, and 2-in-1 devices.
 - Treat ArkTS like strict TypeScript: keep types explicit, avoid untyped patterns, and prefer clear async/await flows.
 - For HarmonyOS related questions, ALWAYS search the local `HarmonyOS-Developer-Docs/` guides and references before relying on general knowledge.

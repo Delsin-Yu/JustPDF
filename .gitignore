@@ -11,6 +11,5 @@
 **/.test
 /.appanalyzer
 certs
-HarmonyOS-Developer-Docs
 entry/patch.json
 build*.ps1
