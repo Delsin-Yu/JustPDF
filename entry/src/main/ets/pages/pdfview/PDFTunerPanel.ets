@@ -86,14 +86,14 @@ const TunerNoteDisplayModes: TunerNoteDisplayModeOption[] = [
   {
     mode: "flat",
     label: "降号",
-    notes: ["C", "D b", "D", "E b", "E", "F b", "G b", "A b", "A", "B b", "C b", "D b"],
+    notes: ["C", "D b", "D", "E b", "E", "F", "G b", "G", "A b", "A", "B b", "B"],
   },
 ];
 
 const TunerSolfegeDisplayModes: TunerSolfegeDisplayModeSet = {
   standard: ["Do", "Do #", "Re", "Mi b", "Mi", "Fa", "Sol b", "Sol", "Sol #", "La", "Si b", "Si"],
   sharp: ["Do", "Do #", "Re", "Re #", "Mi", "Fa", "Fa #", "Sol", "Sol #", "La", "La #", "Si"],
-  flat: ["Do", "Re b", "Re", "Mi b", "Mi", "Fa b", "Sol b", "La b", "La", "Si b", "Do b", "Do"],
+  flat: ["Do", "Re b", "Re", "Mi b", "Mi", "Fa", "Sol b", "Sol", "La b", "La", "Si b", "Si"],
 };
 
 const TunerNoteNamingModes: TunerNoteNamingModeOption[] = [
@@ -150,8 +150,6 @@ export struct PDFTunerPanelContent {
   @Event onHostPinchEnd: () => void = () => {};
   @Event onClose: () => void = () => {};
   @Param controller: PDFTunerController | undefined = undefined;
-  @Local detectedNote: string = "A4";
-  @Local detuneCents: number = 3;
   @Local showReferencePresetPopup: boolean = false;
   @Local showTransposePresetPopup: boolean = false;
   @Local showModePopup: boolean = false;
@@ -164,37 +162,40 @@ export struct PDFTunerPanelContent {
   };
 
   private getDetuneSummary(): string {
-    if (Math.abs(this.detuneCents) <= 1) {
+    const cents: number = this.controller?.detuneCents ?? 0;
+    if (Math.abs(cents) <= 1) {
       return "音高稳定";
     }
-    return this.detuneCents > 0 ? "略高" : "略低";
+    return cents > 0 ? "略高" : "略低";
   }
 
   private getDetuneColor(): string {
-    if (Math.abs(this.detuneCents) <= 4) {
+    const cents: number = this.controller?.detuneCents ?? 0;
+    if (Math.abs(cents) <= 4) {
       return "#42D392";
     }
-    if (Math.abs(this.detuneCents) <= 12) {
+    if (Math.abs(cents) <= 12) {
       return "#FFB347";
     }
     return "#FF7A7A";
   }
 
   private getMeterSegmentColor(index: number): string {
+    const cents: number = this.controller?.detuneCents ?? 0;
     const centeredIndex: number = Math.floor(TunerMeterSegments / 2);
     const activeIndex: number = Math.max(
       0,
       Math.min(
         TunerMeterSegments - 1,
-        Math.round(((this.detuneCents + 50) / 100) * (TunerMeterSegments - 1)),
+        Math.round(((cents + 50) / 100) * (TunerMeterSegments - 1)),
       ),
     );
     if (index === centeredIndex) {
-      return Math.abs(this.detuneCents) <= 4 ? "#42D392" : "rgba(255, 255, 255, 0.16)";
+      return Math.abs(cents) <= 4 ? "#42D392" : "rgba(255, 255, 255, 0.16)";
     }
     if (
-      (this.detuneCents < 0 && index >= activeIndex && index < centeredIndex) ||
-      (this.detuneCents > 0 && index <= activeIndex && index > centeredIndex)
+      (cents < 0 && index >= activeIndex && index < centeredIndex) ||
+      (cents > 0 && index <= activeIndex && index > centeredIndex)
     ) {
       return this.getDetuneColor();
     }
@@ -250,18 +251,24 @@ export struct PDFTunerPanelContent {
   }
 
   private getFormattedDetectedNote(): string {
-    const match: RegExpMatchArray | null = this.detectedNote.match(/^([A-G](?:#|b)?)(.*)$/);
+    const rawNote: string = this.controller?.detectedNote ?? '--';
+    const match: RegExpMatchArray | null = rawNote.match(/^([A-G](?:#|b)?)(.*)$/);
     if (match === null) {
-      return this.detectedNote;
+      return rawNote;
     }
     const sourceNote: string = match[1];
     const suffix: string = match[2];
     const semitone: number | undefined = TunerNoteSemitoneMap[sourceNote];
     if (semitone === undefined) {
-      return this.detectedNote;
+      return rawNote;
     }
     const displayNote: string = this.getCurrentTransposeNotes()[semitone] ?? sourceNote;
     return `${displayNote}${suffix}`;
+  }
+
+  private getDetuneCentsText(): string {
+    const cents: number = this.controller?.detuneCents ?? 0;
+    return `${cents > 0 ? '+' : ''}${cents} cents`;
   }
 
   private isReferenceToneEnabled(): boolean {
@@ -628,7 +635,7 @@ export struct PDFTunerPanelContent {
                     .fontSize(40)
                     .fontWeight(FontWeight.Bold)
                     .fontColor(Color.White)
-                  Text(`${this.detuneCents > 0 ? "+" : ""}${this.detuneCents} cents`)
+                  Text(this.getDetuneCentsText())
                     .fontSize(15)
                     .fontWeight(FontWeight.Medium)
                     .fontColor(this.getDetuneColor())

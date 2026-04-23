@@ -54,6 +54,31 @@ const TunerMicLowWeightTransitionMaxHz: number = TunerMicGainLowMaxHz;
 const TunerMicLowWeightCurvePower: number = 1.7;
 /** 诊断日志节流：避免 readData 回调中频繁打印。 */
 const TunerMicSpectrumLogIntervalMs: number = 1500;
+const TunerPitchMinHz: number = 55;
+const TunerPitchMaxHz: number = 2000;
+/** 基频检测 RMS 静音门限（归一化振幅）。 */
+const TunerPitchRmsGateThreshold: number = 0.008;
+/** 平滑后基频对原始值的追踪速度。 */
+const TunerPitchSmoothingFactor: number = 0.32;
+/** 连续多少帧无有效检测后清空显示。 */
+const TunerPitchSilenceDecayFrames: number = 12;
+/** 显示用 cents 对原始值的 lerp 速度：越小越平稳（0-1）。 */
+const TunerDisplayCentsLerpFactor: number = 0.18;
+/** 同一音名须连续保持多少帧才切换显示，防止半音边界抖动。 */
+const TunerDisplayNoteHoldFrames: number = 3;
+/** 紧凑音名，键与 Panel 侧 TunerNoteSemitoneMap 一致。 */
+const TunerPitchNoteNames: string[] = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'];
+/**
+ * pYIN 参数（Mauch & Dixon, ICASSP 2014）。
+ * 使用 Beta(2, 18) 先验的生存函数对 CMNDF 局部极小值打分，
+ * 再用帧间高斯转换代价做在线 pitch tracking，抑制八度跳变。
+ */
+/** Beta(2,18) 生存函数：S(v) = (1-v)^18 · (1 + 18v)，低于此概率的候选直接丢弃。 */
+const TunerPyinMinCandidateProb: number = 0.01;
+/** 帧间允许的音高变化标准差（半音），越大越宽容。 */
+const TunerPyinTransitionWidth: number = 5;
+/** 转换代价占候选评分的权重；剩余部分为纯候选概率。 */
+const TunerPyinTransitionWeight: number = 0.48;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -97,6 +122,11 @@ export class PDFTunerController {
   private oscillatorTargetFrequencyHz: number = 440;
   private oscillatorAmplitude: number = 0;
   private oscillatorTargetAmplitude: number = 0;
+  private smoothedPitchHz: number = 0;
+  private pitchSilenceFrameCount: number = 0;
+  private displayCentsSmoothed: number = 0;
+  private pendingNoteName: string = '--';
+  private pendingNoteHoldCount: number = 0;
 
   @Trace public referenceHz: number = 440;
   @Trace public transposeIndex: number = 0;
@@ -112,6 +142,8 @@ export class PDFTunerController {
   @Trace public referenceNoteMidi: number = 69;
   /** 用户曾拒绝麦克风授权后，不再自动弹窗，直至用户点击「重新请求」或系统设置中已授予。 */
   @Trace public microphonePermissionDenied: boolean = false;
+  @Trace public detectedNote: string = '--';
+  @Trace public detuneCents: number = 0;
 
   initialize(preferenceStore: preferences.Preferences): void {
     this.preferenceStore = preferenceStore;
@@ -798,6 +830,7 @@ export class PDFTunerController {
       nextLevels.push(nextHeld);
     }
     this.spectrumBarLevels = nextLevels.slice();
+    this.updateDetectedPitch(this.detectPitchHz(samples));
     this.collectMicSpectrumDiagnostics(
       bandPeak,
       envelopeFloor,
@@ -902,6 +935,136 @@ export class PDFTunerController {
     return this.microphoneGainHigh;
   }
 
+  /**
+   * pYIN 基频检测：
+   * 1. 计算 CMNDF（与 YIN 步骤 1-4 相同）
+   * 2. 提取所有局部极小值，用 Beta(2,18) 生存函数为每个候选打分
+   * 3. 结合前帧 pitch 的高斯转换代价做在线 tracking
+   */
+  private detectPitchHz(samples: Int16Array): number {
+    const n: number = samples.length;
+    const minLag: number = Math.floor(TunerMicSampleRateHz / TunerPitchMaxHz);
+    const maxLag: number = Math.min(
+      Math.floor(TunerMicSampleRateHz / TunerPitchMinHz),
+      Math.floor(n / 2),
+    );
+    if (maxLag <= minLag) {
+      return 0;
+    }
+
+    let sumSq: number = 0;
+    for (let i: number = 0; i < n; i++) {
+      const s: number = samples[i] / 32768;
+      sumSq += s * s;
+    }
+    if (Math.sqrt(sumSq / n) < TunerPitchRmsGateThreshold) {
+      return 0;
+    }
+
+    const windowLen: number = n - maxLag;
+    const yinSize: number = maxLag + 1;
+    const cmndf: number[] = new Array<number>(yinSize);
+    cmndf[0] = 1;
+    let runningSum: number = 0;
+    for (let tau: number = 1; tau < yinSize; tau++) {
+      let diff: number = 0;
+      for (let i: number = 0; i < windowLen; i++) {
+        const delta: number = (samples[i] - samples[i + tau]) / 32768;
+        diff += delta * delta;
+      }
+      runningSum += diff;
+      cmndf[tau] = runningSum > 0 ? diff * tau / runningSum : 1;
+    }
+
+    let bestScore: number = -1;
+    let bestRefinedTau: number = 0;
+
+    for (let tau: number = minLag + 1; tau < yinSize - 1; tau++) {
+      if (cmndf[tau] >= cmndf[tau - 1] || cmndf[tau] > cmndf[tau + 1]) {
+        continue;
+      }
+
+      const val: number = Math.max(0, Math.min(1, cmndf[tau]));
+      const oneMinusVal: number = 1 - val;
+      const prob: number = Math.pow(oneMinusVal, 18) * (1 + 18 * val);
+      if (prob < TunerPyinMinCandidateProb) {
+        continue;
+      }
+
+      const s0: number = cmndf[tau - 1];
+      const s1: number = cmndf[tau];
+      const s2: number = cmndf[tau + 1];
+      const denom: number = 2 * s1 - s2 - s0;
+      let refinedTau: number = tau;
+      if (denom !== 0) {
+        refinedTau = tau + (s0 - s2) / (2 * denom);
+      }
+
+      let score: number = prob;
+      if (this.smoothedPitchHz > 0) {
+        const freqHz: number = TunerMicSampleRateHz / refinedTau;
+        const semitones: number = Math.abs(12 * Math.log2(freqHz / this.smoothedPitchHz));
+        const twiceSigmaSq: number = 2 * TunerPyinTransitionWidth * TunerPyinTransitionWidth;
+        const transition: number = Math.exp(-semitones * semitones / twiceSigmaSq);
+        score *= TunerPyinTransitionWeight * transition + (1 - TunerPyinTransitionWeight);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestRefinedTau = refinedTau;
+      }
+    }
+
+    if (bestRefinedTau <= 0) {
+      return 0;
+    }
+    return TunerMicSampleRateHz / bestRefinedTau;
+  }
+
+  private updateDetectedPitch(pitchHz: number): void {
+    if (pitchHz <= 0) {
+      this.pitchSilenceFrameCount++;
+      if (this.pitchSilenceFrameCount > TunerPitchSilenceDecayFrames) {
+        this.detectedNote = '--';
+        this.detuneCents = 0;
+        this.smoothedPitchHz = 0;
+        this.displayCentsSmoothed = 0;
+        this.pendingNoteHoldCount = 0;
+      }
+      return;
+    }
+
+    this.pitchSilenceFrameCount = 0;
+    if (this.smoothedPitchHz <= 0) {
+      this.smoothedPitchHz = pitchHz;
+    } else {
+      this.smoothedPitchHz += (pitchHz - this.smoothedPitchHz) * TunerPitchSmoothingFactor;
+    }
+
+    const midiFloat: number = 69 + 12 * Math.log2(this.smoothedPitchHz / this.referenceHz);
+    const nearestMidi: number = Math.round(midiFloat);
+    const rawCents: number = (midiFloat - nearestMidi) * 100;
+    const semitone: number = ((nearestMidi % 12) + 12) % 12;
+    const octave: number = Math.floor(nearestMidi / 12) - 1;
+    const candidateNote: string = `${TunerPitchNoteNames[semitone]}${octave}`;
+
+    this.displayCentsSmoothed += (rawCents - this.displayCentsSmoothed) * TunerDisplayCentsLerpFactor;
+    const nextCents: number = Math.max(-50, Math.min(50, Math.round(this.displayCentsSmoothed)));
+    if (nextCents !== this.detuneCents) {
+      this.detuneCents = nextCents;
+    }
+
+    if (candidateNote === this.pendingNoteName) {
+      this.pendingNoteHoldCount++;
+    } else {
+      this.pendingNoteName = candidateNote;
+      this.pendingNoteHoldCount = 1;
+    }
+    if (this.pendingNoteHoldCount >= TunerDisplayNoteHoldFrames && this.detectedNote !== candidateNote) {
+      this.detectedNote = candidateNote;
+    }
+  }
+
   private resetSpectrumLevels(): void {
     for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
       this.smoothedMicSpectrum[i] = 0;
@@ -926,6 +1089,13 @@ export class PDFTunerController {
     this.spectrumBarLevels = [
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
+    this.detectedNote = '--';
+    this.detuneCents = 0;
+    this.smoothedPitchHz = 0;
+    this.pitchSilenceFrameCount = 0;
+    this.displayCentsSmoothed = 0;
+    this.pendingNoteName = '--';
+    this.pendingNoteHoldCount = 0;
   }
 
   private async releaseDetachedAudioCapturer(capturer: audio.AudioCapturer): Promise<void> {
