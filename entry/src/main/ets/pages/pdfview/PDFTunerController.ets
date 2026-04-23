@@ -10,12 +10,9 @@ export const TunerReferenceHzMax: number = 600;
 const TunerTransposeIndexPreferenceKey: string = 'tunerTransposeIndex';
 const TunerNoteDisplayModePreferenceKey: string = 'tunerNoteDisplayMode';
 const TunerNoteNamingModePreferenceKey: string = 'tunerNoteNamingMode';
-const TunerMicrophoneGainPreferenceKey: string = 'tunerMicrophoneGain';
-const TunerMicrophoneGainLowPreferenceKey: string = 'tunerMicrophoneGainLow';
-const TunerMicrophoneGainMidPreferenceKey: string = 'tunerMicrophoneGainMid';
-const TunerMicrophoneGainHighPreferenceKey: string = 'tunerMicrophoneGainHigh';
-const TunerMicGainLowMaxHz: number = 300;
-const TunerMicGainMidMaxHz: number = 4000;
+const TunerFilterPresetPreferenceKey: string = 'tunerFilterPreset';
+const TunerAutoGainEnabledPreferenceKey: string = 'tunerAutoGainEnabled';
+const TunerSpectrumGainPreferenceKey: string = 'tunerSpectrumGain';
 const TunerReferenceToneEnabledPreferenceKey: string = 'tunerReferenceToneEnabled';
 const TunerReferenceNoteMidiPreferenceKey: string = 'tunerReferenceNoteMidi';
 const TunerReferenceToneSampleRateHz: number = 48000;
@@ -43,21 +40,24 @@ const TunerMicSpectrumFreqMaxHz: number = 6000;
 const TunerMicSpectrumPeakFallPerUpdate: number = 0.032;
 /** 频谱电平压缩参数：使用 log(1 + gamma*x) 压缩动态范围，避免低频过快顶满。 */
 const TunerMicSpectrumCompressionGamma: number = 12;
-/** 三段增益映射：将滑杆值映射到较温和的线性增益，避免最大档持续过载。 */
-const TunerMicGainLinearBase: number = 0.12;
-const TunerMicGainLinearRange: number = 0.70;
 /** 包络地板：限制极低噪声时的归一化放大倍率。 */
 const TunerMicEnvelopeFloorMin: number = 0.0012;
-/** 低频附加衰减：在最低频段使用更小权重，逐步过渡到 1。 */
-const TunerMicLowWeightMin: number = 0.52;
-const TunerMicLowWeightTransitionMaxHz: number = TunerMicGainLowMaxHz;
-const TunerMicLowWeightCurvePower: number = 1.7;
+const TunerSpectrumGainMin: number = 0.25;
+const TunerSpectrumGainMax: number = 4;
+const TunerSpectrumAutoGainTargetEnvelope: number = 0.045;
+const TunerSpectrumAutoGainMinInputEnvelope: number = 0.003;
+const TunerSpectrumAutoGainAttack: number = 0.26;
+const TunerSpectrumAutoGainRelease: number = 0.08;
 /** 诊断日志节流：避免 readData 回调中频繁打印。 */
 const TunerMicSpectrumLogIntervalMs: number = 1500;
 const TunerPitchMinHz: number = 55;
 const TunerPitchMaxHz: number = 2000;
 /** 基频检测 RMS 静音门限（归一化振幅）。 */
 const TunerPitchRmsGateThreshold: number = 0.008;
+/** MPM 局部峰值阈值：过低会吸收噪声周期，过高会漏检弱音。 */
+const TunerMpmPeakThreshold: number = 0.42;
+/** MPM 最低清晰度阈值：用于过滤过于模糊的候选。 */
+const TunerMpmMinClarity: number = 0.28;
 /** 平滑后基频对原始值的追踪速度。 */
 const TunerPitchSmoothingFactor: number = 0.32;
 /** 连续多少帧无有效检测后清空显示。 */
@@ -68,24 +68,115 @@ const TunerDisplayCentsLerpFactor: number = 0.18;
 const TunerDisplayNoteHoldFrames: number = 3;
 /** 紧凑音名，键与 Panel 侧 TunerNoteSemitoneMap 一致。 */
 const TunerPitchNoteNames: string[] = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'];
-/**
- * pYIN 参数（Mauch & Dixon, ICASSP 2014）。
- * 使用 Beta(2, 18) 先验的生存函数对 CMNDF 局部极小值打分，
- * 再用帧间高斯转换代价做在线 pitch tracking，抑制八度跳变。
- */
-/** Beta(2,18) 生存函数：S(v) = (1-v)^18 · (1 + 18v)，低于此概率的候选直接丢弃。 */
-const TunerPyinMinCandidateProb: number = 0.01;
 /** 帧间允许的音高变化标准差（半音），越大越宽容。 */
-const TunerPyinTransitionWidth: number = 5;
+const TunerPitchTransitionWidth: number = 5;
 /** 转换代价占候选评分的权重；剩余部分为纯候选概率。 */
-const TunerPyinTransitionWeight: number = 0.48;
+const TunerPitchTransitionWeight: number = 0.38;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
-export type TunerMicrophoneBand = 'low' | 'mid' | 'high';
+export type TunerFilterPresetId = 'chromatic' | 'contrabass' | 'bass' | 'tenor' | 'alto' | 'soprano';
 
 const TunerValidDisplayModes: TunerNoteDisplayMode[] = ['standard', 'sharp', 'flat'];
 const TunerValidNamingModes: TunerNoteNamingMode[] = ['pitch', 'solfege'];
+const TunerValidFilterPresetIds: TunerFilterPresetId[] = [
+  'chromatic',
+  'contrabass',
+  'bass',
+  'tenor',
+  'alto',
+  'soprano',
+];
+
+export interface TunerFilterPresetOption {
+  id: TunerFilterPresetId;
+  label: string;
+}
+
+export const TunerFilterPresetOptions: TunerFilterPresetOption[] = [
+  { id: 'chromatic', label: '全频' },
+  { id: 'contrabass', label: '倍低音' },
+  { id: 'bass', label: '低音' },
+  { id: 'tenor', label: '次中音' },
+  { id: 'alto', label: '中音' },
+  { id: 'soprano', label: '高音' },
+];
+
+interface TunerFilterPresetDefinition {
+  id: TunerFilterPresetId;
+  label: string;
+  pitchMinHz: number;
+  pitchMaxHz: number;
+  highPassHz: number;
+  lowPassHz: number;
+  rmsGateThreshold: number;
+}
+
+interface TunerFilterPresetDefinitionMap {
+  chromatic: TunerFilterPresetDefinition;
+  contrabass: TunerFilterPresetDefinition;
+  bass: TunerFilterPresetDefinition;
+  tenor: TunerFilterPresetDefinition;
+  alto: TunerFilterPresetDefinition;
+  soprano: TunerFilterPresetDefinition;
+}
+
+const TunerFilterPresetDefinitions: TunerFilterPresetDefinitionMap = {
+  chromatic: {
+    id: 'chromatic',
+    label: '全频',
+    pitchMinHz: 27.5,
+    pitchMaxHz: 1760,
+    highPassHz: 22,
+    lowPassHz: 5200,
+    rmsGateThreshold: TunerPitchRmsGateThreshold,
+  },
+  contrabass: {
+    id: 'contrabass',
+    label: '倍低音',
+    pitchMinHz: 27.5,
+    pitchMaxHz: 110,
+    highPassHz: 18,
+    lowPassHz: 170,
+    rmsGateThreshold: 0.0045,
+  },
+  bass: {
+    id: 'bass',
+    label: '低音',
+    pitchMinHz: 55,
+    pitchMaxHz: 220,
+    highPassHz: 40,
+    lowPassHz: 320,
+    rmsGateThreshold: 0.0055,
+  },
+  tenor: {
+    id: 'tenor',
+    label: '次中音',
+    pitchMinHz: 95,
+    pitchMaxHz: 520,
+    highPassHz: 75,
+    lowPassHz: 700,
+    rmsGateThreshold: 0.006,
+  },
+  alto: {
+    id: 'alto',
+    label: '中音',
+    pitchMinHz: 170,
+    pitchMaxHz: 1000,
+    highPassHz: 140,
+    lowPassHz: 1300,
+    rmsGateThreshold: 0.0065,
+  },
+  soprano: {
+    id: 'soprano',
+    label: '高音',
+    pitchMinHz: 240,
+    pitchMaxHz: 1760,
+    highPassHz: 220,
+    lowPassHz: 2400,
+    rmsGateThreshold: 0.007,
+  },
+};
 
 @ObservedV2
 export class PDFTunerController {
@@ -97,6 +188,10 @@ export class PDFTunerController {
   private micCaptureSession: number = 0;
   private readonly smoothedMicSpectrum: number[] = [];
   private micPeakEnvelope: number = 0.0001;
+  private micHighPassPrevInput: number = 0;
+  private micHighPassPrevOutput: number = 0;
+  private micLowPassPrevOutput: number = 0;
+  private spectrumAutoGainTarget: number = 1;
   private micSpectrumLogLastTimestampMs: number = 0;
   private micSpectrumLogFrameCount: number = 0;
   private micSpectrumLogBandPeakMax: number = 0;
@@ -132,9 +227,12 @@ export class PDFTunerController {
   @Trace public transposeIndex: number = 0;
   @Trace public noteDisplayMode: TunerNoteDisplayMode = 'standard';
   @Trace public noteNamingMode: TunerNoteNamingMode = 'pitch';
-  @Trace public microphoneGainLow: number = 0.5;
-  @Trace public microphoneGainMid: number = 0.5;
-  @Trace public microphoneGainHigh: number = 0.5;
+  @Trace public filterPresetId: TunerFilterPresetId = 'chromatic';
+  @Trace public autoGainEnabled: boolean = true;
+  @Trace public spectrumGain: number = 1;
+  @Trace public filterCurveLevels: number[] = [
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  ];
   @Trace public spectrumBarLevels: number[] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   ];
@@ -149,6 +247,7 @@ export class PDFTunerController {
     this.preferenceStore = preferenceStore;
     this.loadPreferences(preferenceStore);
     this.initializeSmoothedMicSpectrum();
+    this.updateFilterCurveLevels();
     this.initializeAudio();
     this.syncReferenceTonePlaybackState();
   }
@@ -244,24 +343,34 @@ export class PDFTunerController {
     this.savePreferences();
   }
 
-  setMicrophoneBandGain(band: TunerMicrophoneBand, value: number): void {
-    const nextValue: number = this.clampMicrophoneGain(value);
-    if (band === 'low') {
-      if (this.microphoneGainLow === nextValue) {
-        return;
-      }
-      this.microphoneGainLow = nextValue;
-    } else if (band === 'mid') {
-      if (this.microphoneGainMid === nextValue) {
-        return;
-      }
-      this.microphoneGainMid = nextValue;
-    } else {
-      if (this.microphoneGainHigh === nextValue) {
-        return;
-      }
-      this.microphoneGainHigh = nextValue;
+  setFilterPresetId(value: TunerFilterPresetId): void {
+    if (this.filterPresetId === value) {
+      return;
     }
+    this.filterPresetId = value;
+    this.updateFilterCurveLevels();
+    this.resetPreprocessorState();
+    this.savePreferences();
+  }
+
+  setAutoGainEnabled(value: boolean): void {
+    if (this.autoGainEnabled === value) {
+      return;
+    }
+    this.autoGainEnabled = value;
+    if (value) {
+      this.spectrumAutoGainTarget = this.spectrumGain;
+    }
+    this.savePreferences();
+  }
+
+  setSpectrumGain(value: number): void {
+    const nextValue: number = this.clampSpectrumGain(value);
+    this.spectrumAutoGainTarget = nextValue;
+    if (this.spectrumGain === nextValue) {
+      return;
+    }
+    this.spectrumGain = nextValue;
     this.savePreferences();
   }
 
@@ -406,18 +515,15 @@ export class PDFTunerController {
       this.noteNamingMode = TunerValidNamingModes.includes(savedNaming as TunerNoteNamingMode)
         ? (savedNaming as TunerNoteNamingMode)
         : 'pitch';
-      const legacyMicGain: number = this.clampMicrophoneGain(
-        preferenceStore.getSync(TunerMicrophoneGainPreferenceKey, 0.5) as number,
+      const savedFilterPresetId = preferenceStore.getSync(TunerFilterPresetPreferenceKey, 'chromatic') as string;
+      this.filterPresetId = TunerValidFilterPresetIds.includes(savedFilterPresetId as TunerFilterPresetId)
+        ? (savedFilterPresetId as TunerFilterPresetId)
+        : 'chromatic';
+      this.autoGainEnabled = !!preferenceStore.getSync(TunerAutoGainEnabledPreferenceKey, true);
+      this.spectrumGain = this.clampSpectrumGain(
+        preferenceStore.getSync(TunerSpectrumGainPreferenceKey, 1) as number,
       );
-      this.microphoneGainLow = this.clampMicrophoneGain(
-        preferenceStore.getSync(TunerMicrophoneGainLowPreferenceKey, legacyMicGain) as number,
-      );
-      this.microphoneGainMid = this.clampMicrophoneGain(
-        preferenceStore.getSync(TunerMicrophoneGainMidPreferenceKey, legacyMicGain) as number,
-      );
-      this.microphoneGainHigh = this.clampMicrophoneGain(
-        preferenceStore.getSync(TunerMicrophoneGainHighPreferenceKey, legacyMicGain) as number,
-      );
+      this.spectrumAutoGainTarget = this.spectrumGain;
       this.referenceToneEnabled = !!preferenceStore.getSync(TunerReferenceToneEnabledPreferenceKey, false);
       this.referenceNoteMidi = this.clampReferenceNoteMidi(
         preferenceStore.getSync(TunerReferenceNoteMidiPreferenceKey, 69) as number,
@@ -621,9 +727,9 @@ export class PDFTunerController {
       this.preferenceStore.putSync(TunerTransposeIndexPreferenceKey, this.transposeIndex);
       this.preferenceStore.putSync(TunerNoteDisplayModePreferenceKey, this.noteDisplayMode);
       this.preferenceStore.putSync(TunerNoteNamingModePreferenceKey, this.noteNamingMode);
-      this.preferenceStore.putSync(TunerMicrophoneGainLowPreferenceKey, this.microphoneGainLow);
-      this.preferenceStore.putSync(TunerMicrophoneGainMidPreferenceKey, this.microphoneGainMid);
-      this.preferenceStore.putSync(TunerMicrophoneGainHighPreferenceKey, this.microphoneGainHigh);
+      this.preferenceStore.putSync(TunerFilterPresetPreferenceKey, this.filterPresetId);
+      this.preferenceStore.putSync(TunerAutoGainEnabledPreferenceKey, this.autoGainEnabled);
+      this.preferenceStore.putSync(TunerSpectrumGainPreferenceKey, this.spectrumGain);
       this.preferenceStore.putSync(TunerReferenceToneEnabledPreferenceKey, this.referenceToneEnabled);
       this.preferenceStore.putSync(TunerReferenceNoteMidiPreferenceKey, this.referenceNoteMidi);
       this.preferenceStore.flushSync();
@@ -640,8 +746,8 @@ export class PDFTunerController {
     return Math.max(0, Math.min(11, Math.round(value)));
   }
 
-  private clampMicrophoneGain(value: number): number {
-    return Math.max(0, Math.min(1, value));
+  private clampSpectrumGain(value: number): number {
+    return Math.max(TunerSpectrumGainMin, Math.min(TunerSpectrumGainMax, value));
   }
 
   private clampReferenceNoteMidi(value: number): number {
@@ -650,23 +756,6 @@ export class PDFTunerController {
 
   private clampPcmSample(value: number): number {
     return Math.max(-TunerReferenceToneMaxAmplitude - 1, Math.min(TunerReferenceToneMaxAmplitude, Math.round(value)));
-  }
-
-  private clampUnit(value: number): number {
-    return Math.max(0, Math.min(1, value));
-  }
-
-  private getLowFrequencyWeight(freqHz: number): number {
-    if (freqHz >= TunerMicLowWeightTransitionMaxHz) {
-      return 1;
-    }
-    if (freqHz <= TunerMicSpectrumFreqMinHz) {
-      return TunerMicLowWeightMin;
-    }
-    const ratio: number = (freqHz - TunerMicSpectrumFreqMinHz)
-      / (TunerMicLowWeightTransitionMaxHz - TunerMicSpectrumFreqMinHz);
-    const curvedRatio: number = Math.pow(this.clampUnit(ratio), TunerMicLowWeightCurvePower);
-    return TunerMicLowWeightMin + curvedRatio * (1 - TunerMicLowWeightMin);
   }
 
   private compressSpectrumLevel(linearValue: number): number {
@@ -681,10 +770,6 @@ export class PDFTunerController {
     return numerator / denominator;
   }
 
-  private mapSliderGainToLinear(bandMicGain: number): number {
-    return TunerMicGainLinearBase + this.clampUnit(bandMicGain) * TunerMicGainLinearRange;
-  }
-
   private initializeSmoothedMicSpectrum(): void {
     if (this.smoothedMicSpectrum.length === TunerMicSpectrumBandCount) {
       return;
@@ -696,6 +781,118 @@ export class PDFTunerController {
     this.micSpectrumLogOverloadCount.length = 0;
     for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
       this.micSpectrumLogOverloadCount.push(0);
+    }
+  }
+
+  private getCurrentFilterPresetDefinition(): TunerFilterPresetDefinition {
+    switch (this.filterPresetId) {
+      case 'contrabass':
+        return TunerFilterPresetDefinitions.contrabass;
+      case 'bass':
+        return TunerFilterPresetDefinitions.bass;
+      case 'tenor':
+        return TunerFilterPresetDefinitions.tenor;
+      case 'alto':
+        return TunerFilterPresetDefinitions.alto;
+      case 'soprano':
+        return TunerFilterPresetDefinitions.soprano;
+      case 'chromatic':
+      default:
+        return TunerFilterPresetDefinitions.chromatic;
+    }
+  }
+
+  private getFirstOrderHighPassResponse(freqHz: number, cutoffHz: number): number {
+    if (cutoffHz <= 0 || freqHz <= 0) {
+      return 1;
+    }
+    return freqHz / Math.sqrt(freqHz * freqHz + cutoffHz * cutoffHz);
+  }
+
+  private getFirstOrderLowPassResponse(freqHz: number, cutoffHz: number): number {
+    if (cutoffHz <= 0 || freqHz <= 0) {
+      return 1;
+    }
+    return cutoffHz / Math.sqrt(freqHz * freqHz + cutoffHz * cutoffHz);
+  }
+
+  private updateFilterCurveLevels(): void {
+    const preset = this.getCurrentFilterPresetDefinition();
+    const nextLevels: number[] = [];
+    for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
+      const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
+      const response: number = this.getFirstOrderHighPassResponse(freqHz, preset.highPassHz)
+        * this.getFirstOrderLowPassResponse(freqHz, preset.lowPassHz);
+      nextLevels.push(Math.max(0, Math.min(1, response)));
+    }
+    this.filterCurveLevels = nextLevels;
+  }
+
+  private resetPreprocessorState(): void {
+    this.micHighPassPrevInput = 0;
+    this.micHighPassPrevOutput = 0;
+    this.micLowPassPrevOutput = 0;
+  }
+
+  private getHighPassAlpha(cutoffHz: number): number {
+    if (cutoffHz <= 0) {
+      return 0;
+    }
+    const dt: number = 1 / TunerMicSampleRateHz;
+    const rc: number = 1 / (2 * Math.PI * cutoffHz);
+    return rc / (rc + dt);
+  }
+
+  private getLowPassAlpha(cutoffHz: number): number {
+    if (cutoffHz <= 0) {
+      return 1;
+    }
+    const dt: number = 1 / TunerMicSampleRateHz;
+    const rc: number = 1 / (2 * Math.PI * cutoffHz);
+    return dt / (rc + dt);
+  }
+
+  private preprocessMicSamples(sourceSamples: Int16Array): Float32Array {
+    const preset = this.getCurrentFilterPresetDefinition();
+    const highPassAlpha: number = this.getHighPassAlpha(preset.highPassHz);
+    const lowPassAlpha: number = this.getLowPassAlpha(preset.lowPassHz);
+    const filteredSamples: Float32Array = new Float32Array(sourceSamples.length);
+    for (let i = 0; i < sourceSamples.length; i++) {
+      let sample: number = sourceSamples[i] / 32768;
+      if (preset.highPassHz > 0) {
+        const nextHighPass: number = highPassAlpha * (this.micHighPassPrevOutput + sample - this.micHighPassPrevInput);
+        this.micHighPassPrevInput = sample;
+        this.micHighPassPrevOutput = nextHighPass;
+        sample = nextHighPass;
+      }
+      if (preset.lowPassHz > 0) {
+        this.micLowPassPrevOutput += lowPassAlpha * (sample - this.micLowPassPrevOutput);
+        sample = this.micLowPassPrevOutput;
+      }
+      filteredSamples[i] = sample;
+    }
+    return filteredSamples;
+  }
+
+  private updateSpectrumGain(envelopeFloor: number, rawInputEnvelope: number): void {
+    if (!this.autoGainEnabled) {
+      return;
+    }
+    if (rawInputEnvelope < TunerSpectrumAutoGainMinInputEnvelope) {
+      this.spectrumAutoGainTarget = this.spectrumGain;
+      return;
+    }
+    const desiredGain: number = this.clampSpectrumGain(
+      TunerSpectrumAutoGainTargetEnvelope / Math.max(TunerMicEnvelopeFloorMin, envelopeFloor),
+    );
+    const smoothing: number = desiredGain < this.spectrumGain
+      ? TunerSpectrumAutoGainAttack
+      : TunerSpectrumAutoGainRelease;
+    const nextGain: number = this.spectrumGain + (desiredGain - this.spectrumGain) * smoothing;
+    this.spectrumAutoGainTarget = desiredGain;
+    const clampedGain: number = this.clampSpectrumGain(nextGain);
+    if (Math.abs(clampedGain - this.spectrumGain) >= 0.001) {
+      this.spectrumGain = clampedGain;
     }
   }
 
@@ -762,7 +959,7 @@ export class PDFTunerController {
   }
 
   private processMicPcmBuffer(buffer: ArrayBuffer): void {
-    const samples: Int16Array = new Int16Array(buffer);
+    const samples: Float32Array = this.preprocessMicSamples(new Int16Array(buffer));
     if (samples.length === 0) {
       return;
     }
@@ -778,7 +975,7 @@ export class PDFTunerController {
       let im: number = 0;
       for (let i = 0; i < n; i++) {
         const hann: number = 0.5 * (1 - Math.cos((2 * Math.PI * i) * invN));
-        const x: number = (samples[i] / 32768) * hann;
+        const x: number = samples[i] * hann;
         const angle: number = omegaPerSample * i;
         re += x * Math.cos(angle);
         im -= x * Math.sin(angle);
@@ -790,6 +987,8 @@ export class PDFTunerController {
 
     this.micPeakEnvelope = this.micPeakEnvelope * 0.992 + bandPeak * 0.008;
     const envelopeFloor: number = Math.max(TunerMicEnvelopeFloorMin, this.micPeakEnvelope);
+    this.updateSpectrumGain(envelopeFloor, bandPeak);
+    const effectiveSpectrumGain: number = this.spectrumGain;
     const nextLevels: number[] = [];
     let rawLowMax: number = 0;
     let rawMidMax: number = 0;
@@ -802,25 +1001,24 @@ export class PDFTunerController {
     let postCurveHighMax: number = 0;
     for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
       const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
-      const bandMicGain: number = this.getMicrophoneGainForSpectrumBand(band);
-      const gainLinear: number = this.mapSliderGainToLinear(bandMicGain) / envelopeFloor;
-      const weightedInput: number = rawMagnitudes[band] * gainLinear * this.getLowFrequencyWeight(freqHz);
+      const curveLevel: number = this.filterCurveLevels[band] ?? 0;
+      const weightedInput: number = rawMagnitudes[band] * curveLevel * effectiveSpectrumGain / envelopeFloor;
       const instant: number = this.compressSpectrumLevel(weightedInput);
       const held: number = this.smoothedMicSpectrum[band];
       const nextHeld: number = instant > held
         ? instant
         : Math.max(0, held - TunerMicSpectrumPeakFallPerUpdate);
-      if (freqHz < TunerMicGainLowMaxHz) {
+      if (freqHz < TunerPitchMinHz) {
         rawLowMax = Math.max(rawLowMax, rawMagnitudes[band]);
-        preCurveLowMax = Math.max(preCurveLowMax, weightedInput);
+        preCurveLowMax = Math.max(preCurveLowMax, curveLevel);
         postCurveLowMax = Math.max(postCurveLowMax, instant);
-      } else if (freqHz <= TunerMicGainMidMaxHz) {
+      } else if (freqHz <= TunerPitchMaxHz) {
         rawMidMax = Math.max(rawMidMax, rawMagnitudes[band]);
-        preCurveMidMax = Math.max(preCurveMidMax, weightedInput);
+        preCurveMidMax = Math.max(preCurveMidMax, curveLevel);
         postCurveMidMax = Math.max(postCurveMidMax, instant);
       } else {
         rawHighMax = Math.max(rawHighMax, rawMagnitudes[band]);
-        preCurveHighMax = Math.max(preCurveHighMax, weightedInput);
+        preCurveHighMax = Math.max(preCurveHighMax, curveLevel);
         postCurveHighMax = Math.max(postCurveHighMax, instant);
       }
       if (nextHeld > 1 && band < this.micSpectrumLogOverloadCount.length) {
@@ -892,8 +1090,8 @@ export class PDFTunerController {
     hilog.info(
       0,
       'PDFTunerController',
-      `调音器频谱诊断 frame=${this.micSpectrumLogFrameCount} gain=[${this.microphoneGainLow.toFixed(2)},` +
-      `${this.microphoneGainMid.toFixed(2)},${this.microphoneGainHigh.toFixed(2)}] bandPeak=${this.micSpectrumLogBandPeakMax.toFixed(5)} ` +
+      `调音器频谱诊断 frame=${this.micSpectrumLogFrameCount} preset=${this.getCurrentFilterPresetDefinition().label} ` +
+      `bandPeak=${this.micSpectrumLogBandPeakMax.toFixed(5)} gain=${this.spectrumGain.toFixed(2)} ` +
       `env=${this.micSpectrumLogEnvelopeMax.toFixed(5)} rawMax=[${this.micSpectrumLogRawLowMax.toFixed(5)},` +
       `${this.micSpectrumLogRawMidMax.toFixed(5)},${this.micSpectrumLogRawHighMax.toFixed(5)}] preCurveMax=[` +
       `${this.micSpectrumLogPreCurveLowMax.toFixed(3)},${this.micSpectrumLogPreCurveMidMax.toFixed(3)},` +
@@ -924,28 +1122,18 @@ export class PDFTunerController {
     return TunerMicSpectrumFreqMinHz * Math.pow(TunerMicSpectrumFreqMaxHz / TunerMicSpectrumFreqMinHz, t);
   }
 
-  private getMicrophoneGainForSpectrumBand(bandIndex: number): number {
-    const freqHz: number = this.getMicSpectrumTargetFreqHz(bandIndex);
-    if (freqHz < TunerMicGainLowMaxHz) {
-      return this.microphoneGainLow;
-    }
-    if (freqHz <= TunerMicGainMidMaxHz) {
-      return this.microphoneGainMid;
-    }
-    return this.microphoneGainHigh;
-  }
-
   /**
-   * pYIN 基频检测：
-   * 1. 计算 CMNDF（与 YIN 步骤 1-4 相同）
-   * 2. 提取所有局部极小值，用 Beta(2,18) 生存函数为每个候选打分
-   * 3. 结合前帧 pitch 的高斯转换代价做在线 tracking
+   * MPM（McLeod Pitch Method）基频检测：
+   * 1. 计算 NSDF（Normalized Square Difference Function）
+   * 2. 在当前预设音域内寻找局部峰值
+   * 3. 对最佳峰值做抛物线插值，并结合前一帧音高抑制跳变
    */
-  private detectPitchHz(samples: Int16Array): number {
+  private detectPitchHz(samples: Float32Array): number {
     const n: number = samples.length;
-    const minLag: number = Math.floor(TunerMicSampleRateHz / TunerPitchMaxHz);
+    const preset = this.getCurrentFilterPresetDefinition();
+    const minLag: number = Math.floor(TunerMicSampleRateHz / preset.pitchMaxHz);
     const maxLag: number = Math.min(
-      Math.floor(TunerMicSampleRateHz / TunerPitchMinHz),
+      Math.floor(TunerMicSampleRateHz / preset.pitchMinHz),
       Math.floor(n / 2),
     );
     if (maxLag <= minLag) {
@@ -954,59 +1142,56 @@ export class PDFTunerController {
 
     let sumSq: number = 0;
     for (let i: number = 0; i < n; i++) {
-      const s: number = samples[i] / 32768;
+      const s: number = samples[i];
       sumSq += s * s;
     }
-    if (Math.sqrt(sumSq / n) < TunerPitchRmsGateThreshold) {
+    if (Math.sqrt(sumSq / n) < preset.rmsGateThreshold) {
       return 0;
     }
 
-    const windowLen: number = n - maxLag;
-    const yinSize: number = maxLag + 1;
-    const cmndf: number[] = new Array<number>(yinSize);
-    cmndf[0] = 1;
-    let runningSum: number = 0;
-    for (let tau: number = 1; tau < yinSize; tau++) {
-      let diff: number = 0;
-      for (let i: number = 0; i < windowLen; i++) {
-        const delta: number = (samples[i] - samples[i + tau]) / 32768;
-        diff += delta * delta;
+    const nsdf: number[] = new Array<number>(maxLag + 1);
+    nsdf[0] = 1;
+    for (let tau: number = 1; tau <= maxLag; tau++) {
+      let acf: number = 0;
+      let divisor: number = 0;
+      for (let i: number = 0; i < n - tau; i++) {
+        const x: number = samples[i];
+        const y: number = samples[i + tau];
+        acf += x * y;
+        divisor += x * x + y * y;
       }
-      runningSum += diff;
-      cmndf[tau] = runningSum > 0 ? diff * tau / runningSum : 1;
+      nsdf[tau] = divisor > 0 ? (2 * acf) / divisor : 0;
     }
 
     let bestScore: number = -1;
     let bestRefinedTau: number = 0;
 
-    for (let tau: number = minLag + 1; tau < yinSize - 1; tau++) {
-      if (cmndf[tau] >= cmndf[tau - 1] || cmndf[tau] > cmndf[tau + 1]) {
+    for (let tau: number = minLag + 1; tau < maxLag; tau++) {
+      const peakValue: number = nsdf[tau];
+      if (
+        peakValue < TunerMpmPeakThreshold ||
+        peakValue < nsdf[tau - 1] ||
+        peakValue <= nsdf[tau + 1]
+      ) {
         continue;
       }
 
-      const val: number = Math.max(0, Math.min(1, cmndf[tau]));
-      const oneMinusVal: number = 1 - val;
-      const prob: number = Math.pow(oneMinusVal, 18) * (1 + 18 * val);
-      if (prob < TunerPyinMinCandidateProb) {
-        continue;
-      }
-
-      const s0: number = cmndf[tau - 1];
-      const s1: number = cmndf[tau];
-      const s2: number = cmndf[tau + 1];
-      const denom: number = 2 * s1 - s2 - s0;
+      const s0: number = nsdf[tau - 1];
+      const s1: number = peakValue;
+      const s2: number = nsdf[tau + 1];
+      const denom: number = s0 - 2 * s1 + s2;
       let refinedTau: number = tau;
-      if (denom !== 0) {
+      if (Math.abs(denom) > 1e-6) {
         refinedTau = tau + (s0 - s2) / (2 * denom);
       }
 
-      let score: number = prob;
+      let score: number = peakValue;
       if (this.smoothedPitchHz > 0) {
         const freqHz: number = TunerMicSampleRateHz / refinedTau;
         const semitones: number = Math.abs(12 * Math.log2(freqHz / this.smoothedPitchHz));
-        const twiceSigmaSq: number = 2 * TunerPyinTransitionWidth * TunerPyinTransitionWidth;
+        const twiceSigmaSq: number = 2 * TunerPitchTransitionWidth * TunerPitchTransitionWidth;
         const transition: number = Math.exp(-semitones * semitones / twiceSigmaSq);
-        score *= TunerPyinTransitionWeight * transition + (1 - TunerPyinTransitionWeight);
+        score *= TunerPitchTransitionWeight * transition + (1 - TunerPitchTransitionWeight);
       }
 
       if (score > bestScore) {
@@ -1015,7 +1200,7 @@ export class PDFTunerController {
       }
     }
 
-    if (bestRefinedTau <= 0) {
+    if (bestRefinedTau <= 0 || bestScore < TunerMpmMinClarity) {
       return 0;
     }
     return TunerMicSampleRateHz / bestRefinedTau;
@@ -1069,7 +1254,9 @@ export class PDFTunerController {
     for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
       this.smoothedMicSpectrum[i] = 0;
     }
+    this.resetPreprocessorState();
     this.micPeakEnvelope = 0.0001;
+    this.spectrumAutoGainTarget = this.spectrumGain;
     this.micSpectrumLogFrameCount = 0;
     this.micSpectrumLogBandPeakMax = 0;
     this.micSpectrumLogEnvelopeMax = 0;
