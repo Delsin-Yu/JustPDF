@@ -7,6 +7,8 @@ import {
   PDFTunerController,
   TunerNoteDisplayMode,
   TunerNoteNamingMode,
+  TunerReferenceHzMax,
+  TunerReferenceHzMin,
 } from './PDFTunerController';
 import {
   SharedPanelBackgroundBlurRadius,
@@ -28,8 +30,9 @@ const TunerDefaultOffsetX: number = 24;
 const TunerDefaultOffsetY: number = 112;
 const TunerMeterSegments: number = 11;
 const TunerSpectrumBars: number = 20;
+const TunerSpectrumRedThreshold: number = 1.08;
 const TunerReferenceNoteMinMidi: number = 48;
-const TunerReferenceNoteMaxMidi: number = 84;
+const TunerReferenceNoteMaxMidi: number = 108;
 const TunerReferenceNoteDefaultMidi: number = 69;
 const TunerPianoWhiteKeySemitones: number[] = [0, 2, 4, 5, 7, 9, 11];
 const TunerPianoBlackKeys: number[][] = [
@@ -208,14 +211,14 @@ export struct PDFTunerPanelContent {
 
   private getSpectrumBarColor(index: number): string {
     const level: number = this.controller?.spectrumBarLevels[index] ?? 0;
-    if (level > 1) {
+    if (level > TunerSpectrumRedThreshold) {
       return "rgba(255, 82, 82, 0.88)";
     }
     return "rgba(77, 166, 255, 0.75)";
   }
 
   private getReferencePresetMenu(): MenuElement[] {
-    const presets: number[] = [415, 430, 432, 440, 442, 445];
+    const presets: number[] = [200, 220, 262, 415, 430, 432, 440, 442, 445, 523, 600];
     return presets.map(
       (preset: number): MenuElement => ({
         value: `${preset} Hz`,
@@ -717,8 +720,8 @@ export struct PDFTunerPanelContent {
           ScrollSpinBox({
             value: this.controller?.referenceHz ?? 440,
             canLoop: false,
-            min: 430,
-            max: 450,
+            min: TunerReferenceHzMin,
+            max: TunerReferenceHzMax,
             step: 1,
             valueFontSize: 28,
             debounceMs: 100,
@@ -838,13 +841,12 @@ export struct PDFTunerPanelContent {
                 void this.controller?.startMicrophoneMonitoring(context, true);
               })
           } else {
-            Column() {
+            Column({ space: 8 }) {
               Text("麦克风频段增益")
                 .fontSize(12)
                 .fontColor("rgba(255, 255, 255, 0.62)")
                 .width("100%")
                 .textAlign(TextAlign.Start)
-                .margin({ bottom: 8 })
               Row({ space: 4 }) {
                 ForEach(
                   Array.from({ length: TunerSpectrumBars }, (_value: number, index: number) => index),
@@ -876,9 +878,10 @@ export struct PDFTunerPanelContent {
                     .fontSize(11)
                     .fontColor("rgba(255, 255, 255, 0.58)")
                     .width("100%")
-                    .textAlign(TextAlign.Center)
+                    .textAlign(TextAlign.Start)
+                    .margin({ bottom: -10 })
                   Slider({
-                    value: this.controller?.microphoneGainLow ?? 0.65,
+                    value: this.controller?.microphoneGainLow ?? 0.5,
                     min: 0,
                     max: 1,
                     step: 0.01,
@@ -898,9 +901,10 @@ export struct PDFTunerPanelContent {
                     .fontSize(11)
                     .fontColor("rgba(255, 255, 255, 0.58)")
                     .width("100%")
-                    .textAlign(TextAlign.Center)
+                    .textAlign(TextAlign.Start)
+                    .margin({ bottom: -10 })
                   Slider({
-                    value: this.controller?.microphoneGainMid ?? 0.65,
+                    value: this.controller?.microphoneGainMid ?? 0.5,
                     min: 0,
                     max: 1,
                     step: 0.01,
@@ -915,14 +919,15 @@ export struct PDFTunerPanelContent {
                     })
                 }
                 .layoutWeight(1)
-                Column({ space: 6 }) {
+                Column() {
                   Text("高频")
                     .fontSize(11)
                     .fontColor("rgba(255, 255, 255, 0.58)")
                     .width("100%")
-                    .textAlign(TextAlign.Center)
+                    .textAlign(TextAlign.Start)
+                    .margin({ bottom: -10 })
                   Slider({
-                    value: this.controller?.microphoneGainHigh ?? 0.65,
+                    value: this.controller?.microphoneGainHigh ?? 0.5,
                     min: 0,
                     max: 1,
                     step: 0.01,
