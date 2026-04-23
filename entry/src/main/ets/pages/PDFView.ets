@@ -510,6 +510,10 @@ struct PDFView {
     }
     this.showTunerPanel = visible;
     this.tunerController.setPanelVisible(visible);
+    if (visible) {
+      const hostContext: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      void this.tunerController.startMicrophoneMonitoring(hostContext, false);
+    }
   }
 
   private getDockedMetronomeTopOffsetVp(): number {

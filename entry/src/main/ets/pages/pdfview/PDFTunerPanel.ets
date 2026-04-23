@@ -1,5 +1,6 @@
 import { ScrollSpinBox } from "../../components/ScrollSpinBox";
 import { ButtonColor, ContainerPadding, getCheckIcon, toVisibility } from "../../components/UIComponents";
+import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { uiEffect } from '@kit.ArkGraphics2D';
 import {
@@ -197,13 +198,20 @@ export struct PDFTunerPanelContent {
     return "rgba(255, 255, 255, 0.12)";
   }
 
-  private getSpectrumBarHeight(index: number): number {
-    const center: number = (TunerSpectrumBars - 1) / 2;
-    const distanceRatio: number = Math.abs(index - center) / center;
-    const envelope: number = Math.max(0.2, 1 - distanceRatio * 0.75);
-    const wave: number = 0.58 + 0.42 * Math.sin(index * 0.7 + this.detuneCents * 0.08);
-    const sensitivityGain: number = 0.45 + (this.controller?.microphoneGain ?? 0.65) * 0.55;
-    return 10 + envelope * wave * sensitivityGain * 48;
+  /** 柱高为频谱行高度的 0～100%，与柱索引无关；顶满时各柱齐平（不再乘两侧压低包络）。level>1 时高度仍按 1 封顶，颜色另判。 */
+  private getSpectrumBarHeightPercent(index: number): string {
+    const level: number = this.controller?.spectrumBarLevels[index] ?? 0;
+    const levelForBar: number = Math.min(Math.max(level, 0), 1);
+    const pct: number = Math.min(Math.max(levelForBar * 100, 0), 100);
+    return `${pct}%`;
+  }
+
+  private getSpectrumBarColor(index: number): string {
+    const level: number = this.controller?.spectrumBarLevels[index] ?? 0;
+    if (level > 1) {
+      return "rgba(255, 82, 82, 0.88)";
+    }
+    return "rgba(77, 166, 255, 0.75)";
   }
 
   private getReferencePresetMenu(): MenuElement[] {
@@ -403,6 +411,15 @@ export struct PDFTunerPanelContent {
 
   private hideTransposePresetPopup(): void {
     this.showTransposePresetPopup = false;
+  }
+
+  aboutToAppear(): void {
+    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    void this.controller?.startMicrophoneMonitoring(context, false);
+  }
+
+  aboutToDisappear(): void {
+    this.controller?.stopMicrophoneMonitoring();
   }
 
   build() {
@@ -807,47 +824,123 @@ export struct PDFTunerPanelContent {
           }.width("100%")
         }
         GridItem() {
-          Column() {
-            Text("麦克风灵敏度")
-              .fontSize(12)
-              .fontColor("rgba(255, 255, 255, 0.62)")
+          if (this.controller?.microphonePermissionDenied ?? false) {
+            Button("重新请求麦克风权限")
+              .type(ButtonType.Capsule)
               .width("100%")
-              .textAlign(TextAlign.Start)
-              .margin({ bottom: 8 })
-            Row({ space: 4 }) {
-              ForEach(
-                Array.from({ length: TunerSpectrumBars }, (_value: number, index: number) => index),
-                (index: number) => {
-                  Column()
-                    .layoutWeight(1)
-                    .height(this.getSpectrumBarHeight(index))
-                    .borderRadius(3)
-                    .backgroundColor("rgba(77, 166, 255, 0.75)");
-                },
-                (index: number) => `tuner-spectrum-${index}`,
-              )
-            }
-            .width("100%")
-            .height(64)
-            .alignItems(VerticalAlign.Bottom)
-            .padding({ left: 6, right: 6, top: 6, bottom: 0 })
-            .borderRadius(12)
-            .backgroundColor("rgba(255, 255, 255, 0.08)")
-            Slider({
-              value: this.controller?.microphoneGain ?? 0.65,
-              min: 0,
-              max: 1,
-              step: 0.01,
-              style: SliderStyle.OutSet,
-            })
-              .width("100%")
-              .selectedColor("rgba(77, 166, 255, 0.9)")
-              .trackColor("rgba(255, 255, 255, 0.2)")
-              .showTips(false)
-              .onChange((value: number, _mode: SliderChangeMode) => {
-                this.controller?.setMicrophoneGain(value);
+              .height(44)
+              .fontSize(14)
+              .fontColor(Color.White)
+              .backgroundColor("rgba(77, 166, 255, 0.55)")
+              .onClick(() => {
+                const context: common.UIAbilityContext =
+                  this.getUIContext().getHostContext() as common.UIAbilityContext;
+                void this.controller?.startMicrophoneMonitoring(context, true);
               })
-          }.width("100%")
+          } else {
+            Column() {
+              Text("麦克风频段增益")
+                .fontSize(12)
+                .fontColor("rgba(255, 255, 255, 0.62)")
+                .width("100%")
+                .textAlign(TextAlign.Start)
+                .margin({ bottom: 8 })
+              Row({ space: 4 }) {
+                ForEach(
+                  Array.from({ length: TunerSpectrumBars }, (_value: number, index: number) => index),
+                  (index: number) => {
+                    Column() {
+                      Column()
+                        .width("100%")
+                        .height(this.getSpectrumBarHeightPercent(index))
+                        .borderRadius(3)
+                        .backgroundColor(this.getSpectrumBarColor(index));
+                    }
+                    .layoutWeight(1)
+                    .width("100%")
+                    .height("100%")
+                    .justifyContent(FlexAlign.End);
+                  },
+                  (index: number) => `tuner-spectrum-${index}`,
+                )
+              }
+              .width("100%")
+              .height(64)
+              .alignItems(VerticalAlign.Bottom)
+              .padding({ left: 6, right: 6, top: 6, bottom: 0 })
+              .borderRadius(12)
+              .backgroundColor("rgba(255, 255, 255, 0.08)")
+              Row() {
+                Column() {
+                  Text("低频")
+                    .fontSize(11)
+                    .fontColor("rgba(255, 255, 255, 0.58)")
+                    .width("100%")
+                    .textAlign(TextAlign.Center)
+                  Slider({
+                    value: this.controller?.microphoneGainLow ?? 0.65,
+                    min: 0,
+                    max: 1,
+                    step: 0.01,
+                    style: SliderStyle.OutSet,
+                  })
+                    .width("100%")
+                    .selectedColor("rgba(77, 166, 255, 0.9)")
+                    .trackColor("rgba(255, 255, 255, 0.2)")
+                    .showTips(false)
+                    .onChange((value: number, _mode: SliderChangeMode) => {
+                      this.controller?.setMicrophoneBandGain('low', value);
+                    })
+                }
+                .layoutWeight(1)
+                Column() {
+                  Text("中频")
+                    .fontSize(11)
+                    .fontColor("rgba(255, 255, 255, 0.58)")
+                    .width("100%")
+                    .textAlign(TextAlign.Center)
+                  Slider({
+                    value: this.controller?.microphoneGainMid ?? 0.65,
+                    min: 0,
+                    max: 1,
+                    step: 0.01,
+                    style: SliderStyle.OutSet,
+                  })
+                    .width("100%")
+                    .selectedColor("rgba(77, 166, 255, 0.9)")
+                    .trackColor("rgba(255, 255, 255, 0.2)")
+                    .showTips(false)
+                    .onChange((value: number, _mode: SliderChangeMode) => {
+                      this.controller?.setMicrophoneBandGain('mid', value);
+                    })
+                }
+                .layoutWeight(1)
+                Column({ space: 6 }) {
+                  Text("高频")
+                    .fontSize(11)
+                    .fontColor("rgba(255, 255, 255, 0.58)")
+                    .width("100%")
+                    .textAlign(TextAlign.Center)
+                  Slider({
+                    value: this.controller?.microphoneGainHigh ?? 0.65,
+                    min: 0,
+                    max: 1,
+                    step: 0.01,
+                    style: SliderStyle.OutSet,
+                  })
+                    .width("100%")
+                    .selectedColor("rgba(77, 166, 255, 0.9)")
+                    .trackColor("rgba(255, 255, 255, 0.2)")
+                    .showTips(false)
+                    .onChange((value: number, _mode: SliderChangeMode) => {
+                      this.controller?.setMicrophoneBandGain('high', value);
+                    })
+                }
+                .layoutWeight(1)
+              }
+              .width("100%")
+            }.width("100%")
+          }
         }.visibility(this.isReferenceToneEnabled() ? Visibility.None : Visibility.Visible)
       }
       .columnsTemplate("1fr 1fr")
