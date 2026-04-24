@@ -3,7 +3,7 @@
     "bundleName": "deyu.just.pdf",
     "vendor": "deyu",
     "versionCode": 1000010,
-    "versionName": "1.1.0",
+    "versionName": "1.2.0",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }
