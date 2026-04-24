@@ -48,8 +48,6 @@ const TunerSpectrumAutoGainTargetEnvelope: number = 0.045;
 const TunerSpectrumAutoGainMinInputEnvelope: number = 0.003;
 const TunerSpectrumAutoGainAttack: number = 0.26;
 const TunerSpectrumAutoGainRelease: number = 0.08;
-/** 诊断日志节流：避免 readData 回调中频繁打印。 */
-const TunerMicSpectrumLogIntervalMs: number = 1500;
 const TunerPitchMinHz: number = 55;
 const TunerPitchMaxHz: number = 2000;
 /** 基频检测 RMS 静音门限（归一化振幅）。 */
@@ -192,20 +190,6 @@ export class PDFTunerController {
   private micHighPassPrevOutput: number = 0;
   private micLowPassPrevOutput: number = 0;
   private spectrumAutoGainTarget: number = 1;
-  private micSpectrumLogLastTimestampMs: number = 0;
-  private micSpectrumLogFrameCount: number = 0;
-  private micSpectrumLogBandPeakMax: number = 0;
-  private micSpectrumLogEnvelopeMax: number = 0;
-  private micSpectrumLogRawLowMax: number = 0;
-  private micSpectrumLogRawMidMax: number = 0;
-  private micSpectrumLogRawHighMax: number = 0;
-  private micSpectrumLogPreCurveLowMax: number = 0;
-  private micSpectrumLogPreCurveMidMax: number = 0;
-  private micSpectrumLogPreCurveHighMax: number = 0;
-  private micSpectrumLogPostCurveLowMax: number = 0;
-  private micSpectrumLogPostCurveMidMax: number = 0;
-  private micSpectrumLogPostCurveHighMax: number = 0;
-  private readonly micSpectrumLogOverloadCount: number[] = [];
   private lastMicrophoneAbilityContext: common.UIAbilityContext | undefined = undefined;
   private pendingRendererStop: Promise<void> | undefined = undefined;
   private audioRequestToken: number = 0;
@@ -778,10 +762,6 @@ export class PDFTunerController {
     for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
       this.smoothedMicSpectrum.push(0);
     }
-    this.micSpectrumLogOverloadCount.length = 0;
-    for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
-      this.micSpectrumLogOverloadCount.push(0);
-    }
   }
 
   private getCurrentFilterPresetDefinition(): TunerFilterPresetDefinition {
@@ -990,17 +970,7 @@ export class PDFTunerController {
     this.updateSpectrumGain(envelopeFloor, bandPeak);
     const effectiveSpectrumGain: number = this.spectrumGain;
     const nextLevels: number[] = [];
-    let rawLowMax: number = 0;
-    let rawMidMax: number = 0;
-    let rawHighMax: number = 0;
-    let preCurveLowMax: number = 0;
-    let preCurveMidMax: number = 0;
-    let preCurveHighMax: number = 0;
-    let postCurveLowMax: number = 0;
-    let postCurveMidMax: number = 0;
-    let postCurveHighMax: number = 0;
     for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
-      const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
       const curveLevel: number = this.filterCurveLevels[band] ?? 0;
       const weightedInput: number = rawMagnitudes[band] * curveLevel * effectiveSpectrumGain / envelopeFloor;
       const instant: number = this.compressSpectrumLevel(weightedInput);
@@ -1008,113 +978,11 @@ export class PDFTunerController {
       const nextHeld: number = instant > held
         ? instant
         : Math.max(0, held - TunerMicSpectrumPeakFallPerUpdate);
-      if (freqHz < TunerPitchMinHz) {
-        rawLowMax = Math.max(rawLowMax, rawMagnitudes[band]);
-        preCurveLowMax = Math.max(preCurveLowMax, curveLevel);
-        postCurveLowMax = Math.max(postCurveLowMax, instant);
-      } else if (freqHz <= TunerPitchMaxHz) {
-        rawMidMax = Math.max(rawMidMax, rawMagnitudes[band]);
-        preCurveMidMax = Math.max(preCurveMidMax, curveLevel);
-        postCurveMidMax = Math.max(postCurveMidMax, instant);
-      } else {
-        rawHighMax = Math.max(rawHighMax, rawMagnitudes[band]);
-        preCurveHighMax = Math.max(preCurveHighMax, curveLevel);
-        postCurveHighMax = Math.max(postCurveHighMax, instant);
-      }
-      if (nextHeld > 1 && band < this.micSpectrumLogOverloadCount.length) {
-        this.micSpectrumLogOverloadCount[band] += 1;
-      }
       this.smoothedMicSpectrum[band] = nextHeld;
       nextLevels.push(nextHeld);
     }
     this.spectrumBarLevels = nextLevels.slice();
     this.updateDetectedPitch(this.detectPitchHz(samples));
-    this.collectMicSpectrumDiagnostics(
-      bandPeak,
-      envelopeFloor,
-      rawLowMax,
-      rawMidMax,
-      rawHighMax,
-      preCurveLowMax,
-      preCurveMidMax,
-      preCurveHighMax,
-      postCurveLowMax,
-      postCurveMidMax,
-      postCurveHighMax,
-    );
-  }
-
-  private collectMicSpectrumDiagnostics(
-    bandPeak: number,
-    envelopeFloor: number,
-    rawLowMax: number,
-    rawMidMax: number,
-    rawHighMax: number,
-    preCurveLowMax: number,
-    preCurveMidMax: number,
-    preCurveHighMax: number,
-    postCurveLowMax: number,
-    postCurveMidMax: number,
-    postCurveHighMax: number,
-  ): void {
-    this.micSpectrumLogFrameCount += 1;
-    this.micSpectrumLogBandPeakMax = Math.max(this.micSpectrumLogBandPeakMax, bandPeak);
-    this.micSpectrumLogEnvelopeMax = Math.max(this.micSpectrumLogEnvelopeMax, envelopeFloor);
-    this.micSpectrumLogRawLowMax = Math.max(this.micSpectrumLogRawLowMax, rawLowMax);
-    this.micSpectrumLogRawMidMax = Math.max(this.micSpectrumLogRawMidMax, rawMidMax);
-    this.micSpectrumLogRawHighMax = Math.max(this.micSpectrumLogRawHighMax, rawHighMax);
-    this.micSpectrumLogPreCurveLowMax = Math.max(this.micSpectrumLogPreCurveLowMax, preCurveLowMax);
-    this.micSpectrumLogPreCurveMidMax = Math.max(this.micSpectrumLogPreCurveMidMax, preCurveMidMax);
-    this.micSpectrumLogPreCurveHighMax = Math.max(this.micSpectrumLogPreCurveHighMax, preCurveHighMax);
-    this.micSpectrumLogPostCurveLowMax = Math.max(this.micSpectrumLogPostCurveLowMax, postCurveLowMax);
-    this.micSpectrumLogPostCurveMidMax = Math.max(this.micSpectrumLogPostCurveMidMax, postCurveMidMax);
-    this.micSpectrumLogPostCurveHighMax = Math.max(this.micSpectrumLogPostCurveHighMax, postCurveHighMax);
-    const nowMs: number = Date.now();
-    if (this.micSpectrumLogLastTimestampMs > 0 && nowMs - this.micSpectrumLogLastTimestampMs < TunerMicSpectrumLogIntervalMs) {
-      return;
-    }
-    const sortedBandIndices: number[] = Array.from(
-      { length: this.micSpectrumLogOverloadCount.length },
-      (_value: number, bandIndex: number) => bandIndex,
-    )
-      .sort((a: number, b: number) => this.micSpectrumLogOverloadCount[b] - this.micSpectrumLogOverloadCount[a]);
-    const overloadBands: string[] = [];
-    for (let i = 0; i < sortedBandIndices.length && overloadBands.length < 4; i++) {
-      const bandIndex: number = sortedBandIndices[i];
-      const count: number = this.micSpectrumLogOverloadCount[bandIndex];
-      if (count <= 0) {
-        continue;
-      }
-      overloadBands.push(`${bandIndex}:${count}`);
-    }
-    hilog.info(
-      0,
-      'PDFTunerController',
-      `调音器频谱诊断 frame=${this.micSpectrumLogFrameCount} preset=${this.getCurrentFilterPresetDefinition().label} ` +
-      `bandPeak=${this.micSpectrumLogBandPeakMax.toFixed(5)} gain=${this.spectrumGain.toFixed(2)} ` +
-      `env=${this.micSpectrumLogEnvelopeMax.toFixed(5)} rawMax=[${this.micSpectrumLogRawLowMax.toFixed(5)},` +
-      `${this.micSpectrumLogRawMidMax.toFixed(5)},${this.micSpectrumLogRawHighMax.toFixed(5)}] preCurveMax=[` +
-      `${this.micSpectrumLogPreCurveLowMax.toFixed(3)},${this.micSpectrumLogPreCurveMidMax.toFixed(3)},` +
-      `${this.micSpectrumLogPreCurveHighMax.toFixed(3)}] postCurveMax=[${this.micSpectrumLogPostCurveLowMax.toFixed(3)},` +
-      `${this.micSpectrumLogPostCurveMidMax.toFixed(3)},${this.micSpectrumLogPostCurveHighMax.toFixed(3)}] ` +
-      `overload=${overloadBands.length > 0 ? overloadBands.join('|') : 'none'}`,
-    );
-    this.micSpectrumLogLastTimestampMs = nowMs;
-    this.micSpectrumLogFrameCount = 0;
-    this.micSpectrumLogBandPeakMax = 0;
-    this.micSpectrumLogEnvelopeMax = 0;
-    this.micSpectrumLogRawLowMax = 0;
-    this.micSpectrumLogRawMidMax = 0;
-    this.micSpectrumLogRawHighMax = 0;
-    this.micSpectrumLogPreCurveLowMax = 0;
-    this.micSpectrumLogPreCurveMidMax = 0;
-    this.micSpectrumLogPreCurveHighMax = 0;
-    this.micSpectrumLogPostCurveLowMax = 0;
-    this.micSpectrumLogPostCurveMidMax = 0;
-    this.micSpectrumLogPostCurveHighMax = 0;
-    for (let i = 0; i < this.micSpectrumLogOverloadCount.length; i++) {
-      this.micSpectrumLogOverloadCount[i] = 0;
-    }
   }
 
   private getMicSpectrumTargetFreqHz(bandIndex: number): number {
@@ -1257,22 +1125,6 @@ export class PDFTunerController {
     this.resetPreprocessorState();
     this.micPeakEnvelope = 0.0001;
     this.spectrumAutoGainTarget = this.spectrumGain;
-    this.micSpectrumLogFrameCount = 0;
-    this.micSpectrumLogBandPeakMax = 0;
-    this.micSpectrumLogEnvelopeMax = 0;
-    this.micSpectrumLogRawLowMax = 0;
-    this.micSpectrumLogRawMidMax = 0;
-    this.micSpectrumLogRawHighMax = 0;
-    this.micSpectrumLogPreCurveLowMax = 0;
-    this.micSpectrumLogPreCurveMidMax = 0;
-    this.micSpectrumLogPreCurveHighMax = 0;
-    this.micSpectrumLogPostCurveLowMax = 0;
-    this.micSpectrumLogPostCurveMidMax = 0;
-    this.micSpectrumLogPostCurveHighMax = 0;
-    this.micSpectrumLogLastTimestampMs = 0;
-    for (let i = 0; i < this.micSpectrumLogOverloadCount.length; i++) {
-      this.micSpectrumLogOverloadCount[i] = 0;
-    }
     this.spectrumBarLevels = [
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
