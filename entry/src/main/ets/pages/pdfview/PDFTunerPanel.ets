@@ -1197,24 +1197,26 @@ export struct PDFTunerPanel {
 
   build() {
     Column() {
-      PDFTunerPanelContent({
-        controller: this.controller,
-        useDocked: this.useDocked,
-        dockedTopOffsetVp: this.dockedTopOffsetVp,
-        hostScale: this.floatingScale,
-        hostOffset: this.getClampedFloatingOffset(),
-        showDragHandle: !this.useDocked,
-        onInteraction: this.onInteraction,
-        onWindowAreaHeightChanged: (heightVp: number) =>
-          this.handleFloatingWindowAreaChange(heightVp),
-        onHostDragStart: () => this.handleFloatingDragStart(),
-        onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
-        onHostDragEnd: () => this.handleFloatingDragEnd(),
-        onHostPinchStart: () => this.handleFloatingPinchStart(),
-        onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
-        onHostPinchEnd: () => this.handleFloatingPinchEnd(),
-        onClose: this.onClose,
-      }).visibility(this.showWindow ? Visibility.Visible : Visibility.None)
+      if (this.showWindow) {
+        PDFTunerPanelContent({
+          controller: this.controller,
+          useDocked: this.useDocked,
+          dockedTopOffsetVp: this.dockedTopOffsetVp,
+          hostScale: this.floatingScale,
+          hostOffset: this.getClampedFloatingOffset(),
+          showDragHandle: !this.useDocked,
+          onInteraction: this.onInteraction,
+          onWindowAreaHeightChanged: (heightVp: number) =>
+            this.handleFloatingWindowAreaChange(heightVp),
+          onHostDragStart: () => this.handleFloatingDragStart(),
+          onHostDragUpdate: (event: GestureEvent) => this.handleFloatingDragUpdate(event),
+          onHostDragEnd: () => this.handleFloatingDragEnd(),
+          onHostPinchStart: () => this.handleFloatingPinchStart(),
+          onHostPinchUpdate: (event: GestureEvent) => this.handleFloatingPinchUpdate(event),
+          onHostPinchEnd: () => this.handleFloatingPinchEnd(),
+          onClose: this.onClose,
+        })
+      }
     };
   }
 }

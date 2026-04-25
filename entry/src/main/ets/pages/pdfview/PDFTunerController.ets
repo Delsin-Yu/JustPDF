@@ -1137,19 +1137,21 @@ export class PDFTunerController {
     this.pendingNoteHoldCount = 0;
   }
 
-  private async releaseDetachedAudioCapturer(capturer: audio.AudioCapturer): Promise<void> {
-    try {
-      capturer.off('readData', this.handleCapturerReadData);
-    } catch (error) {
-      hilog.error(0, 'PDFTunerController', `解绑麦克风readData监听失败: ${JSON.stringify(error)}`);
-    }
-
+  private async releaseDetachedAudioCapturer(
+    capturer: audio.AudioCapturer,
+  ): Promise<void> {
     try {
       if (capturer.state === audio.AudioState.STATE_RUNNING || capturer.state === audio.AudioState.STATE_PAUSED) {
         await capturer.stop();
       }
     } catch (error) {
       hilog.error(0, 'PDFTunerController', `停止麦克风采集失败: ${JSON.stringify(error)}`);
+    }
+
+    try {
+      capturer.off('readData', this.handleCapturerReadData);
+    } catch (error) {
+      hilog.error(0, 'PDFTunerController', `解绑麦克风readData监听失败: ${JSON.stringify(error)}`);
     }
 
     try {

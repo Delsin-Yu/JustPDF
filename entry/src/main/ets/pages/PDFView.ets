@@ -226,25 +226,26 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
 @Builder
 function BuildTunerOverlay(params: TunerOverlayParams) {
   Stack() {
-    PDFTunerPanelContent({
-      controller: params.controller,
-      useDocked: params.useDocked,
-      dockedTopOffsetVp: params.dockedTopOffsetVp,
-      hostScale: params.hostScale,
-      hostOffset: params.hostOffset,
-      showDragHandle: !params.useDocked,
-      onInteraction: params.onInteraction,
-      onTouchStateChanged: params.onTouchStateChanged,
-      onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
-      onHostDragStart: params.onHostDragStart,
-      onHostDragUpdate: params.onHostDragUpdate,
-      onHostDragEnd: params.onHostDragEnd,
-      onHostPinchStart: params.onHostPinchStart,
-      onHostPinchUpdate: params.onHostPinchUpdate,
-      onHostPinchEnd: params.onHostPinchEnd,
-      onClose: params.onClose
-    })
-      .visibility(toVisibility(params.showWindow && !params.useDocked))
+    if (params.showWindow && !params.useDocked) {
+      PDFTunerPanelContent({
+        controller: params.controller,
+        useDocked: params.useDocked,
+        dockedTopOffsetVp: params.dockedTopOffsetVp,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        showDragHandle: !params.useDocked,
+        onInteraction: params.onInteraction,
+        onTouchStateChanged: params.onTouchStateChanged,
+        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd,
+        onClose: params.onClose
+      })
+    }
   }
   .width('100%')
   .height('100%')
