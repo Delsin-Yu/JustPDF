@@ -20,6 +20,7 @@ interface PDFAnnotationControllerDependencies {
   getSystemPath: () => string;
   getSandBoxPath: () => string;
   getSaveTempPath: () => string;
+  getFileName: () => string;
   getUIContext: () => UIContext;
   onRequestGotoPage: (pageIndex: number) => void;
   onRedrawRequested: () => void;
@@ -297,17 +298,50 @@ export class PDFAnnotationController {
     const saveOptions = new picker.DocumentSaveOptions();
     saveOptions.defaultFilePathUri = this.dependencies.getSystemPath();
     saveOptions.fileSuffixChoices = ['PDF 文档|.pdf'];
+    saveOptions.newFileNames = [this.dependencies.getFileName()];
 
     try {
       const result = await documentPicker.save(saveOptions);
-      if (result && result.length > 0) {
-        return result[0];
+      if (!result || result.length === 0) {
+        return '';
       }
-      return '';
+      const uri = result[0];
+      const fileName = this.extractFileNameFromUri(uri);
+      if (!this.isValidFileName(fileName)) {
+        hilog.warn(0, 'PDFView', '用户尝试使用无效文件名保存');
+        await showAlertDialog('文件名无效', '文件名不能为空。请输入有效的文件名。', this.dependencies.getUIContext());
+        return '';
+      }
+      return uri;
     } catch (error) {
       hilog.error(0, 'PDFView', `保存对话框错误: ${JSON.stringify(error)}`);
       return '';
     }
+  }
+
+  /**
+   * 从 URI 中提取文件名部分。
+   */
+  private extractFileNameFromUri(uri: string): string {
+    const queryIndex = uri.indexOf('?');
+    const cleanUri = queryIndex >= 0 ? uri.substring(0, queryIndex) : uri;
+    const lastSlash = cleanUri.lastIndexOf('/');
+    return lastSlash >= 0 ? cleanUri.substring(lastSlash + 1) : cleanUri;
+  }
+
+  /**
+   * 验证文件名是否有效（不为空、不为空白、不只是扩展名如 ".pdf"）。
+   */
+  private isValidFileName(fileName: string): boolean {
+    if (!fileName || fileName.trim().length === 0) {
+      return false;
+    }
+    // 仅当有点号且点号在开头时（如 ".pdf"）视为无效
+    const dotIndex = fileName.indexOf('.');
+    if (dotIndex === 0) {
+      return false;
+    }
+    return true;
   }
 
   private collectAffectedAnnotations(): Map<number, pdfService.PdfAnnotation[]> {
