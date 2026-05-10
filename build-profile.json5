@@ -11,8 +11,8 @@
           "signAlg": "SHA256withECDSA",
           "profile": "./certs/Debug2Debug.p7b",
           "certpath": "./certs/Debug2.cer",
-//          "profile": "./certs/ReleaseRelease.p7b",
-//          "certpath": "./certs/Just PDF Release.cer"
+          // "profile": "./certs/ReleaseRelease.p7b",
+          // "certpath": "./certs/Just PDF Release.cer"
         }
       }
     ],
