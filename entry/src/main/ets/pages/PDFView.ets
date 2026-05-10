@@ -29,7 +29,7 @@ import {
 } from './pdfview/PDFTunerPanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
-import { PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
+import { PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
 
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
@@ -336,6 +336,7 @@ struct PDFView {
   @Local isPanelGestureActive: boolean = false;
   @Local isExclusiveFullScreen: boolean = false;
   @Local isInFreeWindowMode: boolean = false;
+  @Local pageFlipShadeOpacity: number = 0;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
@@ -1019,6 +1020,13 @@ struct PDFView {
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
 
+    // 翻页遮罩：切到屏侧翻页时先显示渐变遮罩再渐出
+    this.viewerViewModel.onPageFlipModeChanged = (mode: PDFPageFlipMode) => {
+      if (mode === 'side') {
+        this.triggerPageFlipShadeIntro();
+      }
+    };
+
     // Register hotkeys
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.navigateNextPage()));
@@ -1067,6 +1075,7 @@ struct PDFView {
     await this.createPlaceholderPixelMap();
     await this.gotoPage(0);
     this.isDocumentLoading = false;
+    this.triggerPageFlipShadeIntro();
     this.startTransparencyTimeout();
   }
 
@@ -1757,6 +1766,21 @@ struct PDFView {
     this.transparencyTimeoutId = setTimeout(() => this.viewerViewModel.controlsTransparency = 0.5, 1000 * 3);
   }
 
+  triggerPageFlipShadeIntro(): void {
+    if (this.viewerViewModel.pageFlipMode !== 'side' || this.viewerViewModel.annotateMode !== 'drag') {
+      return;
+    }
+    this.pageFlipShadeOpacity = 1;
+    setTimeout(() => {
+      this.getUIContext().animateTo({
+        duration: 800,
+        curve: Curve.EaseOut
+      }, () => {
+        this.pageFlipShadeOpacity = 0;
+      });
+    }, 200);
+  }
+
   build() {
     Stack() {
       RelativeContainer() {
@@ -1850,6 +1874,7 @@ struct PDFView {
           .alignRules(TopLeft)
           .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
           .hitTestBehavior(HitTestMode.None)
+          .opacity(this.pageFlipShadeOpacity)
           .linearGradient({
             direction: GradientDirection.Left,
             colors: [
@@ -1864,6 +1889,7 @@ struct PDFView {
           .alignRules(TopRight)
           .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
           .hitTestBehavior(HitTestMode.None)
+          .opacity(this.pageFlipShadeOpacity)
           .linearGradient({
             direction: GradientDirection.Right,
             colors: [

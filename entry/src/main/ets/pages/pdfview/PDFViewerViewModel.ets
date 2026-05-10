@@ -30,6 +30,7 @@ export class PDFViewerViewModel {
   @Trace public showSlider: boolean = true;
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
+  public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
 
   constructor(minScale: number = 0.5, maxScale: number = 9.0) {
     this.minScale = minScale;
@@ -170,6 +171,7 @@ export class PDFViewerViewModel {
   setPageFlipMode(value: PDFPageFlipMode): void {
     this.pageFlipMode = value;
     this.persistPreference('pageFlipMode', value, '保存翻页模式出错');
+    this.onPageFlipModeChanged?.(value);
   }
 
   setAnnotateMode(value: PDFAnnotateMode): void {
