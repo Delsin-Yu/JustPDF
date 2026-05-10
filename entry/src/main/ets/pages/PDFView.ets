@@ -304,6 +304,7 @@ struct PDFView {
     getSystemPath: () => this.systemPath,
     getSandBoxPath: () => this.sandBoxPath,
     getSaveTempPath: () => this.saveTempPath,
+    getFileName: () => this.fileName,
     getUIContext: () => this.getUIContext(),
     onRequestGotoPage: (pageIndex: number) => {
       this.gotoPage(pageIndex);
@@ -1834,7 +1835,7 @@ struct PDFView {
           .alignRules(TopLeft)
           .backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side'))
+          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
 
         Button(PageFlipButtonOption)
           .size(PageFlipButtonSize)
@@ -1842,12 +1843,12 @@ struct PDFView {
           .alignRules(TopRight)
           .backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side'))
+          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
 
         Image('')
           .size(PageFlipButtonSize)
           .alignRules(TopLeft)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side'))
+          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
           .hitTestBehavior(HitTestMode.None)
           .linearGradient({
             direction: GradientDirection.Left,
@@ -1861,7 +1862,7 @@ struct PDFView {
         Image('')
           .size(PageFlipButtonSize)
           .alignRules(TopRight)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side'))
+          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
           .hitTestBehavior(HitTestMode.None)
           .linearGradient({
             direction: GradientDirection.Right,
@@ -1949,6 +1950,7 @@ struct PDFView {
                 redoHistoryCount: this.annotationController.redoHistoryCount,
                 hasUnsavedStrokes: this.annotationController.hasUnsavedStrokes,
                 pageFlipMode: this.viewerViewModel.pageFlipMode,
+                annotateMode: this.viewerViewModel.annotateMode,
                 currentPageIndex: this.viewerViewModel.currentPageIndex,
                 totalPageCount: this.viewerViewModel.totalPageCount,
                 onUndo: () => this.annotationController.executeUndo(),
