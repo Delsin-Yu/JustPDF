@@ -2006,6 +2006,9 @@ struct PDFView {
     this.viewerViewModel.openAnnotatePalette(mode);
     this.initPalettePosition();
     this.syncPanelOverlays();
+    this.annotationController.prepareImportedPolylineAnnotations()
+      .then(() => this.syncPanelOverlays())
+      .catch((error: Error) => hilog.error(0, 'PDFView', `导入已有折线批注出错: ${error.message}`));
   }
 
   initPalettePosition(): void {
@@ -2092,8 +2095,9 @@ struct PDFView {
         this.syncPanelOverlays();
       },
       onSave: () => {
-        this.annotationController.executeSave();
-        this.syncPanelOverlays();
+        this.annotationController.executeSave()
+          .then(() => this.syncPanelOverlays())
+          .catch((error: Error) => hilog.error(0, 'PDFView', `保存批注出错: ${error.message}`));
       },
       onClose: () => {
         this.viewerViewModel.closeAnnotatePalette();
@@ -2330,7 +2334,9 @@ struct PDFView {
                   this.enterAnnotateMode('draw');
                 },
                 onSaveAnnotation: () => {
-                  this.annotationController.executeSave();
+                  this.annotationController.executeSave()
+                    .then(() => this.syncPanelOverlays())
+                    .catch((error: Error) => hilog.error(0, 'PDFView', `保存批注出错: ${error.message}`));
                 }
               })
 

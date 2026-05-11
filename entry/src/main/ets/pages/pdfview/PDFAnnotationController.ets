@@ -40,6 +40,7 @@ export class PDFAnnotationController {
   private pathsToErase: Set<ReadonlyStroke> = new Set<ReadonlyStroke>();
   private undoHistory: DataStack<History> = new DataStack<History>();
   private redoHistory: DataStack<History> = new DataStack<History>();
+  private importedPolylinePrepared: boolean = false;
 
   @Trace public hasUnsavedStrokes: boolean = false;
   @Trace public undoHistoryCount: number = 0;
@@ -56,6 +57,32 @@ export class PDFAnnotationController {
 
   setAnnotateMode(mode: PDFAnnotateMode): void {
     this.dependencies.viewerViewModel.setAnnotateMode(mode);
+  }
+
+  async prepareImportedPolylineAnnotations(): Promise<void> {
+    if (this.importedPolylinePrepared) {
+      return;
+    }
+
+    const affectedPageIndices = this.dependencies.pageDataSource.importPdfPolylineAnnotations(
+      this.dependencies.getUIContext(),
+      this.canvasOverSampling
+    );
+    this.importedPolylinePrepared = true;
+    if (affectedPageIndices.length === 0) {
+      return;
+    }
+
+    if (!await this.writeEditRenderDocument()) {
+      this.dependencies.pageDataSource.restoreImportedPdfPolylineAnnotations();
+      this.importedPolylinePrepared = false;
+      this.dependencies.onRedrawRequested();
+      return;
+    }
+
+    await this.refreshEditedPages(affectedPageIndices);
+    this.updateUnsavedStrokesFlag();
+    this.dependencies.onRedrawRequested();
   }
 
   applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
@@ -235,17 +262,25 @@ export class PDFAnnotationController {
     }
 
     const affectedPage = this.collectAffectedAnnotations();
-    if (!(await this.saveDocumentToSandbox(affectedPage))) {
+    if (!(await this.saveDocumentToTemp(affectedPage))) {
       return;
     }
 
-    if (!(await this.copySandboxToSaveUri(saveUri, affectedPage))) {
+    if (!(await this.copyTempToSaveUri(saveUri, affectedPage))) {
+      await this.writeEditRenderDocument();
+      return;
+    }
+
+    if (!(await this.commitTempToSandbox(affectedPage))) {
       return;
     }
 
     this.dependencies.pageDataSource.clearAllStrokes();
+    this.dependencies.pageDataSource.clearImportedPdfPolylineTracking();
+    this.dependencies.pageDataSource.setPagePath(this.dependencies.getSandBoxPath());
     this.clearHistory();
     this.hasUnsavedStrokes = false;
+    this.importedPolylinePrepared = false;
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
   }
 
@@ -327,9 +362,10 @@ export class PDFAnnotationController {
   private collectAffectedAnnotations(): Map<number, pdfService.PdfAnnotation[]> {
     const affectedPage = new Map<number, pdfService.PdfAnnotation[]>();
     const totalPageCount = this.dependencies.pageDataSource.totalPageCount();
+    const importedPageIndices = this.dependencies.pageDataSource.getImportedPdfPolylinePageIndices();
 
     for (let pageIndex = 0; pageIndex < totalPageCount; pageIndex++) {
-      if (this.dependencies.pageDataSource.getPageStrokesCount(pageIndex) == 0) {
+      if (this.dependencies.pageDataSource.getPageStrokesCount(pageIndex) == 0 && !importedPageIndices.includes(pageIndex)) {
         continue;
       }
 
@@ -339,33 +375,58 @@ export class PDFAnnotationController {
       const annotationsToAdd: pdfService.PolylineAnnotationInfo[] = [];
 
       for (const stroke of this.dependencies.pageDataSource.iteratePageStrokes(pageIndex)) {
-        const transformedPoints: Vector2[] = [];
-        for (const point of stroke.points) {
-          transformedPoints.push(Vec2(
-            (point.x / canvasSizeVp.x) * pdfPageSize.x,
-            (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
-          ));
-        }
-
-        const annotationInfo = new pdfService.PolylineAnnotationInfo();
-        annotationInfo.subject = DefaultAnnotationSubject;
-        annotationInfo.creationDate = new Date(Date.now());
-        annotationInfo.modifiedTime = new Date(Date.now());
-        annotationInfo.vertexes = transformedPoints;
-        annotationInfo.lineColor = DefaultAnnotationPdfLineColor;
-        annotationInfo.uniqueId = util.generateRandomUUID(true);
-        annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
-        annotationsToAdd.push(annotationInfo);
+        annotationsToAdd.push(this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp));
       }
 
-      const annotations = this.dependencies.pageDataSource.addPdfAnnotations(pageIndex, annotationsToAdd);
+      const annotations = annotationsToAdd.length > 0
+        ? this.dependencies.pageDataSource.addPdfAnnotations(pageIndex, annotationsToAdd)
+        : [];
       affectedPage.set(pageIndex, annotations);
     }
 
     return affectedPage;
   }
 
-  private async saveDocumentToSandbox(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
+  private makePolylineAnnotationInfo(
+    stroke: ReadonlyStroke,
+    pdfPageSize: Vector2,
+    canvasSizeVp: Vector2
+  ): pdfService.PolylineAnnotationInfo {
+    const transformedPoints: Vector2[] = [];
+    for (const point of stroke.points) {
+      transformedPoints.push(Vec2(
+        (point.x / canvasSizeVp.x) * pdfPageSize.x,
+        (1 - point.y / canvasSizeVp.y) * pdfPageSize.y
+      ));
+    }
+
+    const annotationInfo = new pdfService.PolylineAnnotationInfo();
+    const sourceInfo = stroke.source?.kind === 'importedPdfPolyline' ? stroke.source.annotationInfo : undefined;
+    if (sourceInfo) {
+      annotationInfo.subject = sourceInfo.subject;
+      annotationInfo.creationDate = sourceInfo.creationDate;
+      annotationInfo.content = sourceInfo.content;
+      annotationInfo.border = sourceInfo.border;
+      annotationInfo.flag = sourceInfo.flag;
+      annotationInfo.title = sourceInfo.title;
+      annotationInfo.opacity = sourceInfo.opacity;
+      annotationInfo.lineColor = sourceInfo.lineColor;
+      annotationInfo.uniqueId = stroke.source?.uniqueId && stroke.source.uniqueId.length > 0
+        ? stroke.source.uniqueId
+        : (sourceInfo.uniqueId && sourceInfo.uniqueId.length > 0 ? sourceInfo.uniqueId : util.generateRandomUUID(true));
+    } else {
+      annotationInfo.subject = DefaultAnnotationSubject;
+      annotationInfo.creationDate = new Date(Date.now());
+      annotationInfo.lineColor = DefaultAnnotationPdfLineColor;
+      annotationInfo.uniqueId = util.generateRandomUUID(true);
+      annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
+    }
+    annotationInfo.modifiedTime = new Date(Date.now());
+    annotationInfo.vertexes = transformedPoints;
+    return annotationInfo;
+  }
+
+  private async saveDocumentToTemp(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
     await this.cleanupTempSaveFile();
 
     const success = this.dependencies.document.saveDocument(this.dependencies.getSaveTempPath());
@@ -375,27 +436,15 @@ export class PDFAnnotationController {
       return false;
     }
 
-    try {
-      await fs.rename(this.dependencies.getSaveTempPath(), this.dependencies.getSandBoxPath());
-      return true;
-    } catch (error) {
-      hilog.error(0, 'PDFView', `将临时文件重命名到沙箱路径时出错: ${error}`);
-      try {
-        await fs.unlink(this.dependencies.getSaveTempPath());
-      } catch (unlinkError) {
-        hilog.error(0, 'PDFView', `删除临时文件时出错: ${unlinkError}`);
-      }
-      await this.revertChanges(affectedPage);
-      return false;
-    }
+    return true;
   }
 
-  private async copySandboxToSaveUri(saveUri: string, affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
+  private async copyTempToSaveUri(saveUri: string, affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
     let srcFile: fs.File | undefined = undefined;
     let dstFile: fs.File | undefined = undefined;
 
     try {
-      srcFile = await fs.open(this.dependencies.getSandBoxPath(), fs.OpenMode.READ_ONLY);
+      srcFile = await fs.open(this.dependencies.getSaveTempPath(), fs.OpenMode.READ_ONLY);
       dstFile = await fs.open(saveUri, fs.OpenMode.WRITE_ONLY);
     } catch (error) {
       if (srcFile) {
@@ -413,7 +462,7 @@ export class PDFAnnotationController {
         }
       }
       hilog.error(0, 'PDFView', `打开文件时出错: ${error}`);
-      await this.revertChanges(affectedPage);
+      this.removeAddedAnnotations(affectedPage);
       return false;
     }
 
@@ -425,7 +474,18 @@ export class PDFAnnotationController {
     } catch (error) {
       hilog.error(0, 'PDFView', `保存 PDF 文件到选定位置 ${saveUri} 时出错: ${error}`);
       await showAlertDialog('保存失败', `无法将 PDF 文件保存到选定位置。请检查权限或存储空间，然后重试。\n错误信息: ${error}`, this.dependencies.getUIContext());
-      await this.revertChanges(affectedPage);
+      this.removeAddedAnnotations(affectedPage);
+      return false;
+    }
+  }
+
+  private async commitTempToSandbox(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
+    try {
+      await fs.rename(this.dependencies.getSaveTempPath(), this.dependencies.getSandBoxPath());
+      return true;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `将临时文件重命名到沙箱路径时出错: ${error}`);
+      this.removeAddedAnnotations(affectedPage);
       return false;
     }
   }
@@ -468,6 +528,35 @@ export class PDFAnnotationController {
       } catch (unlinkError) {
         hilog.error(0, 'PDFView', `删除临时回退文件时出错: ${unlinkError}`);
       }
+    }
+  }
+
+  private async writeEditRenderDocument(): Promise<boolean> {
+    await this.cleanupTempSaveFile();
+    const success = this.dependencies.document.saveDocument(this.dependencies.getSaveTempPath());
+    if (!success) {
+      hilog.error(0, 'PDFView', '保存编辑预览 PDF 文件时出错');
+      return false;
+    }
+    this.dependencies.pageDataSource.setPagePath(this.dependencies.getSaveTempPath());
+    return true;
+  }
+
+  private async refreshEditedPages(affectedPageIndices: number[]): Promise<void> {
+    if (affectedPageIndices.length === 0) {
+      return;
+    }
+
+    for (const pageIndex of affectedPageIndices) {
+      this.dependencies.pageDataSource.invalidateCaches(pageIndex);
+      this.dependencies.pageDataSource.ensureCached(pageIndex, ViewerMinRenderScale, taskpool.Priority.HIGH);
+    }
+
+    const currentPageAffected = this.dependencies.viewerViewModel.displayedPageIndices.some((pageIndex: number) =>
+      affectedPageIndices.includes(pageIndex)
+    );
+    if (currentPageAffected) {
+      await this.dependencies.onRefreshDisplayedPages();
     }
   }
 
