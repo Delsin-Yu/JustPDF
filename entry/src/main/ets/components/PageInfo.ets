@@ -1,11 +1,20 @@
 import { pdfService } from '@kit.PDFKit';
-import { mul, Vec2, Vector2 } from '../components/Numbers';
+import { mul, pxToVp, Vec2, Vector2 } from '../components/Numbers';
 import { taskpool, util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 
+export interface ImportedPdfPolylineStrokeSource {
+  kind: 'importedPdfPolyline';
+  uniqueId: string;
+  annotationInfo: pdfService.PolylineAnnotationInfo;
+}
+
+export type StrokeSource = ImportedPdfPolylineStrokeSource;
+
 export interface ReadonlyStroke {
   readonly points: readonly Vector2[];
+  readonly source: StrokeSource | undefined;
   stroke(renderingContext: CanvasRenderingContext2D): void;
 }
 
@@ -16,10 +25,12 @@ export function NewStroke(): Stroke {
 export class Stroke implements ReadonlyStroke {
   path: Path2D;
   points: Vector2[];
+  source: StrokeSource | undefined;
 
-  constructor(path: Path2D, points: Vector2[]) {
+  constructor(path: Path2D, points: Vector2[], source: StrokeSource | undefined = undefined) {
     this.path = path;
     this.points = points;
+    this.source = source;
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
@@ -108,6 +119,7 @@ export class PageInfo implements ReadonlyPageInfo {
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, PendingCacheTask> = new Map();
   private pagePath: string;
+  private importedPdfPolylineSources: ImportedPdfPolylineStrokeSource[] = [];
   public pageThumbnail: image.PixelMap | undefined = undefined;
   private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
   private thumbnailRefCount: number = 0;
@@ -300,6 +312,132 @@ export class PageInfo implements ReadonlyPageInfo {
 
     // Cancel pending cache tasks
     this.cancelPendingTasks();
+  }
+
+  public setPagePath(pagePath: string): void {
+    if (this.pagePath === pagePath) {
+      return;
+    }
+    this.pagePath = pagePath;
+    this.invalidateCaches();
+  }
+
+  public importPdfPolylineAnnotations(uiContext: UIContext, canvasOverSampling: number): number {
+    if (this.importedPdfPolylineSources.length > 0) {
+      return 0;
+    }
+
+    const pageSize = Vec2(this.pdfPage.getWidth(), this.pdfPage.getHeight());
+    const canvasSize = pxToVp(mul(pageSize, canvasOverSampling), uiContext);
+    const annotations = this.pdfPage.getAnnotations();
+    const annotationsToRemove: pdfService.PdfAnnotation[] = [];
+
+    for (const annotation of annotations) {
+      if (annotation.type !== pdfService.AnnotationType.POLYLINE) {
+        continue;
+      }
+
+      const annotationInfo = annotation.getAnnotationInfo() as pdfService.PolylineAnnotationInfo;
+      if (annotationInfo.vertexes === undefined || annotationInfo.vertexes.length < 2) {
+        continue;
+      }
+
+      const source = this.makeImportedPdfPolylineSource(annotation, annotationInfo);
+      const stroke = this.makeStrokeFromPdfPolyline(annotationInfo, source, pageSize, canvasSize);
+      this.importedPdfPolylineSources.push(source);
+      this.strokes.push(stroke);
+      annotationsToRemove.push(annotation);
+    }
+
+    for (const annotation of annotationsToRemove) {
+      this.pdfPage.removeAnnotation(annotation);
+    }
+
+    if (annotationsToRemove.length > 0) {
+      this.invalidateCaches();
+    }
+    return annotationsToRemove.length;
+  }
+
+  public clearImportedPdfPolylineTracking(): void {
+    this.importedPdfPolylineSources = [];
+  }
+
+  public restoreImportedPdfPolylineAnnotations(): number {
+    if (this.importedPdfPolylineSources.length === 0) {
+      return 0;
+    }
+
+    for (const source of this.importedPdfPolylineSources) {
+      this.pdfPage.addAnnotation(source.annotationInfo);
+    }
+
+    const restoredCount = this.importedPdfPolylineSources.length;
+    this.strokes = this.strokes.filter((stroke: Stroke) => stroke.source?.kind !== 'importedPdfPolyline');
+    this.importedPdfPolylineSources = [];
+    this.invalidateCaches();
+    return restoredCount;
+  }
+
+  public get importedPdfPolylineCount(): number {
+    return this.importedPdfPolylineSources.length;
+  }
+
+  private makeImportedPdfPolylineSource(
+    annotation: pdfService.PdfAnnotation,
+    annotationInfo: pdfService.PolylineAnnotationInfo
+  ): ImportedPdfPolylineStrokeSource {
+    const clonedInfo = this.clonePolylineAnnotationInfo(annotationInfo, annotation.uniqueId);
+    return {
+      kind: 'importedPdfPolyline',
+      uniqueId: annotation.uniqueId,
+      annotationInfo: clonedInfo
+    };
+  }
+
+  private clonePolylineAnnotationInfo(
+    annotationInfo: pdfService.PolylineAnnotationInfo,
+    fallbackUniqueId: string
+  ): pdfService.PolylineAnnotationInfo {
+    const clonedInfo = new pdfService.PolylineAnnotationInfo();
+    clonedInfo.uniqueId = annotationInfo.uniqueId && annotationInfo.uniqueId.length > 0 ? annotationInfo.uniqueId : fallbackUniqueId;
+    clonedInfo.content = annotationInfo.content;
+    clonedInfo.modifiedTime = annotationInfo.modifiedTime;
+    clonedInfo.border = annotationInfo.border;
+    clonedInfo.flag = annotationInfo.flag;
+    clonedInfo.title = annotationInfo.title;
+    clonedInfo.opacity = annotationInfo.opacity;
+    clonedInfo.subject = annotationInfo.subject;
+    clonedInfo.creationDate = annotationInfo.creationDate;
+    clonedInfo.lineColor = annotationInfo.lineColor;
+    clonedInfo.vertexes = annotationInfo.vertexes.map((point: Vector2) => Vec2(point.x, point.y));
+    return clonedInfo;
+  }
+
+  private makeStrokeFromPdfPolyline(
+    annotationInfo: pdfService.PolylineAnnotationInfo,
+    source: ImportedPdfPolylineStrokeSource,
+    pageSize: Vector2,
+    canvasSize: Vector2
+  ): Stroke {
+    const path = new Path2D();
+    const points: Vector2[] = [];
+
+    for (let i = 0; i < annotationInfo.vertexes.length; i++) {
+      const pdfPoint = annotationInfo.vertexes[i];
+      const point = Vec2(
+        (pdfPoint.x / pageSize.x) * canvasSize.x,
+        (1 - pdfPoint.y / pageSize.y) * canvasSize.y
+      );
+      points.push(point);
+      if (i === 0) {
+        path.moveTo(point.x, point.y);
+      } else {
+        path.lineTo(point.x, point.y);
+      }
+    }
+
+    return new Stroke(path, points, source);
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
@@ -549,6 +687,52 @@ export class PageStore implements IDataSource {
 
   public invalidateCaches(pageIndex: number): void {
     this.getPageInfo(pageIndex).invalidateCaches();
+  }
+
+  public setPagePath(pagePath: string): void {
+    for (const pageInfo of this.pages) {
+      pageInfo.setPagePath(pagePath);
+    }
+  }
+
+  public importPdfPolylineAnnotations(uiContext: UIContext, canvasOverSampling: number): number[] {
+    const affectedPageIndices: number[] = [];
+    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+      const importedCount = this.pages[pageIndex].importPdfPolylineAnnotations(uiContext, canvasOverSampling);
+      if (importedCount > 0) {
+        affectedPageIndices.push(pageIndex);
+        this.markPageChanged(pageIndex);
+      }
+    }
+    return affectedPageIndices;
+  }
+
+  public getImportedPdfPolylinePageIndices(): number[] {
+    const pageIndices: number[] = [];
+    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+      if (this.pages[pageIndex].importedPdfPolylineCount > 0) {
+        pageIndices.push(pageIndex);
+      }
+    }
+    return pageIndices;
+  }
+
+  public clearImportedPdfPolylineTracking(): void {
+    for (const pageInfo of this.pages) {
+      pageInfo.clearImportedPdfPolylineTracking();
+    }
+  }
+
+  public restoreImportedPdfPolylineAnnotations(): number[] {
+    const affectedPageIndices: number[] = [];
+    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+      const restoredCount = this.pages[pageIndex].restoreImportedPdfPolylineAnnotations();
+      if (restoredCount > 0) {
+        affectedPageIndices.push(pageIndex);
+        this.markPageChanged(pageIndex);
+      }
+    }
+    return affectedPageIndices;
   }
 
   /**
