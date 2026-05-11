@@ -175,29 +175,6 @@ struct Index {
     this.entryStatus = [...this.entryStatus];
   }
 
-  private showRemoveDialog(index: number): void {
-    if (index < 0 || index >= this.recentFiles.length) {
-      return;
-    }
-    const entry = this.recentFiles[index];
-    this.getUIContext().showAlertDialog({
-      title: '移除最近文件',
-      message: `确定要移除"${entry.fileName}"吗？`,
-      autoCancel: true,
-      alignment: DialogAlignment.Center,
-      primaryButton: {
-        value: '移除',
-        defaultFocus: true,
-        action: () => this.removeEntry(index)
-      },
-      secondaryButton: {
-        value: '取消',
-        action: () => {
-        }
-      }
-    });
-  }
-
   private getEntryStatus(index: number): EntryStatus {
     if (index < 0 || index >= this.entryStatus.length) {
       return 'deleted';
@@ -232,11 +209,11 @@ struct Index {
       } else {
         Button("选择文件")
           .type(ButtonType.Capsule)
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
+          .fontSize(30)
+          .fontWeight(FontWeight.Bold)
           .width('60%')
           .constraintSize({ maxWidth: 240 })
-          .height(44)
+          .height(50)
           .onClick(async () => {
             try {
               let uri = await pickFilePathAsync(['.pdf']);
@@ -257,18 +234,23 @@ struct Index {
   }
 
   @Builder
-  buildSwipeDeleteButton(index: number) {
-    Row() {
+  buildSwipeDeleteIndicator(index: number) {
+    Row({ space: 6 }) {
       SymbolGlyph($r('sys.symbol.trash'))
-        .fontSize(20)
+        .fontSize(18)
         .fontColor([$r('sys.color.font_on_primary')])
+      Text('删除')
+        .fontSize(13)
+        .fontColor($r('sys.color.font_on_primary'))
     }
-    .width(64)
+    .padding({ left: 20, right: 20 })
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .backgroundColor($r('sys.color.warning'))
     .onClick(() => {
-      this.removeEntry(index);
+      this.getUIContext().animateTo({ duration: 200 }, () => {
+        this.removeEntry(index);
+      });
     })
   }
 
@@ -329,14 +311,13 @@ struct Index {
               }
               .width('100%')
               .padding({ top: 10, bottom: 10, left: 16, right: 16 })
-              .borderRadius(12)
-              .backgroundColor($r('sys.color.comp_background_secondary'))
-              .shadow(this.getEntryStatus(index ?? 0) === 'deleted'
-                ? ShadowStyle.OUTER_DEFAULT_XS
-                : ShadowStyle.OUTER_DEFAULT_XS)
               .opacity(this.getEntryStatus(index ?? 0) === 'deleted' ? 0.6 : 1.0)
             }
             .width('100%')
+            .borderRadius(12)
+            .clip(true)
+            .backgroundColor($r('sys.color.comp_background_secondary'))
+            .shadow(ShadowStyle.OUTER_DEFAULT_XS)
             .transition(TransitionEffect.asymmetric(
               TransitionEffect.opacity(0).combine(TransitionEffect.translate({ y: 8 })),
               TransitionEffect.opacity(0)
@@ -344,17 +325,16 @@ struct Index {
             .swipeAction({
               end: {
                 builder: () => {
-                  this.buildSwipeDeleteButton(index ?? 0);
+                  this.buildSwipeDeleteIndicator(index ?? 0);
                 },
-                actionAreaDistance: 64,
+                actionAreaDistance: 56,
                 onAction: () => {
-                  this.removeEntry(index ?? 0);
+                  this.getUIContext().animateTo({ duration: 200 }, () => {
+                    this.removeEntry(index ?? 0);
+                  });
                 }
               }
             })
-            .gesture(LongPressGesture({ repeat: false }).onAction(() => {
-              this.showRemoveDialog(index ?? 0);
-            }))
             .onClick(async () => {
               const status = this.getEntryStatus(index ?? 0);
               if (status === 'valid') {
