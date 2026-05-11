@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { addRecentFile } from '../components/RecentFilesHelper';
 
 export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
@@ -56,6 +57,14 @@ export default class EntryAbility extends UIAbility {
     if (launchUri) {
       try {
         const params = await this.buildLaunchParams(launchUri);
+        // 保存到最近打开文件列表
+        if (this.preferences != null) {
+          addRecentFile(this.preferences, {
+            fileName: params['fileName'],
+            systemPath: params['systemPath'],
+            openedAt: new Date().getTime()
+          });
+        }
         AppStorage.setOrCreate('initialPdfViewArgs', params);
         pageUrl = 'pages/PDFView';
         AppStorage.setOrCreate('launchUri', '');
@@ -115,6 +124,14 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('launchUri', '');
     try {
       const args = await this.buildLaunchParams(launchUri);
+      // 保存到最近打开文件列表
+      if (this.preferences != null) {
+        addRecentFile(this.preferences, {
+          fileName: args['fileName'],
+          systemPath: args['systemPath'],
+          openedAt: new Date().getTime()
+        });
+      }
       this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
     } catch (error) {
       hilog.error(0, 'PDFView', `Direct launch failed: ${error}`);

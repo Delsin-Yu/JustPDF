@@ -1,22 +1,55 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { pickFilePathAsync } from '../components/GUIO';
+import { preferences } from '@kit.ArkData';
+import { window } from '@kit.ArkUI';
+import { pickFilePathAsync, pickFilePathWithDefaultAsync } from '../components/GUIO';
 import { showAlertDialog } from '../components/UIComponents';
+import { getRecentFiles, addRecentFile, removeRecentFile, RecentFileEntry } from '../components/RecentFilesHelper';
 
 const TAG = 'JustPDFIndex';
+
+type EntryStatus = 'valid' | 'noperm' | 'deleted';
 
 @Entry
 @Component
 struct Index {
   @State isLoading: boolean = false;
   @State loadingFileName: string = '';
+  @State recentFiles: RecentFileEntry[] = [];
+  @State entryStatus: EntryStatus[] = [];
+  @State widthBp: WidthBreakpoint = WidthBreakpoint.WIDTH_SM;
+  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  private mainWindow: window.Window | undefined = undefined;
+  private windowSizeCallback: (size: window.Size) => void = (_size: window.Size) => {
+    try {
+      this.widthBp = this.getUIContext().getWindowWidthBreakpoint();
+    } catch (_e) {
+    }
+  };
 
   aboutToAppear(): void {
+    try {
+      this.widthBp = this.getUIContext().getWindowWidthBreakpoint();
+    } catch (_e) {
+    }
+    this.mainWindow = AppStorage.get('window') as window.Window | undefined;
+    if (this.mainWindow) {
+      try {
+        this.mainWindow.on('windowSizeChange', this.windowSizeCallback);
+      } catch (_e) {
+      }
+    }
+
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
     if (routerParams != null && routerParams['routerParams'] != '') {
       AppStorage.setOrCreate('launchUri', routerParams['routerParams']);
+    }
+    if (this.preferences != null) {
+      this.recentFiles = getRecentFiles(this.preferences);
+      this.entryStatus = new Array(this.recentFiles.length).fill('valid');
+      this.validateRecentFilesAsync();
     }
     let launchUriLink = AppStorage?.link<string>('launchUri');
     if (launchUriLink == null) {
@@ -28,6 +61,36 @@ struct Index {
       return;
     }
     this.loadAndViewFile(launchUri);
+  }
+
+  aboutToDisappear(): void {
+    if (this.mainWindow) {
+      try {
+        this.mainWindow.off('windowSizeChange', this.windowSizeCallback);
+      } catch (_e) {
+      }
+    }
+  }
+
+  private async validateRecentFilesAsync(): Promise<void> {
+    for (let i = 0; i < this.recentFiles.length; i++) {
+      const entry = this.recentFiles[i];
+      try {
+        let testFile = await fs.open(entry.systemPath, fs.OpenMode.READ_ONLY);
+        await fs.close(testFile);
+        this.entryStatus[i] = 'valid';
+      } catch (error) {
+        const bizErr = error as BusinessError;
+        if (bizErr.code === 13900001) {
+          this.entryStatus[i] = 'noperm';
+        } else if (bizErr.code === 13900002) {
+          this.entryStatus[i] = 'deleted';
+        } else {
+          this.entryStatus[i] = 'noperm';
+        }
+      }
+      this.entryStatus = [...this.entryStatus];
+    }
   }
 
   async loadAndViewFile(uri: string) {
@@ -68,6 +131,13 @@ struct Index {
       'saveTempPath': tempFile,
       'fileName': fileName
     }
+    if (this.preferences != null) {
+      addRecentFile(this.preferences, {
+        fileName: fileName,
+        systemPath: uri,
+        openedAt: new Date().getTime()
+      });
+    }
     try {
       uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
     } catch (error) {
@@ -77,45 +147,331 @@ struct Index {
     }
   }
 
+  async openRecentFile(entry: RecentFileEntry): Promise<void> {
+    try {
+      let testFile = await fs.open(entry.systemPath, fs.OpenMode.READ_ONLY);
+      await fs.close(testFile);
+      await this.loadAndViewFile(entry.systemPath);
+      return;
+    } catch (_error) {
+    }
+    let newUri = await pickFilePathWithDefaultAsync(['.pdf'], entry.systemPath);
+    if (newUri != null) {
+      await this.loadAndViewFile(newUri);
+    }
+  }
 
-  build() {
-    Row() {
-      Column({ space: '50px' }) {
-        Text("Just PDF")
-          .fontSize('180px')
-          .fontWeight(FontWeight.Bold)
-        if (this.isLoading) {
-          LoadingProgress()
-            .width(60)
-            .height(60)
-          Text(`正在加载 ${this.loadingFileName}`)
-            .fontSize(24)
-            .fontColor(Color.Gray)
-        } else {
-          Button("选择文件")
-            .type(ButtonType.Capsule)
-            .fontSize('100px')
-            .fontWeight(FontWeight.Bold)
-            .width('650px')
-            .height('200px')
-            .onClick(async () => {
-              try {
-                let uri = await pickFilePathAsync(['.pdf']);
-                if (uri) {
-                  await this.loadAndViewFile(uri);
-                }
-              } catch (err) {
-                let businessErr = err as BusinessError;
-                hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
-                let uiContext = this.getUIContext();
-                await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`, uiContext);
-                this.isLoading = false;
-              }
-            })
+  private removeEntry(index: number): void {
+    if (index < 0 || index >= this.recentFiles.length) {
+      return;
+    }
+    const entry = this.recentFiles[index];
+    if (this.preferences != null) {
+      removeRecentFile(this.preferences, entry.systemPath);
+    }
+    this.recentFiles.splice(index, 1);
+    this.entryStatus.splice(index, 1);
+    this.recentFiles = [...this.recentFiles];
+    this.entryStatus = [...this.entryStatus];
+  }
+
+  private showRemoveDialog(index: number): void {
+    if (index < 0 || index >= this.recentFiles.length) {
+      return;
+    }
+    const entry = this.recentFiles[index];
+    this.getUIContext().showAlertDialog({
+      title: '移除最近文件',
+      message: `确定要移除"${entry.fileName}"吗？`,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '移除',
+        defaultFocus: true,
+        action: () => this.removeEntry(index)
+      },
+      secondaryButton: {
+        value: '取消',
+        action: () => {
         }
       }
-      .width('100%')
-    }
-    .height('100%')
+    });
   }
+
+  private getEntryStatus(index: number): EntryStatus {
+    if (index < 0 || index >= this.entryStatus.length) {
+      return 'deleted';
+    }
+    return this.entryStatus[index];
+  }
+
+  private isWide(): boolean {
+    return this.widthBp === WidthBreakpoint.WIDTH_MD
+      || this.widthBp === WidthBreakpoint.WIDTH_LG
+      || this.widthBp === WidthBreakpoint.WIDTH_XL;
+  }
+
+  @Builder
+  buildBranding() {
+    Column({ space: 16 }) {
+      Text("Just PDF")
+        .fontSize(this.isWide() ? 48 : 40)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary'))
+
+      if (this.isLoading) {
+        LoadingProgress()
+          .width(48)
+          .height(48)
+          .color($r('sys.color.font_secondary'))
+        Text(`正在加载 ${this.loadingFileName}`)
+          .fontSize(14)
+          .fontColor($r('sys.color.font_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      } else {
+        Button("选择文件")
+          .type(ButtonType.Capsule)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .width('60%')
+          .constraintSize({ maxWidth: 240 })
+          .height(44)
+          .onClick(async () => {
+            try {
+              let uri = await pickFilePathAsync(['.pdf']);
+              if (uri) {
+                await this.loadAndViewFile(uri);
+              }
+            } catch (err) {
+              let businessErr = err as BusinessError;
+              hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+              let uiContext = this.getUIContext();
+              await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`, uiContext);
+              this.isLoading = false;
+            }
+          })
+      }
+    }
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  buildSwipeDeleteButton(index: number) {
+    Row() {
+      SymbolGlyph($r('sys.symbol.trash'))
+        .fontSize(20)
+        .fontColor([$r('sys.color.font_on_primary')])
+    }
+    .width(64)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('sys.color.warning'))
+    .onClick(() => {
+      this.removeEntry(index);
+    })
+  }
+
+  @Builder
+  buildRecentFilesList() {
+    Column({ space: 12 }) {
+      Text('最近打开')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('sys.color.font_primary'))
+        .width('100%')
+        .padding({ left: 4 })
+
+      List({ space: 6 }) {
+          ForEach(this.recentFiles, (entry: RecentFileEntry, index?: number) => {
+            ListItem() {
+              Row({ space: 12 }) {
+                SymbolGlyph($r('sys.symbol.doc'))
+                  .fontSize(20)
+                  .fontColor([this.getEntryStatus(index ?? 0) === 'deleted'
+                    ? $r('sys.color.font_tertiary')
+                    : $r('sys.color.font_secondary')])
+
+                Column({ space: 2 }) {
+                  Row({ space: 6 }) {
+                    Text(entry.fileName)
+                      .fontSize(15)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(this.getEntryStatus(index ?? 0) === 'deleted'
+                        ? $r('sys.color.font_tertiary')
+                        : $r('sys.color.font_primary'))
+                      .decoration(this.getEntryStatus(index ?? 0) === 'deleted'
+                        ? { type: TextDecorationType.LineThrough }
+                        : { type: TextDecorationType.None })
+                      .layoutWeight(1)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                    Text(formatDate(entry.openedAt))
+                      .fontSize(12)
+                      .fontColor($r('sys.color.font_tertiary'))
+                  }
+                  .alignItems(VerticalAlign.Center)
+                  .width('100%')
+
+                  if (this.getEntryStatus(index ?? 0) === 'deleted') {
+                    Text('已删除')
+                      .fontSize(11)
+                      .fontColor($r('sys.color.font_tertiary'))
+                  } else if (this.getEntryStatus(index ?? 0) === 'noperm') {
+                    Text('权限过期')
+                      .fontSize(11)
+                      .fontColor($r('sys.color.warning'))
+                  }
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+              }
+              .width('100%')
+              .padding({ top: 10, bottom: 10, left: 16, right: 16 })
+              .borderRadius(12)
+              .backgroundColor($r('sys.color.comp_background_secondary'))
+              .shadow(this.getEntryStatus(index ?? 0) === 'deleted'
+                ? ShadowStyle.OUTER_DEFAULT_XS
+                : ShadowStyle.OUTER_DEFAULT_XS)
+              .opacity(this.getEntryStatus(index ?? 0) === 'deleted' ? 0.6 : 1.0)
+            }
+            .width('100%')
+            .transition(TransitionEffect.asymmetric(
+              TransitionEffect.opacity(0).combine(TransitionEffect.translate({ y: 8 })),
+              TransitionEffect.opacity(0)
+            ))
+            .swipeAction({
+              end: {
+                builder: () => {
+                  this.buildSwipeDeleteButton(index ?? 0);
+                },
+                actionAreaDistance: 64,
+                onAction: () => {
+                  this.removeEntry(index ?? 0);
+                }
+              }
+            })
+            .gesture(LongPressGesture({ repeat: false }).onAction(() => {
+              this.showRemoveDialog(index ?? 0);
+            }))
+            .onClick(async () => {
+              const status = this.getEntryStatus(index ?? 0);
+              if (status === 'valid') {
+                await this.openRecentFile(entry);
+              } else if (status === 'noperm') {
+                let newUri = await pickFilePathWithDefaultAsync(['.pdf'], entry.systemPath);
+                if (newUri != null) {
+                  await this.loadAndViewFile(newUri);
+                }
+              }
+            })
+          })
+        }
+        .width('100%')
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  build() {
+    Column() {
+      if (this.recentFiles.length > 0 || this.isLoading) {
+        Column() {
+          this.buildBranding()
+        }
+        .width('100%')
+        .padding({ top: this.isWide() ? 40 : 48, bottom: 20 })
+
+        Column() {
+          this.buildRecentFilesList()
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .padding({
+          left: this.isWide() ? 48 : 16,
+          right: this.isWide() ? 48 : 16,
+          bottom: 16
+        })
+        .constraintSize({ maxWidth: this.isWide() ? 720 : undefined })
+      } else {
+        Column({ space: 20 }) {
+          Text("Just PDF")
+            .fontSize(this.isWide() ? 64 : 56)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('sys.color.font_primary'))
+
+          if (this.isLoading) {
+            LoadingProgress()
+              .width(48)
+              .height(48)
+              .color($r('sys.color.font_secondary'))
+            Text(`正在加载 ${this.loadingFileName}`)
+              .fontSize(14)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          } else {
+            Button("选择文件")
+              .type(ButtonType.Capsule)
+              .fontSize(36)
+              .fontWeight(FontWeight.Bold)
+              .width('60%')
+              .constraintSize({ maxWidth: 280 })
+              .height(65)
+              .onClick(async () => {
+                try {
+                  let uri = await pickFilePathAsync(['.pdf']);
+                  if (uri) {
+                    await this.loadAndViewFile(uri);
+                  }
+                } catch (err) {
+                  let businessErr = err as BusinessError;
+                  hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+                  let uiContext = this.getUIContext();
+                  await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`, uiContext);
+                  this.isLoading = false;
+                }
+              })
+          }
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor($r('sys.color.background_primary'))
+  }
+}
+
+function formatDate(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isToday = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.getFullYear() === yesterday.getFullYear()
+    && date.getMonth() === yesterday.getMonth()
+    && date.getDate() === yesterday.getDate();
+
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+
+  if (isToday) {
+    return `今天 ${hours}:${minutes}`;
+  }
+  if (isYesterday) {
+    return `昨天 ${hours}:${minutes}`;
+  }
+  return `${year}/${month}/${day} ${hours}:${minutes}`;
 }

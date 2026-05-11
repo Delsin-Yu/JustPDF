@@ -1079,6 +1079,14 @@ struct PDFView {
     this.startTransparencyTimeout();
   }
 
+  /**
+   * 拦截系统返回键，回到主页而非退出应用
+   */
+  onBackPress(): boolean {
+    this.backToMainMenu();
+    return true;
+  }
+
   aboutToDisappear(): void {
     this.disposePanelOverlays();
     this.metronomeController.cleanup();
