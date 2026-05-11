@@ -22,5 +22,6 @@
         "build.ps1": true
     },
     "js/ts.validate.enabled": false,
-    "js/ts.suggest.enabled": false
+    "js/ts.suggest.enabled": false,
+    "git.ignoreLimitWarning": true
 }
