@@ -7,18 +7,18 @@ export struct PDFViewerActionMenu {
   @Param showFullscreenButton: boolean = false;
   @Param pageDisplayModeText: string = '';
   @Param pageFlipModeText: string = '';
-  @Param annotateModeText: string = '';
   @Param shareButtonId: string = '';
   @Param displayModeMenu: MenuElement[] = [];
   @Param flipModeMenu: MenuElement[] = [];
   @Param jumpMenu: MenuElement[] = [];
-  @Param annotateModeMenu: MenuElement[] = [];
   @Param onTutorial: () => void = () => {};
   @Param onSettings: () => void = () => {};
   @Param onToggleFullscreen: () => void = () => {};
   @Param onShare: () => void = () => {};
   @Param onToggleMetronome: () => void = () => {};
   @Param onToggleTuner: () => void = () => {};
+  @Param onAnnotate: () => void = () => {};
+  @Param onSaveAnnotation: () => void = () => {};
 
   private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
   private readonly settingsIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.gearshape')).fontSize('20vp');
@@ -29,6 +29,7 @@ export struct PDFViewerActionMenu {
   private readonly flipModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.rectangle_rotate')).fontSize('20vp');
   private readonly jumpIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.arrow_right')).fontSize('20vp');
   private readonly annotateIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.pencil_waveform')).fontSize('20vp');
+  private readonly saveIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.save')).fontSize('20vp');
   private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
     .fontSize('18vp')
     .padding('2vp');
@@ -128,11 +129,16 @@ export struct PDFViewerActionMenu {
         })
 
         MenuItem({
-          content: this.annotateModeText,
-          symbolStartIcon: this.annotateIcon,
-          symbolEndIcon: this.submenuArrowIcon,
-          builder: (): void => this.buildSubMenu(this.annotateModeMenu)
+          content: '批注',
+          symbolStartIcon: this.annotateIcon
         })
+          .onClick(() => this.onAnnotate())
+
+        MenuItem({
+          content: '保存批注',
+          symbolStartIcon: this.saveIcon
+        })
+          .onClick(() => this.onSaveAnnotation())
       }
     }
     .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND)

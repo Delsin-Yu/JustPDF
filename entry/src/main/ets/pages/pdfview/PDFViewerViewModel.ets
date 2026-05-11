@@ -30,6 +30,8 @@ export class PDFViewerViewModel {
   @Trace public showSlider: boolean = true;
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
+  @Trace public isAnnotatePaletteVisible: boolean = false;
+  private savedPageFlipMode: PDFPageFlipMode = 'side';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
 
   constructor(minScale: number = 0.5, maxScale: number = 9.0) {
@@ -44,7 +46,7 @@ export class PDFViewerViewModel {
       this.showSlider = preferencesValue.getSync('showSlider', true) as boolean;
       this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
       this.pageFlipMode = preferencesValue.getSync('pageFlipMode', 'side') as PDFPageFlipMode;
-      this.annotateMode = preferencesValue.getSync('annotateMode', 'drag') as PDFAnnotateMode;
+      this.annotateMode = 'drag';
     } catch (error) {
       hilog.error(0, 'PDFViewerViewModel', `加载阅读器偏好出错: ${error}.`);
     }
@@ -58,17 +60,6 @@ export class PDFViewerViewModel {
       return;
     }
     this.commitPageTarget(Math.min(this.currentPageIndex, this.totalPageCount - 1));
-  }
-
-  getAnnotateModeText(): string {
-    switch (this.annotateMode) {
-      case 'drag':
-        return '拖动';
-      case 'draw':
-        return '绘制';
-      case 'erase':
-        return '擦除';
-    }
   }
 
   getPageDisplayModeText(): string {
@@ -177,6 +168,30 @@ export class PDFViewerViewModel {
   setAnnotateMode(value: PDFAnnotateMode): void {
     this.annotateMode = value;
     this.persistPreference('annotateMode', value, '保存注释模式出错');
+  }
+
+  openAnnotatePalette(mode: PDFAnnotateMode = 'draw'): void {
+    if (this.isAnnotatePaletteVisible) {
+      this.setAnnotateMode(mode);
+      return;
+    }
+    this.savedPageFlipMode = this.pageFlipMode;
+    this.setAnnotateMode(mode);
+    this.isAnnotatePaletteVisible = true;
+    if (this.pageFlipMode === 'side') {
+      this.setPageFlipMode('button');
+    }
+  }
+
+  closeAnnotatePalette(): void {
+    if (!this.isAnnotatePaletteVisible) {
+      return;
+    }
+    this.isAnnotatePaletteVisible = false;
+    this.setAnnotateMode('drag');
+    if (this.pageFlipMode !== this.savedPageFlipMode) {
+      this.setPageFlipMode(this.savedPageFlipMode);
+    }
   }
 
   setShowControls(value: boolean): void {
@@ -358,26 +373,6 @@ export class PDFViewerViewModel {
       {
         value: '跳转尾页',
         action: () => onGotoPage(this.getLastNavigableIndex())
-      }
-    ];
-  }
-
-  buildAnnotateModeMenu(): MenuElement[] {
-    return [
-      {
-        value: '拖动',
-        action: () => this.setAnnotateMode('drag'),
-        symbolIcon: getCheckIcon(this.annotateMode == 'drag')
-      },
-      {
-        value: '绘制',
-        action: () => this.setAnnotateMode('draw'),
-        symbolIcon: getCheckIcon(this.annotateMode == 'draw')
-      },
-      {
-        value: '擦除',
-        action: () => this.setAnnotateMode('erase'),
-        symbolIcon: getCheckIcon(this.annotateMode == 'erase')
       }
     ];
   }

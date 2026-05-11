@@ -2,7 +2,7 @@ import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool, util } from '@kit.ArkTS';
-import { getCheckIcon, showAlertDialog } from '../../components/UIComponents';
+import { showAlertDialog } from '../../components/UIComponents';
 import { Stack as DataStack } from '../../components/Colletions';
 import { History, NewStroke, PageStore, ReadonlyStroke, Stroke } from '../../components/PageInfo';
 import { mul, pxToVp, Vec2, Vector2 } from '../../components/Numbers';
@@ -52,26 +52,6 @@ export class PDFAnnotationController {
 
   get annotateMode(): PDFAnnotateMode {
     return this.dependencies.viewerViewModel.annotateMode;
-  }
-
-  buildAnnotateModeMenu(): MenuElement[] {
-    return [
-      {
-        value: '拖动',
-        action: () => this.setAnnotateMode('drag'),
-        symbolIcon: getCheckIcon(this.dependencies.viewerViewModel.annotateMode == 'drag')
-      },
-      {
-        value: '绘制',
-        action: () => this.setAnnotateMode('draw'),
-        symbolIcon: getCheckIcon(this.dependencies.viewerViewModel.annotateMode == 'draw')
-      },
-      {
-        value: '擦除',
-        action: () => this.setAnnotateMode('erase'),
-        symbolIcon: getCheckIcon(this.dependencies.viewerViewModel.annotateMode == 'erase')
-      }
-    ];
   }
 
   setAnnotateMode(mode: PDFAnnotateMode): void {

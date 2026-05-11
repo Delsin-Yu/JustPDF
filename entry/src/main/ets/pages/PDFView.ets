@@ -29,10 +29,16 @@ import {
 } from './pdfview/PDFTunerPanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
-import { PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
+import { PDFAnnotateMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
+import { AnnotateLongPressIndicator } from './pdfview/AnnotateLongPressIndicator';
+import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth, PDFAnnotationPalette } from './pdfview/PDFAnnotationPalette';
 
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
+const LONG_PRESS_DELAY_MS: number = 100;
+const LONG_PRESS_DURATION_MS: number = 500;
+const LONG_PRESS_MOVE_THRESHOLD: number = 10;
+const LONG_PRESS_TICK_INTERVAL: number = 16;
 
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
@@ -44,6 +50,9 @@ const FloatingMetronomeContentWidthVp: number = 400;
 const FloatingTunerContentWidthVp: number = 360;
 const DefaultTunerOffsetX: number = 24;
 const DefaultTunerOffsetY: number = 112;
+const DefaultPaletteScale: number = 1.0;
+const PaletteMinScale: number = 0.5;
+const PaletteMaxScale: number = 1.5;
 
 type OverlayPanelKey = 'metronome' | 'tuner';
 interface FloatingPanelOffset {
@@ -253,6 +262,104 @@ function BuildTunerOverlay(params: TunerOverlayParams) {
   .hitTestBehavior(HitTestMode.Transparent)
 }
 
+interface AnnotationPaletteOverlayOptions {
+  showWindow: boolean;
+  annotateMode: PDFAnnotateMode;
+  undoCount: number;
+  redoCount: number;
+  hasUnsaved: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onSetMode: (mode: PDFAnnotateMode) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onClose: () => void;
+  onTouchStateChanged: (active: boolean) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+}
+
+class AnnotationPaletteOverlayParams {
+  showWindow: boolean;
+  annotateMode: PDFAnnotateMode;
+  undoCount: number;
+  redoCount: number;
+  hasUnsaved: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onSetMode: (mode: PDFAnnotateMode) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  onSave: () => void;
+  onClose: () => void;
+  onTouchStateChanged: (active: boolean) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+
+  constructor(options: AnnotationPaletteOverlayOptions) {
+    this.showWindow = options.showWindow;
+    this.annotateMode = options.annotateMode;
+    this.undoCount = options.undoCount;
+    this.redoCount = options.redoCount;
+    this.hasUnsaved = options.hasUnsaved;
+    this.hostScale = options.hostScale;
+    this.hostOffset = options.hostOffset;
+    this.onSetMode = options.onSetMode;
+    this.onUndo = options.onUndo;
+    this.onRedo = options.onRedo;
+    this.onSave = options.onSave;
+    this.onClose = options.onClose;
+    this.onTouchStateChanged = options.onTouchStateChanged;
+    this.onHostDragStart = options.onHostDragStart;
+    this.onHostDragUpdate = options.onHostDragUpdate;
+    this.onHostDragEnd = options.onHostDragEnd;
+    this.onHostPinchStart = options.onHostPinchStart;
+    this.onHostPinchUpdate = options.onHostPinchUpdate;
+    this.onHostPinchEnd = options.onHostPinchEnd;
+  }
+}
+
+@Builder
+function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayParams) {
+  Stack() {
+    if (params.showWindow) {
+      PDFAnnotationPalette({
+        annotateMode: params.annotateMode,
+        undoCount: params.undoCount,
+        redoCount: params.redoCount,
+        hasUnsaved: params.hasUnsaved,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        onSetMode: params.onSetMode,
+        onUndo: params.onUndo,
+        onRedo: params.onRedo,
+        onSave: params.onSave,
+        onClose: params.onClose,
+        onTouchStateChanged: params.onTouchStateChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd
+      })
+    }
+  }
+  .width('100%')
+  .height('100%')
+  .alignContent(Alignment.TopStart)
+  .hitTestBehavior(HitTestMode.Transparent)
+}
+
 @Entry
 @ComponentV2
 struct PDFView {
@@ -337,12 +444,25 @@ struct PDFView {
   @Local isExclusiveFullScreen: boolean = false;
   @Local isInFreeWindowMode: boolean = false;
   @Local pageFlipShadeOpacity: number = 0;
+  @Local palettePanelScale: number = DefaultPaletteScale;
+  @Local palettePanelOffset: FloatingPanelOffset = { x: 0, y: 0 };
+  @Local longPressProgress: number = 0;
+  @Local longPressPosX: number = 0;
+  @Local longPressPosY: number = 0;
+  @Local longPressVisible: boolean = false;
+  private longPressDelayId: number | undefined = undefined;
+  private longPressAnimId: number | undefined = undefined;
+  private paletteDragStartOffset: FloatingPanelOffset = { x: 0, y: 0 };
+  private palettePinchStartScale: number = DefaultPaletteScale;
+  private longPressStartTime: number = 0;
+  private longPressTouchDown: boolean = false;
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
   private overlayManager: OverlayManager | undefined = undefined;
   private metronomeOverlayContent: ComponentContent<MetronomeOverlayParams> | undefined = undefined;
   private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
+  private paletteOverlayContent: ComponentContent<AnnotationPaletteOverlayParams> | undefined = undefined;
   private metronomeDragStartOffset: FloatingPanelOffset = { x: 0, y: 0 };
   private tunerDragStartOffset: FloatingPanelOffset = { x: DefaultTunerOffsetX, y: DefaultTunerOffsetY };
   private metronomePinchStartScale: number = FloatingMetronomeDefaultScale;
@@ -809,6 +929,13 @@ struct PDFView {
           this.createTunerOverlayParams()
         );
       }
+      if (!this.paletteOverlayContent) {
+        this.paletteOverlayContent = new ComponentContent(
+          this.getUIContext(),
+          wrapBuilder<[AnnotationPaletteOverlayParams]>(BuildAnnotationPaletteOverlay),
+          this.createAnnotationPaletteOverlayParams()
+        );
+      }
       this.syncPanelOverlays();
     } catch (error) {
       hilog.error(0, 'PDFView', `初始化浮层管理器出错: ${error}.`);
@@ -832,6 +959,11 @@ struct PDFView {
       const upperContent = this.activePanel === 'metronome' ? this.metronomeOverlayContent : this.tunerOverlayContent;
       this.overlayManager.addComponentContent(lowerContent, 0);
       this.overlayManager.addComponentContent(upperContent, 1);
+
+      if (this.paletteOverlayContent) {
+        this.paletteOverlayContent.update(this.createAnnotationPaletteOverlayParams());
+        this.overlayManager.addComponentContent(this.paletteOverlayContent, 2);
+      }
     } catch (error) {
       hilog.error(0, 'PDFView', `同步浮层状态出错: ${error}.`);
     }
@@ -848,6 +980,9 @@ struct PDFView {
       }
       if (this.tunerOverlayContent) {
         this.overlayManager.removeComponentContent(this.tunerOverlayContent);
+      }
+      if (this.paletteOverlayContent) {
+        this.overlayManager.removeComponentContent(this.paletteOverlayContent);
       }
     } catch (error) {
       hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
@@ -1531,6 +1666,17 @@ struct PDFView {
     pageIndex: number,
     event: TouchEvent
   ): void {
+    if (this.isPanelGestureActive) {
+      const resetResult = this.annotationController.resetTransientState();
+      if (resetResult.clearedDraw) {
+        drawCtx.reset();
+      }
+      if (resetResult.clearedErase) {
+        this.redrawStrokes();
+      }
+      return;
+    }
+
     const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
     if (!isSingleTouch) {
       return;
@@ -1559,6 +1705,7 @@ struct PDFView {
         this.annotationController.extendDraw(touchPoint, drawCtx);
       } else if (event.type === TouchType.Up) {
         this.annotationController.finishDraw(pageIndex, touchPoint, drawCtx, targetCtx);
+        this.syncPanelOverlays();
       }
     } else if (this.annotationController.annotateMode === 'erase') {
       if (this.pageDataSource.getPageStrokesCount(pageIndex) === 0) {
@@ -1573,12 +1720,33 @@ struct PDFView {
         this.annotationController.previewErase(pageIndex, touchPoint, targetCtx);
       } else if (event.type === TouchType.Up) {
         this.annotationController.finishErase(pageIndex, targetCtx);
+        this.syncPanelOverlays();
       }
     }
   }
 
+  private isPointInsidePaletteVp(vpX: number, vpY: number): boolean {
+    if (!this.viewerViewModel.isAnnotatePaletteVisible) {
+      return false;
+    }
+    const offset = this.getClampedPaletteOffset();
+    const margin = 10;
+    const w = AnnotationPaletteContentWidth * this.palettePanelScale;
+    const h = AnnotationPaletteContentHeight * this.palettePanelScale;
+    return vpX >= offset.x + margin && vpX <= offset.x + margin + w
+      && vpY >= offset.y + margin && vpY <= offset.y + margin + h;
+  }
+
   handleViewAction(event: TouchEvent): void {
     if (this.isPanelGestureActive) {
+      return;
+    }
+
+    if (event.touches.length > 0 &&
+      this.isPointInsidePaletteVp(
+        this.getUIContext().px2vp(event.touches[0].x),
+        this.getUIContext().px2vp(event.touches[0].y)
+      )) {
       return;
     }
 
@@ -1595,15 +1763,30 @@ struct PDFView {
     }
 
     if (isSingleTouch) {
+      if (event.type === TouchType.Down && event.sourceTool === SourceTool.Pen && this.viewerViewModel.annotateMode === 'drag') {
+        this.cancelLongPress();
+        this.enterAnnotateMode('draw');
+        return;
+      }
+
       // 仅在拖动模式下处理单指平移
       if (this.viewerViewModel.annotateMode !== 'drag') {
         return;
       }
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
-      // 拖动视图（this.viewPan）
       if (event.type == TouchType.Down) {
         this.lastTouchPoint = touchPoint;
+        if (!this.viewerViewModel.isAnnotatePaletteVisible) {
+          this.startLongPressDetection(touchPoint.x, touchPoint.y);
+        }
       } else if (event.type == TouchType.Move) {
+        if (this.longPressTouchDown && this.lastTouchPoint !== undefined) {
+          const dx = touchPoint.x - this.longPressPosX;
+          const dy = touchPoint.y - this.longPressPosY;
+          if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_THRESHOLD) {
+            this.cancelLongPress();
+          }
+        }
         if (this.lastTouchPoint !== undefined) {
           const delta = Vec2(
             touchPoint.x - this.lastTouchPoint.x,
@@ -1613,9 +1796,11 @@ struct PDFView {
           this.lastTouchPoint = touchPoint;
         }
       } else if (event.type == TouchType.Up) {
+        this.cancelLongPress();
         this.lastTouchPoint = undefined;
       }
     } else if (isDualTouch) {
+      this.cancelLongPress();
       // 捏合放大处理 - 始终启用，不受注释模式影响
       // 标记双指手势激活，防止在绘制/擦除模式下意外创建笔画
       this.isDualFingerActive = true;
@@ -1681,6 +1866,10 @@ struct PDFView {
   }
 
   handleMouseEvent(event: MouseEvent): void {
+    if (this.isPanelGestureActive || this.isPointInsidePaletteVp(event.x, event.y)) {
+      return;
+    }
+
     const mousePoint = Vec2(event.x, event.y);
     const isLeftButton = event.button === MouseButton.Left;
     const isRightButton = event.button === MouseButton.Right;
@@ -1723,6 +1912,10 @@ struct PDFView {
     pageIndex: number,
     event: MouseEvent
   ): void {
+    if (this.isPanelGestureActive) {
+      return;
+    }
+
     const isLeftButton = event.button === MouseButton.Left;
     if (!isLeftButton) {
       return;
@@ -1737,6 +1930,7 @@ struct PDFView {
         this.annotationController.extendDraw(mousePoint, drawCtx);
       } else if (event.action === MouseAction.Release) {
         this.annotationController.finishDraw(pageIndex, mousePoint, drawCtx, targetCtx);
+        this.syncPanelOverlays();
       }
     } else if (this.annotationController.annotateMode === 'erase') {
       if (this.pageDataSource.getPageStrokesCount(pageIndex) == 0) {
@@ -1751,6 +1945,7 @@ struct PDFView {
         this.annotationController.previewErase(pageIndex, mousePoint, targetCtx);
       } else if (event.action === MouseAction.Release) {
         this.annotationController.finishErase(pageIndex, targetCtx);
+        this.syncPanelOverlays();
       }
     }
   }
@@ -1764,6 +1959,165 @@ struct PDFView {
 
       this.checkAndUpdateRenderScale();
     }
+  }
+
+  cancelLongPress(): void {
+    if (this.longPressDelayId !== undefined) {
+      clearTimeout(this.longPressDelayId);
+      this.longPressDelayId = undefined;
+    }
+    if (this.longPressAnimId !== undefined) {
+      clearInterval(this.longPressAnimId);
+      this.longPressAnimId = undefined;
+    }
+    this.longPressTouchDown = false;
+    this.longPressVisible = false;
+    this.longPressProgress = 0;
+  }
+
+  startLongPressDetection(x: number, y: number): void {
+    this.cancelLongPress();
+    this.longPressTouchDown = true;
+    this.longPressPosX = x;
+    this.longPressPosY = y;
+
+    this.longPressDelayId = setTimeout(() => {
+      if (!this.longPressTouchDown) {
+        return;
+      }
+      this.longPressVisible = true;
+      this.longPressStartTime = Date.now();
+      this.longPressAnimId = setInterval(() => {
+        if (!this.longPressTouchDown) {
+          this.cancelLongPress();
+          return;
+        }
+        const elapsed = Date.now() - this.longPressStartTime;
+        this.longPressProgress = Math.min(1, elapsed / LONG_PRESS_DURATION_MS);
+        if (this.longPressProgress >= 1) {
+          this.cancelLongPress();
+          this.enterAnnotateMode('draw');
+        }
+      }, LONG_PRESS_TICK_INTERVAL);
+    }, LONG_PRESS_DELAY_MS);
+  }
+
+  enterAnnotateMode(mode: PDFAnnotateMode): void {
+    this.viewerViewModel.openAnnotatePalette(mode);
+    this.initPalettePosition();
+    this.syncPanelOverlays();
+  }
+
+  initPalettePosition(): void {
+    if (this.palettePanelOffset.x !== 0 || this.palettePanelOffset.y !== 0) {
+      return;
+    }
+    const viewportWidthVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
+    const viewportHeightVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    const scaledW = AnnotationPaletteContentWidth * this.palettePanelScale;
+    const scaledH = AnnotationPaletteContentHeight * this.palettePanelScale;
+    this.palettePanelOffset = {
+      x: Math.max(0, (viewportWidthVp - scaledW) / 2),
+      y: Math.max(0, viewportHeightVp - scaledH - 80)
+    };
+  }
+
+  private getClampedPaletteOffset(offset: FloatingPanelOffset = this.palettePanelOffset): FloatingPanelOffset {
+    const viewportWidthVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
+    const viewportHeightVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    const scaledW = AnnotationPaletteContentWidth * this.palettePanelScale;
+    const scaledH = AnnotationPaletteContentHeight * this.palettePanelScale;
+    return {
+      x: Math.max(0, Math.min(viewportWidthVp - scaledW, offset.x)),
+      y: Math.max(0, Math.min(viewportHeightVp - scaledH, offset.y))
+    };
+  }
+
+  private handlePaletteHostDragStart(): void {
+    this.beginPanelGesture('metronome');
+    const clampedOffset = this.getClampedPaletteOffset();
+    this.palettePanelOffset = clampedOffset;
+    this.paletteDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+    this.syncPanelOverlays();
+  }
+
+  private handlePaletteHostDragUpdate(event: GestureEvent): void {
+    this.palettePanelOffset = this.getClampedPaletteOffset({
+      x: this.paletteDragStartOffset.x + event.offsetX * this.palettePanelScale,
+      y: this.paletteDragStartOffset.y + event.offsetY * this.palettePanelScale
+    });
+    this.syncPanelOverlays();
+  }
+
+  private handlePaletteHostDragEnd(): void {
+    this.endPanelGesture();
+  }
+
+  private handlePaletteHostPinchStart(): void {
+    this.beginPanelGesture('metronome');
+    this.palettePinchStartScale = this.palettePanelScale;
+  }
+
+  private handlePaletteHostPinchUpdate(event: GestureEvent): void {
+    this.palettePanelScale = Math.max(PaletteMinScale, Math.min(PaletteMaxScale, this.palettePinchStartScale * event.scale));
+    this.palettePanelOffset = this.getClampedPaletteOffset();
+    this.syncPanelOverlays();
+  }
+
+  private handlePaletteHostPinchEnd(): void {
+    this.palettePinchStartScale = this.palettePanelScale;
+    this.endPanelGesture();
+  }
+
+  private clampPaletteScale(scale: number): number {
+    return Math.max(PaletteMinScale, Math.min(PaletteMaxScale, scale));
+  }
+
+  private createAnnotationPaletteOverlayParams(): AnnotationPaletteOverlayParams {
+    return new AnnotationPaletteOverlayParams({
+      showWindow: this.viewerViewModel.isAnnotatePaletteVisible,
+      annotateMode: this.viewerViewModel.annotateMode,
+      undoCount: this.annotationController.undoHistoryCount,
+      redoCount: this.annotationController.redoHistoryCount,
+      hasUnsaved: this.annotationController.hasUnsavedStrokes,
+      hostScale: this.palettePanelScale,
+      hostOffset: this.getClampedPaletteOffset(),
+      onSetMode: (mode: PDFAnnotateMode) => this.handlePaletteSetMode(mode),
+      onUndo: () => {
+        this.annotationController.executeUndo();
+        this.syncPanelOverlays();
+      },
+      onRedo: () => {
+        this.annotationController.executeRedo();
+        this.syncPanelOverlays();
+      },
+      onSave: () => {
+        this.annotationController.executeSave();
+        this.syncPanelOverlays();
+      },
+      onClose: () => {
+        this.viewerViewModel.closeAnnotatePalette();
+        this.syncPanelOverlays();
+      },
+      onTouchStateChanged: (active: boolean) => {
+        this.isPanelGestureActive = active;
+      },
+      onHostDragStart: () => this.handlePaletteHostDragStart(),
+      onHostDragUpdate: (event: GestureEvent) => this.handlePaletteHostDragUpdate(event),
+      onHostDragEnd: () => this.handlePaletteHostDragEnd(),
+      onHostPinchStart: () => this.handlePaletteHostPinchStart(),
+      onHostPinchUpdate: (event: GestureEvent) => this.handlePaletteHostPinchUpdate(event),
+      onHostPinchEnd: () => this.handlePaletteHostPinchEnd()
+    });
+  }
+
+  handlePaletteSetMode(mode: PDFAnnotateMode): void {
+    if (this.viewerViewModel.annotateMode === mode) {
+      this.viewerViewModel.closeAnnotatePalette();
+    } else {
+      this.viewerViewModel.setAnnotateMode(mode);
+    }
+    this.syncPanelOverlays();
   }
 
   startTransparencyTimeout(): void {
@@ -1934,7 +2288,6 @@ struct PDFView {
                 showFullscreenButton: this.isInFreeWindowMode,
                 pageDisplayModeText: this.viewerViewModel.getPageDisplayModeText(),
                 pageFlipModeText: this.viewerViewModel.getPageFlipModeText(),
-                annotateModeText: this.viewerViewModel.getAnnotateModeText(),
                 shareButtonId: ShareButtonId,
                 displayModeMenu: this.viewerViewModel.buildPageDisplayModeMenu(() => {
                   this.gotoPage(this.viewerViewModel.currentPageIndex);
@@ -1945,7 +2298,6 @@ struct PDFView {
                 }, (pageIndex: number) => {
                   this.gotoPage(pageIndex);
                 }),
-                annotateModeMenu: this.annotationController.buildAnnotateModeMenu(),
                 onTutorial: () => {
                   this.tutorialDialogController.open();
                 },
@@ -1973,6 +2325,12 @@ struct PDFView {
                   this.focusPanel('tuner');
                   this.setTunerPanelVisible(!this.showTunerPanel);
                   this.syncPanelOverlays();
+                },
+                onAnnotate: () => {
+                  this.enterAnnotateMode('draw');
+                },
+                onSaveAnnotation: () => {
+                  this.annotationController.executeSave();
                 }
               })
 
@@ -1980,16 +2338,10 @@ struct PDFView {
 
               PDFViewerBottomBar({
                 showControls: this.viewerViewModel.showControls,
-                undoHistoryCount: this.annotationController.undoHistoryCount,
-                redoHistoryCount: this.annotationController.redoHistoryCount,
-                hasUnsavedStrokes: this.annotationController.hasUnsavedStrokes,
                 pageFlipMode: this.viewerViewModel.pageFlipMode,
                 annotateMode: this.viewerViewModel.annotateMode,
                 currentPageIndex: this.viewerViewModel.currentPageIndex,
                 totalPageCount: this.viewerViewModel.totalPageCount,
-                onUndo: () => this.annotationController.executeUndo(),
-                onRedo: () => this.annotationController.executeRedo(),
-                onSave: () => this.annotationController.executeSave(),
                 onPrevPage: () => this.navigatePrevPage(),
                 onNextPage: () => this.navigateNextPage()
               })
@@ -2055,6 +2407,13 @@ struct PDFView {
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.white'))
       }
+
+      AnnotateLongPressIndicator({
+        progress: this.longPressProgress,
+        posX: this.longPressPosX,
+        posY: this.longPressPosY,
+        visible: this.longPressVisible
+      })
 
       this.buildDockedPanels()
     }
