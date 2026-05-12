@@ -370,6 +370,6 @@ export struct MakeSlider {
       .alignSelf(ItemAlign.End)
       .trackColor(TrackColor)
       .selectedColor(TrackColor)
-      .onChange((value, _) => this.onChangeCallback(value))
+      .onChange((value: number, _mode: SliderChangeMode) => this.onChangeCallback(value))
   }
 }

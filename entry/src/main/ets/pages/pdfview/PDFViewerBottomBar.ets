@@ -1,7 +1,7 @@
 import {
+  ButtonColorSemiTransparent,
   ContainerCfg,
-  StyleButton,
-  StyleText,
+  StyleIconButton,
   toVisibility
 } from '../../components/UIComponents';
 
@@ -15,13 +15,50 @@ export struct PDFViewerBottomBar {
   @Param onPrevPage: () => void = () => {};
   @Param onNextPage: () => void = () => {};
 
+  // 当前页左侧补零，位数与总页数一致（如 12 页时显示 03/12）。
+  private formatPageFraction(): string {
+    const total: number = this.totalPageCount;
+    const cur: number = this.currentPageIndex + 1;
+    if (total <= 0) {
+      return `${cur}/0`;
+    }
+    const width: number = total.toString().length;
+    let curStr: string = cur.toString();
+    while (curStr.length < width) {
+      curStr = '0' + curStr;
+    }
+    return `${curStr}/${total}`;
+  }
+
   build() {
     Row(ContainerCfg) {
-      StyleButton({ text: '<', onClickCallback: () => this.onPrevPage() })
+      StyleIconButton({
+        icon: $r('sys.symbol.chevron_backward'),
+        iconSize: 22,
+        alternateColor: ButtonColorSemiTransparent,
+        onClickCallback: () => this.onPrevPage()
+      })
         .visibility(toVisibility(this.pageFlipMode == 'button' || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')))
-      StyleButton({ text: '>', onClickCallback: () => this.onNextPage() })
+      Text(this.formatPageFraction())
+        .height(44)
+        .padding({ left: 16, right: 16 })
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Color.White)
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .constraintSize({ minWidth: 72 })
+        .backgroundColor(ButtonColorSemiTransparent)
+        .borderRadius(22)
+        .alignSelf(ItemAlign.End)
+        .visibility(toVisibility(this.totalPageCount > 0))
+      StyleIconButton({
+        icon: $r('sys.symbol.chevron_forward'),
+        iconSize: 22,
+        alternateColor: ButtonColorSemiTransparent,
+        onClickCallback: () => this.onNextPage()
+      })
         .visibility(toVisibility(this.pageFlipMode == 'button' || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')))
-      StyleText({ text: `${this.currentPageIndex + 1}/${this.totalPageCount}` }).visibility(toVisibility(this.pageFlipMode != 'button'))
     }
   }
 }
