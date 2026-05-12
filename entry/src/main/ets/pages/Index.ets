@@ -14,6 +14,8 @@ type EntryStatus = 'valid' | 'noperm' | 'deleted';
 @Entry
 @Component
 struct Index {
+  @StorageProp('avoidAreaTopPx') avoidAreaTopPx: number = 0;
+  @StorageProp('avoidAreaBottomPx') avoidAreaBottomPx: number = 0;
   @State isLoading: boolean = false;
   @State loadingFileName: string = '';
   @State recentFiles: RecentFileEntry[] = [];
@@ -425,6 +427,10 @@ struct Index {
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Center)
+    .padding({
+      top: this.getUIContext().px2vp(this.avoidAreaTopPx),
+      bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx)
+    })
     .backgroundColor($r('sys.color.background_primary'))
   }
 }

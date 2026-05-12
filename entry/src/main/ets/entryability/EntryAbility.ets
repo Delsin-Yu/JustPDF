@@ -1,4 +1,5 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences } from '@kit.ArkData';
@@ -9,6 +10,8 @@ export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
   private preferences: preferences.Preferences | undefined;
   private window: window.Window | undefined;
+  /** 与 window.on('avoidAreaChange') 传入 off 的引用需一致 */
+  private avoidAreaChangeHandler: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -48,6 +51,8 @@ export default class EntryAbility extends UIAbility {
     }
     AppStorage.setOrCreate('window', this.window);
     AppStorage.setOrCreate('preferences', this.preferences);
+    AppStorage.setOrCreate('avoidAreaTopPx', 0);
+    AppStorage.setOrCreate('avoidAreaBottomPx', 0);
     this.loadInitialContent(windowStage);
   }
 
@@ -93,7 +98,58 @@ export default class EntryAbility extends UIAbility {
       } catch (error) {
       }
       this.restoreWindowState();
+      this.enableLayoutFullScreenAndSyncAvoidAreas();
     });
+  }
+
+  /**
+   * 窗口全屏布局：内容延伸至状态栏与导航指示区，避让高度通过 AppStorage 下发页面 padding。
+   * 参见本地文档：guides/.../arkts-develop-apply-immersive-effects.md
+   */
+  private enableLayoutFullScreenAndSyncAvoidAreas(): void {
+    const win = this.window;
+    if (!win) {
+      return;
+    }
+    win.setWindowLayoutFullScreen(true).then(() => {
+      this.syncWindowAvoidAreasToAppStorage();
+      this.registerAvoidAreaChangeListener();
+    }).catch((err: BusinessError) => {
+      hilog.warn(0, 'EntryAbility', `setWindowLayoutFullScreen 未生效: code=${err.code}, ${err.message}`);
+      this.syncWindowAvoidAreasToAppStorage();
+      this.registerAvoidAreaChangeListener();
+    });
+  }
+
+  private syncWindowAvoidAreasToAppStorage(): void {
+    const win = this.window;
+    if (!win) {
+      return;
+    }
+    try {
+      const systemArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      AppStorage.setOrCreate('avoidAreaTopPx', systemArea.topRect.height);
+      const navArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      AppStorage.setOrCreate('avoidAreaBottomPx', navArea.bottomRect.height);
+    } catch (error) {
+      hilog.warn(0, 'EntryAbility', `getWindowAvoidArea 失败: ${error}`);
+    }
+  }
+
+  private registerAvoidAreaChangeListener(): void {
+    const win = this.window;
+    if (!win || this.avoidAreaChangeHandler !== undefined) {
+      return;
+    }
+    this.avoidAreaChangeHandler = (_data: window.AvoidAreaOptions) => {
+      this.syncWindowAvoidAreasToAppStorage();
+    };
+    try {
+      win.on('avoidAreaChange', this.avoidAreaChangeHandler);
+    } catch (error) {
+      hilog.error(0, 'EntryAbility', `注册 avoidAreaChange 失败: ${error}`);
+      this.avoidAreaChangeHandler = undefined;
+    }
   }
 
   private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {
@@ -197,7 +253,13 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
-    // Main applicationWindow is destroyed, release UI related resources
+    if (this.window !== undefined && this.avoidAreaChangeHandler !== undefined) {
+      try {
+        this.window.off('avoidAreaChange', this.avoidAreaChangeHandler);
+      } catch (_e) {
+      }
+      this.avoidAreaChangeHandler = undefined;
+    }
   }
 
   onForeground(): void {
