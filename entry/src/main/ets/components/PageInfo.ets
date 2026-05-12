@@ -3,6 +3,7 @@ import { mul, pxToVp, Vec2, Vector2 } from '../components/Numbers';
 import { taskpool, util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
+import { DefaultAnnotationColor, pdfColorToCanvasColor } from '../pages/pdfview/PDFAnnotationColors';
 
 export interface ImportedPdfPolylineStrokeSource {
   kind: 'importedPdfPolyline';
@@ -14,26 +15,38 @@ export type StrokeSource = ImportedPdfPolylineStrokeSource;
 
 export interface ReadonlyStroke {
   readonly points: readonly Vector2[];
+  readonly pdfLineColor: number;
+  readonly canvasColor: string;
   readonly source: StrokeSource | undefined;
   stroke(renderingContext: CanvasRenderingContext2D): void;
 }
 
-export function NewStroke(): Stroke {
-  return new Stroke(new Path2D(), []);
+export function NewStroke(pdfLineColor: number = DefaultAnnotationColor.pdfColor): Stroke {
+  return new Stroke(new Path2D(), [], pdfLineColor);
 }
 
 export class Stroke implements ReadonlyStroke {
   path: Path2D;
   points: Vector2[];
+  pdfLineColor: number;
+  canvasColor: string;
   source: StrokeSource | undefined;
 
-  constructor(path: Path2D, points: Vector2[], source: StrokeSource | undefined = undefined) {
+  constructor(
+    path: Path2D,
+    points: Vector2[],
+    pdfLineColor: number = DefaultAnnotationColor.pdfColor,
+    source: StrokeSource | undefined = undefined
+  ) {
     this.path = path;
     this.points = points;
+    this.pdfLineColor = pdfLineColor;
+    this.canvasColor = pdfColorToCanvasColor(pdfLineColor);
     this.source = source;
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
+    renderingContext.strokeStyle = this.canvasColor;
     renderingContext.stroke(this.path);
   }
 }
@@ -437,7 +450,8 @@ export class PageInfo implements ReadonlyPageInfo {
       }
     }
 
-    return new Stroke(path, points, source);
+    const pdfLineColor = annotationInfo.lineColor ?? DefaultAnnotationColor.pdfColor;
+    return new Stroke(path, points, pdfLineColor, source);
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
