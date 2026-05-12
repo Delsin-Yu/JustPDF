@@ -1799,13 +1799,11 @@ struct PDFView {
       return;
     }
 
-    const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
-    if (!isSingleTouch) {
+    // 手写笔触点 id 常非 0；仅用 id===0 会拒绝整段笔迹（见 ArkUI TouchObject / sourceTool）。
+    if (!this.isSinglePointerForDrawTouch(event)) {
       return;
     }
 
-    // 保护：忽略双指手势激活期间或结束后不久的触摸事件
-    // 这防止了在捏合开始时（第二根手指触碰前）和结束时（抬起一根手指后）的意外绘制/擦除
     const timeSinceDualFingerEnd = Date.now() - this.lastDualFingerEndTime;
     if (this.isDualFingerActive || timeSinceDualFingerEnd < DUAL_FINGER_END_PROTECTION_DELAY) {
       const resetResult = this.annotationController.resetTransientState();
@@ -1818,7 +1816,7 @@ struct PDFView {
       return;
     }
 
-    const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
+    const touchPoint: Vector2 = Vec2(event.touches[0].x, event.touches[0].y);
 
     if (this.annotationController.annotateMode === 'draw') {
       if (event.type === TouchType.Down) {
@@ -1847,6 +1845,14 @@ struct PDFView {
     }
   }
 
+  // 单指绘制：手指要求 id===0；手写笔用 SourceTool.Pen 识别，不要求 id。
+  private isSinglePointerForDrawTouch(event: TouchEvent): boolean {
+    if (event.touches.length !== 1) {
+      return false;
+    }
+    return event.touches[0].id === 0 || event.sourceTool === SourceTool.Pen;
+  }
+
   private isPointInsidePaletteVp(vpX: number, vpY: number): boolean {
     if (!this.viewerViewModel.isAnnotatePaletteVisible) {
       return false;
@@ -1872,7 +1878,8 @@ struct PDFView {
       return;
     }
 
-    const isSingleTouch = event.touches.length === 1 && event.touches[0].id === 0;
+    const isSingleFingerTouch = event.touches.length === 1 && event.touches[0].id === 0;
+    const isPenSingleTouch = event.touches.length === 1 && event.sourceTool === SourceTool.Pen;
     const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
     const isTripleTouch =
       event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
@@ -1885,17 +1892,14 @@ struct PDFView {
       return;
     }
 
-    if (isSingleTouch) {
-      if (event.type === TouchType.Down && event.sourceTool === SourceTool.Pen && this.viewerViewModel.annotateMode === 'drag') {
-        this.cancelLongPress();
-        this.enterAnnotateMode('draw');
-        return;
-      }
+    // 拖动模式下手写笔点页面：仅打开批注（绘制仍走 Canvas onTouch，避免与透明层重复派发导致毛刺）。
+    if (isPenSingleTouch && event.type === TouchType.Down && this.viewerViewModel.annotateMode === 'drag') {
+      this.cancelLongPress();
+      this.enterAnnotateMode();
+      return;
+    }
 
-      // 仅在拖动模式下处理单指平移
-      if (this.viewerViewModel.annotateMode !== 'drag') {
-        return;
-      }
+    if (isSingleFingerTouch) {
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
       if (event.type == TouchType.Down) {
         this.lastTouchPoint = touchPoint;
