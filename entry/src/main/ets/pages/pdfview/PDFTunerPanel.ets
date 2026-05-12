@@ -2,7 +2,6 @@ import { ScrollSpinBox } from "../../components/ScrollSpinBox";
 import { ButtonColor, ContainerPadding, getCheckIcon, toVisibility } from "../../components/UIComponents";
 import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
-import { uiEffect } from '@kit.ArkGraphics2D';
 import {
   PDFTunerController,
   TunerFilterPresetId,
@@ -13,11 +12,7 @@ import {
   TunerReferenceHzMax,
   TunerReferenceHzMin,
 } from './PDFTunerController';
-import {
-  SharedPanelBackgroundBlurRadius,
-  SharedPanelBackgroundColor,
-  SharedPanelControlHighlightColor,
-} from './PDFPanelVisualConstants';
+import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from './PDFPanelVisualConstants';
 
 const TunerWindowMargin: number = 16;
 const TunerWindowWidth: number = 392;
@@ -158,8 +153,6 @@ export struct PDFTunerPanelContent {
   @Local showTransposePresetPopup: boolean = false;
   @Local showModePopup: boolean = false;
   @Local showFilterPresetPopup: boolean = false;
-  private readonly panelBackgroundBlurFilter: uiEffect.Filter =
-    uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
   private readonly tunerGridLayout: GridLayoutOptions = {
     regularSize: [1, 1],
     irregularIndexes: [0, 1, 2, 9],
@@ -1021,7 +1014,6 @@ export struct PDFTunerPanelContent {
     .height(LayoutPolicy.wrapContent)
     .padding(16)
     .backgroundColor(SharedPanelBackgroundColor)
-    .backgroundFilter(this.panelBackgroundBlurFilter)
     .borderRadius({
       topLeft: this.useDocked ? 0 : 18,
       topRight: this.useDocked ? 0 : 18,

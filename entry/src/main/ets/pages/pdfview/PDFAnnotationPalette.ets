@@ -1,9 +1,4 @@
-import { uiEffect } from '@kit.ArkGraphics2D';
-import {
-  SharedPanelBackgroundBlurRadius,
-  SharedPanelBackgroundColor,
-  SharedPanelControlHighlightColor
-} from './PDFPanelVisualConstants';
+import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from './PDFPanelVisualConstants';
 import { PDFAnnotateMode } from './PDFViewerViewModel';
 import {
   AnnotationColor,
@@ -67,9 +62,6 @@ export struct PDFAnnotationPalette {
 
   @Local showColorPopup: boolean = false;
   @Local colorPopupMode: ColorPopupMode = 'preset';
-
-  private readonly blurFilter: uiEffect.Filter =
-    uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
 
   // ----------- 颜色弹出（预设）-----------
 
@@ -137,7 +129,6 @@ export struct PDFAnnotationPalette {
     }
     .padding(ColorPickerPad)
     .backgroundColor(SharedPanelBackgroundColor)
-    .backgroundFilter(this.blurFilter)
     .borderRadius(16)
     .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
     .shadow({ radius: 12, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
@@ -334,7 +325,6 @@ export struct PDFAnnotationPalette {
     .height(AnnotationPaletteContentHeight)
     .padding(Pad)
     .backgroundColor(SharedPanelBackgroundColor)
-    .backgroundFilter(this.blurFilter)
     .borderRadius(16)
     .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
     .shadow({ radius: 12, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })

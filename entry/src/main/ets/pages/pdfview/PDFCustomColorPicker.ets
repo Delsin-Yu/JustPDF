@@ -1,5 +1,4 @@
-import { uiEffect } from '@kit.ArkGraphics2D';
-import { SharedPanelBackgroundBlurRadius, SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
+import { SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
 import {
   AnnotationColor,
   hsvToRgb,
@@ -68,9 +67,6 @@ export struct PDFCustomColorPicker {
   private readonly settings: RenderingContextSettings = new RenderingContextSettings(true);
   private readonly ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private contextReady: boolean = false;
-
-  private readonly blurFilter: uiEffect.Filter =
-    uiEffect.createFilter().blur(SharedPanelBackgroundBlurRadius);
 
   private wheelDragKind: WheelDragKind = 'none';
 
@@ -722,7 +718,6 @@ export struct PDFCustomColorPicker {
     .width(WheelSize + PickerPad * 2)
     .padding(PickerPad)
     .backgroundColor(SharedPanelBackgroundColor)
-    .backgroundFilter(this.blurFilter)
     .borderRadius(16)
     .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
     .shadow({ radius: 14, color: 'rgba(0, 0, 0, 0.28)', offsetY: 5 })
