@@ -1209,9 +1209,18 @@ struct PDFView {
     // Register hotkeys
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.navigateNextPage()));
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => this.annotationController.executeUndo()));
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => this.annotationController.executeRedo()));
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => this.annotationController.executeRedo()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => {
+      this.annotationController.executeUndo();
+      this.syncPanelOverlays();
+    }));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => {
+      this.annotationController.executeRedo();
+      this.syncPanelOverlays();
+    }));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => {
+      this.annotationController.executeRedo();
+      this.syncPanelOverlays();
+    }));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.annotationController.executeSave()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
@@ -1802,6 +1811,7 @@ struct PDFView {
     if (isTripleTouch) {
       if (event.type === TouchType.Down && (this.annotationController.annotateMode === 'draw' || this.annotationController.annotateMode === 'erase')) {
         this.annotationController.executeUndo();
+        this.syncPanelOverlays();
       }
       return;
     }
@@ -2519,5 +2529,4 @@ struct PDFView {
     .width('100%')
     .height('100%')
   }
-}
 }
