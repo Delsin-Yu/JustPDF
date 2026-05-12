@@ -32,6 +32,7 @@ import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
 import { PDFAnnotateMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './pdfview/AnnotateLongPressIndicator';
 import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth, PDFAnnotationPalette } from './pdfview/PDFAnnotationPalette';
+import { AnnotationColor } from './pdfview/PDFAnnotationColors';
 
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
@@ -270,7 +271,13 @@ interface AnnotationPaletteOverlayOptions {
   hasUnsaved: boolean;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
+  drawColor: AnnotationColor;
+  customDrawColor: AnnotationColor;
+  recentCustomColors: AnnotationColor[];
   onSetMode: (mode: PDFAnnotateMode) => void;
+  onSelectDrawColor: (color: AnnotationColor) => void;
+  onSetCustomDrawColor: (color: AnnotationColor) => void;
+  onCommitRecentCustomColor: (color: AnnotationColor) => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -292,7 +299,13 @@ class AnnotationPaletteOverlayParams {
   hasUnsaved: boolean;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
+  drawColor: AnnotationColor;
+  customDrawColor: AnnotationColor;
+  recentCustomColors: AnnotationColor[];
   onSetMode: (mode: PDFAnnotateMode) => void;
+  onSelectDrawColor: (color: AnnotationColor) => void;
+  onSetCustomDrawColor: (color: AnnotationColor) => void;
+  onCommitRecentCustomColor: (color: AnnotationColor) => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -313,7 +326,13 @@ class AnnotationPaletteOverlayParams {
     this.hasUnsaved = options.hasUnsaved;
     this.hostScale = options.hostScale;
     this.hostOffset = options.hostOffset;
+    this.drawColor = options.drawColor;
+    this.customDrawColor = options.customDrawColor;
+    this.recentCustomColors = options.recentCustomColors;
     this.onSetMode = options.onSetMode;
+    this.onSelectDrawColor = options.onSelectDrawColor;
+    this.onSetCustomDrawColor = options.onSetCustomDrawColor;
+    this.onCommitRecentCustomColor = options.onCommitRecentCustomColor;
     this.onUndo = options.onUndo;
     this.onRedo = options.onRedo;
     this.onSave = options.onSave;
@@ -339,7 +358,13 @@ function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayParams) {
         hasUnsaved: params.hasUnsaved,
         hostScale: params.hostScale,
         hostOffset: params.hostOffset,
+        drawColor: params.drawColor,
+        customDrawColor: params.customDrawColor,
+        recentCustomColors: params.recentCustomColors,
         onSetMode: params.onSetMode,
+        onSelectDrawColor: params.onSelectDrawColor,
+        onSetCustomDrawColor: params.onSetCustomDrawColor,
+        onCommitRecentCustomColor: params.onCommitRecentCustomColor,
         onUndo: params.onUndo,
         onRedo: params.onRedo,
         onSave: params.onSave,
@@ -417,7 +442,8 @@ struct PDFView {
       this.gotoPage(pageIndex);
     },
     onRedrawRequested: () => this.redrawStrokes(),
-    onRefreshDisplayedPages: () => this.refreshDisplayedPages()
+    onRefreshDisplayedPages: () => this.refreshDisplayedPages(),
+    getPreferences: () => this.preferences
   }, CanvasOverSampling);
   @Local metronomeController: PDFMetronomeController = new PDFMetronomeController({
     getUIContext: () => this.getUIContext(),
@@ -488,6 +514,13 @@ struct PDFView {
   });
 
   backToMainMenu(): void {
+    // 关闭节拍器、调音器、批注画板三个浮层并把关闭状态推到 OverlayManager，
+    // 防止离开 PDFView 后这些浮层在窗口级 OverlayManager 中残留显示，
+    // 也保证下一次再进入 PDFView 时浮层处于初始（隐藏）状态。
+    this.metronomeController.closeWindow();
+    this.setTunerPanelVisible(false);
+    this.viewerViewModel.closeAnnotatePalette();
+    this.syncPanelOverlays();
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
     });
   }
@@ -975,14 +1008,24 @@ struct PDFView {
     }
 
     try {
+      // OverlayManager 是窗口级共享对象，跨页面存活。
+      // 仅 removeComponentContent 只是把节点从 overlay 上卸下，前端 ComponentContent 仍持有
+      // 后端节点引用，可能在再次进入 PDFView 时表现为"上次的浮层还在显示"。
+      // 这里在卸载后再显式 dispose 并清空引用，确保完全释放，避免视觉残留与内存泄漏。
       if (this.metronomeOverlayContent) {
         this.overlayManager.removeComponentContent(this.metronomeOverlayContent);
+        this.metronomeOverlayContent.dispose();
+        this.metronomeOverlayContent = undefined;
       }
       if (this.tunerOverlayContent) {
         this.overlayManager.removeComponentContent(this.tunerOverlayContent);
+        this.tunerOverlayContent.dispose();
+        this.tunerOverlayContent = undefined;
       }
       if (this.paletteOverlayContent) {
         this.overlayManager.removeComponentContent(this.paletteOverlayContent);
+        this.paletteOverlayContent.dispose();
+        this.paletteOverlayContent = undefined;
       }
     } catch (error) {
       hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
@@ -1121,6 +1164,7 @@ struct PDFView {
     // Lightweight setup that won't block the UI
     try {
       this.viewerViewModel.loadPreferences(this.preferences);
+      this.annotationController.loadDrawPreferences();
       this.rebuildSettingsDialogController();
       this.metronomeController.initialize(this.preferences);
       this.tunerController.initialize(this.preferences);
@@ -1996,14 +2040,14 @@ struct PDFView {
         this.longPressProgress = Math.min(1, elapsed / LONG_PRESS_DURATION_MS);
         if (this.longPressProgress >= 1) {
           this.cancelLongPress();
-          this.enterAnnotateMode('draw');
+          this.enterAnnotateMode();
         }
       }, LONG_PRESS_TICK_INTERVAL);
     }, LONG_PRESS_DELAY_MS);
   }
 
-  enterAnnotateMode(mode: PDFAnnotateMode): void {
-    this.viewerViewModel.openAnnotatePalette(mode);
+  enterAnnotateMode(explicitTool?: PDFAnnotateMode): void {
+    this.viewerViewModel.openAnnotatePalette(explicitTool);
     this.initPalettePosition();
     this.syncPanelOverlays();
     this.annotationController.prepareImportedPolylineAnnotations()
@@ -2085,7 +2129,23 @@ struct PDFView {
       hasUnsaved: this.annotationController.hasUnsavedStrokes,
       hostScale: this.palettePanelScale,
       hostOffset: this.getClampedPaletteOffset(),
+      drawColor: this.annotationController.selectedDrawColor,
+      customDrawColor: this.annotationController.customDrawColor,
+      recentCustomColors: this.annotationController.recentCustomColors,
       onSetMode: (mode: PDFAnnotateMode) => this.handlePaletteSetMode(mode),
+      onSelectDrawColor: (color: AnnotationColor) => {
+        this.annotationController.setSelectedDrawColor(color);
+        this.syncPanelOverlays();
+      },
+      onSetCustomDrawColor: (color: AnnotationColor) => {
+        this.annotationController.setCustomDrawColor(color);
+        this.syncPanelOverlays();
+      },
+      onCommitRecentCustomColor: (color: AnnotationColor) => {
+        this.annotationController.pushRecentCustomColor(color);
+        this.annotationController.flushPendingDrawColorPreferences();
+        this.syncPanelOverlays();
+      },
       onUndo: () => {
         this.annotationController.executeUndo();
         this.syncPanelOverlays();
@@ -2100,6 +2160,7 @@ struct PDFView {
           .catch((error: Error) => hilog.error(0, 'PDFView', `保存批注出错: ${error.message}`));
       },
       onClose: () => {
+        this.annotationController.flushPendingDrawColorPreferences();
         this.viewerViewModel.closeAnnotatePalette();
         this.syncPanelOverlays();
       },
@@ -2331,7 +2392,7 @@ struct PDFView {
                   this.syncPanelOverlays();
                 },
                 onAnnotate: () => {
-                  this.enterAnnotateMode('draw');
+                  this.enterAnnotateMode();
                 },
                 onSaveAnnotation: () => {
                   this.annotationController.executeSave()

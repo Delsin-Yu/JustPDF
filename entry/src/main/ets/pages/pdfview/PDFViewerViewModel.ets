@@ -11,6 +11,11 @@ export type PDFPageDisplayMode = 'single' | 'dual' | 'dualContinuous' | 'tri' | 
 export type PDFPageFlipMode = 'side' | 'button' | 'extern';
 export type PDFAnnotateMode = 'drag' | 'draw' | 'erase';
 
+// 批注浮窗记住的「绘制 / 擦除」工具（不含 drag）。
+export type PalettePersistedTool = 'draw' | 'erase';
+
+const PaletteToolModePreferenceKey: string = 'paletteToolMode';
+
 @ObservedV2
 export class PDFViewerViewModel {
   private preferences?: preferences.Preferences;
@@ -22,6 +27,7 @@ export class PDFViewerViewModel {
   @Trace public pageDisplayMode: PDFPageDisplayMode = 'single';
   @Trace public pageFlipMode: PDFPageFlipMode = 'side';
   @Trace public annotateMode: PDFAnnotateMode = 'drag';
+  @Trace public paletteToolMode: PalettePersistedTool = 'draw';
   @Trace public viewPan: Vector2 = Vec2(0, 0);
   @Trace public viewScale: number = 1.0;
   @Trace public viewportSize: Vector2 = Vec2(0, 0);
@@ -47,6 +53,22 @@ export class PDFViewerViewModel {
       this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
       this.pageFlipMode = preferencesValue.getSync('pageFlipMode', 'side') as PDFPageFlipMode;
       this.annotateMode = 'drag';
+      let tool: PalettePersistedTool = 'draw';
+      if (preferencesValue.hasSync(PaletteToolModePreferenceKey)) {
+        const v: string = preferencesValue.getSync(PaletteToolModePreferenceKey, 'draw') as string;
+        if (v === 'draw' || v === 'erase') {
+          tool = v;
+        }
+      } else {
+        // 迁移：旧版曾把 annotateMode 写入偏好，关闭浮窗后多为 'drag'；若仍为 draw/erase 则沿用。
+        const legacy: string = preferencesValue.getSync('annotateMode', 'drag') as string;
+        if (legacy === 'draw' || legacy === 'erase') {
+          tool = legacy;
+          preferencesValue.putSync(PaletteToolModePreferenceKey, legacy);
+          preferencesValue.flushSync();
+        }
+      }
+      this.paletteToolMode = tool;
     } catch (error) {
       hilog.error(0, 'PDFViewerViewModel', `加载阅读器偏好出错: ${error}.`);
     }
@@ -167,16 +189,23 @@ export class PDFViewerViewModel {
 
   setAnnotateMode(value: PDFAnnotateMode): void {
     this.annotateMode = value;
-    this.persistPreference('annotateMode', value, '保存注释模式出错');
+    if (value === 'draw' || value === 'erase') {
+      this.paletteToolMode = value;
+      this.persistPreference(PaletteToolModePreferenceKey, value, '保存批注工具模式出错');
+    }
   }
 
-  openAnnotatePalette(mode: PDFAnnotateMode = 'draw'): void {
+  openAnnotatePalette(explicitTool?: PDFAnnotateMode): void {
+    const resolvedTool: PDFAnnotateMode =
+      explicitTool !== undefined && explicitTool !== 'drag'
+        ? explicitTool
+        : this.paletteToolMode;
     if (this.isAnnotatePaletteVisible) {
-      this.setAnnotateMode(mode);
+      this.setAnnotateMode(resolvedTool);
       return;
     }
     this.savedPageFlipMode = this.pageFlipMode;
-    this.setAnnotateMode(mode);
+    this.setAnnotateMode(resolvedTool);
     this.isAnnotatePaletteVisible = true;
     if (this.pageFlipMode === 'side') {
       this.setPageFlipMode('button');

@@ -1,4 +1,5 @@
 import { fileIo as fs, picker } from '@kit.CoreFileKit';
+import { preferences } from '@kit.ArkData';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool, util } from '@kit.ArkTS';
@@ -7,10 +8,23 @@ import { Stack as DataStack } from '../../components/Colletions';
 import { History, NewStroke, PageStore, ReadonlyStroke, Stroke } from '../../components/PageInfo';
 import { mul, pxToVp, Vec2, Vector2 } from '../../components/Numbers';
 import { PDFAnnotateMode, PDFViewerViewModel, ViewerMinRenderScale } from './PDFViewerViewModel';
+import {
+  AnnotationColor,
+  CustomAnnotationColorId,
+  DefaultAnnotationColor,
+  DefaultCustomAnnotationColor,
+  customDrawColorFromPersistedPdf,
+  parsePersistedPdfColorLoose,
+  selectedDrawColorFromPersistedPdf
+} from './PDFAnnotationColors';
+
+const RecentCustomColorCapacity: number = 10;
+
+const AnnotationPrefSelectedPdfKey: string = 'annotationSelectedPdfColor';
+const AnnotationPrefCustomPdfKey: string = 'annotationCustomPdfColor';
+const AnnotationPrefRecentCustomPdfsKey: string = 'annotationRecentCustomPdfColors';
 
 const DefaultAnnotationCanvasOverSampling: number = 3;
-const DefaultAnnotationLineColor: string = 'rgba(255, 132, 0, 1.00)';
-const DefaultAnnotationPdfLineColor: number = 3547621;
 const DefaultAnnotationSubject: string = '由 Just PDF 创建的注释';
 
 interface PDFAnnotationControllerDependencies {
@@ -25,6 +39,7 @@ interface PDFAnnotationControllerDependencies {
   onRequestGotoPage: (pageIndex: number) => void;
   onRedrawRequested: () => void;
   onRefreshDisplayedPages: () => Promise<void>;
+  getPreferences: () => preferences.Preferences | undefined;
 }
 
 export interface AnnotationTransientResetResult {
@@ -41,14 +56,114 @@ export class PDFAnnotationController {
   private undoHistory: DataStack<History> = new DataStack<History>();
   private redoHistory: DataStack<History> = new DataStack<History>();
   private importedPolylinePrepared: boolean = false;
+  private drawColorPersistTimer: number | undefined = undefined;
 
   @Trace public hasUnsavedStrokes: boolean = false;
   @Trace public undoHistoryCount: number = 0;
   @Trace public redoHistoryCount: number = 0;
+  @Trace public selectedDrawColor: AnnotationColor = DefaultAnnotationColor;
+  @Trace public customDrawColor: AnnotationColor = DefaultCustomAnnotationColor;
+  @Trace public recentCustomColors: AnnotationColor[] = [];
 
   constructor(dependencies: PDFAnnotationControllerDependencies, canvasOverSampling: number = DefaultAnnotationCanvasOverSampling) {
     this.dependencies = dependencies;
     this.canvasOverSampling = canvasOverSampling;
+  }
+
+  // 从 stagePersistence 恢复绘制色 / 自定义色槽（在 PDFView 注入 preferences 之后调用）。
+  loadDrawPreferences(): void {
+    const prefs: preferences.Preferences | undefined = this.dependencies.getPreferences();
+    if (!prefs) {
+      return;
+    }
+    try {
+      const customRaw: number | string | boolean =
+        prefs.getSync(AnnotationPrefCustomPdfKey, DefaultCustomAnnotationColor.pdfColor) as number | string | boolean;
+      const customPdf: number = parsePersistedPdfColorLoose(customRaw, DefaultCustomAnnotationColor.pdfColor);
+      this.customDrawColor = customDrawColorFromPersistedPdf(customPdf);
+
+      const selectedRaw: number | string | boolean =
+        prefs.getSync(AnnotationPrefSelectedPdfKey, DefaultAnnotationColor.pdfColor) as number | string | boolean;
+      const selectedPdf: number = parsePersistedPdfColorLoose(selectedRaw, DefaultAnnotationColor.pdfColor);
+      this.selectedDrawColor = selectedDrawColorFromPersistedPdf(selectedPdf);
+
+      const recentJsonRaw: number | string | boolean =
+        prefs.getSync(AnnotationPrefRecentCustomPdfsKey, '[]') as number | string | boolean;
+      const recentJson: string = typeof recentJsonRaw === 'string' ? recentJsonRaw : '[]';
+      this.recentCustomColors = this.parseRecentCustomColorsFromJson(recentJson);
+    } catch (error) {
+      hilog.error(0, 'PDFAnnotationController', `加载批注颜色偏好出错: ${error}.`);
+    }
+  }
+
+  private serializeRecentCustomPdfColorsJson(): string {
+    const pdfs: number[] = [];
+    for (let i = 0; i < this.recentCustomColors.length; i++) {
+      const c: AnnotationColor = this.recentCustomColors[i];
+      if (c.id === CustomAnnotationColorId) {
+        pdfs.push(c.pdfColor);
+      }
+    }
+    return JSON.stringify(pdfs);
+  }
+
+  private parseRecentCustomColorsFromJson(text: string): AnnotationColor[] {
+    const colors: AnnotationColor[] = [];
+    try {
+      const parsed: Object = JSON.parse(text) as Object;
+      if (!Array.isArray(parsed)) {
+        return colors;
+      }
+      const arr: Object[] = parsed as Object[];
+      for (let i = 0; i < arr.length && colors.length < RecentCustomColorCapacity; i++) {
+        const el: Object = arr[i];
+        if (typeof el !== 'number' || !Number.isFinite(el)) {
+          continue;
+        }
+        const pdf: number = Math.max(0, Math.min(0xFFFFFF, Math.floor(el as number)));
+        colors.push(customDrawColorFromPersistedPdf(pdf));
+      }
+    } catch (_e) {
+      // 偏好损坏或格式变更时忽略，保持空列表
+    }
+    return colors;
+  }
+
+  private persistDrawColorPreferences(): void {
+    const prefs: preferences.Preferences | undefined = this.dependencies.getPreferences();
+    if (!prefs) {
+      return;
+    }
+    try {
+      prefs.putSync(AnnotationPrefSelectedPdfKey, this.selectedDrawColor.pdfColor);
+      prefs.putSync(AnnotationPrefCustomPdfKey, this.customDrawColor.pdfColor);
+      prefs.putSync(AnnotationPrefRecentCustomPdfsKey, this.serializeRecentCustomPdfColorsJson());
+      prefs.flushSync();
+    } catch (error) {
+      hilog.error(0, 'PDFAnnotationController', `保存批注颜色偏好出错: ${error}.`);
+    }
+  }
+
+  private cancelDrawColorPersistSchedule(): void {
+    if (this.drawColorPersistTimer !== undefined) {
+      clearTimeout(this.drawColorPersistTimer);
+      this.drawColorPersistTimer = undefined;
+    }
+  }
+
+  // 自定义色在拾色器拖动时高频更新，合并写入偏好以避免频繁 flushSync。
+  private schedulePersistDrawColorPreferences(): void {
+    this.cancelDrawColorPersistSchedule();
+    this.drawColorPersistTimer = setTimeout((): void => {
+      this.drawColorPersistTimer = undefined;
+      this.persistDrawColorPreferences();
+    }, 220);
+  }
+
+  // 将可能挂起的自定义色防抖写入立即落盘（关闭浮窗或提交最近色时调用）。
+  flushPendingDrawColorPreferences(): void {
+    this.cancelDrawColorPersistSchedule();
+    this.persistDrawColorPreferences();
   }
 
   get annotateMode(): PDFAnnotateMode {
@@ -57,6 +172,39 @@ export class PDFAnnotationController {
 
   setAnnotateMode(mode: PDFAnnotateMode): void {
     this.dependencies.viewerViewModel.setAnnotateMode(mode);
+  }
+
+  setSelectedDrawColor(color: AnnotationColor): void {
+    this.cancelDrawColorPersistSchedule();
+    this.selectedDrawColor = color;
+    this.persistDrawColorPreferences();
+  }
+
+  // 设置自定义颜色，同时把它作为当前选中颜色用于绘制。
+  setCustomDrawColor(color: AnnotationColor): void {
+    this.customDrawColor = color;
+    this.selectedDrawColor = color;
+    this.schedulePersistDrawColorPreferences();
+  }
+
+  // 将自定义颜色提交进最近列表；同色去重并迁移到最前，最多保留 N 项。
+  pushRecentCustomColor(color: AnnotationColor): void {
+    if (color.id !== CustomAnnotationColorId) {
+      return;
+    }
+    const filtered: AnnotationColor[] = [];
+    for (const existing of this.recentCustomColors) {
+      if (existing.pdfColor !== color.pdfColor) {
+        filtered.push(existing);
+      }
+    }
+    filtered.unshift(color);
+    while (filtered.length > RecentCustomColorCapacity) {
+      filtered.pop();
+    }
+    this.recentCustomColors = filtered;
+    this.cancelDrawColorPersistSchedule();
+    this.persistDrawColorPreferences();
   }
 
   async prepareImportedPolylineAnnotations(): Promise<void> {
@@ -86,7 +234,7 @@ export class PDFAnnotationController {
   }
 
   applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
-    ctx.strokeStyle = DefaultAnnotationLineColor;
+    // 笔画颜色由各 Stroke 在渲染时自行设置；这里只统一线宽与端点样式。
     ctx.lineWidth = 1 * this.canvasOverSampling;
     ctx.lineCap = 'round';
   }
@@ -114,16 +262,26 @@ export class PDFAnnotationController {
   }
 
   startDraw(point: Vector2): void {
-    this.activeDrawPath = NewStroke();
+    this.activeDrawPath = NewStroke(this.selectedDrawColor.pdfColor);
     this.activeDrawPath.path.moveTo(point.x, point.y);
     this.activeDrawPath.points.push(point);
   }
 
   extendDraw(point: Vector2, drawCtx: CanvasRenderingContext2D): void {
+    // 防御：若 startDraw 未被执行就收到 Move（例如 Down 事件被双指/手势门禁过滤、
+    // 或 resetTransientState 清空了占位笔画），则把首个 Move 视为隐式起点，
+    // 并按当前选中颜色重建笔画——避免落入残留占位笔画的默认颜色（DefaultAnnotationColor），
+    // 即“切到自定义后偶发的第二笔变回橙色”问题。
+    if (this.activeDrawPath.points.length === 0) {
+      this.activeDrawPath = NewStroke(this.selectedDrawColor.pdfColor);
+      this.activeDrawPath.path.moveTo(point.x, point.y);
+      this.activeDrawPath.points.push(point);
+      return;
+    }
     this.activeDrawPath.path.lineTo(point.x, point.y);
     drawCtx.reset();
     this.applyStrokeStyle(drawCtx);
-    drawCtx.stroke(this.activeDrawPath.path);
+    this.activeDrawPath.stroke(drawCtx);
     this.activeDrawPath.points.push(point);
   }
 
@@ -417,7 +575,7 @@ export class PDFAnnotationController {
     } else {
       annotationInfo.subject = DefaultAnnotationSubject;
       annotationInfo.creationDate = new Date(Date.now());
-      annotationInfo.lineColor = DefaultAnnotationPdfLineColor;
+      annotationInfo.lineColor = stroke.pdfLineColor;
       annotationInfo.uniqueId = util.generateRandomUUID(true);
       annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
     }
