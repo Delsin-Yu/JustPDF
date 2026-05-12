@@ -70,6 +70,8 @@ interface MetronomeOverlayOptions {
   dockedTopOffsetVp: number;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
+  /** 状态栏避让（vp），仅用于播放中迷你浮动按钮顶边距 */
+  overlaySafeTopVp: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -109,6 +111,7 @@ class MetronomeOverlayParams {
   dockedTopOffsetVp: number;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
+  overlaySafeTopVp: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -128,6 +131,7 @@ class MetronomeOverlayParams {
     this.dockedTopOffsetVp = options.dockedTopOffsetVp;
     this.hostScale = options.hostScale;
     this.hostOffset = options.hostOffset;
+    this.overlaySafeTopVp = options.overlaySafeTopVp;
     this.onInteraction = options.onInteraction;
     this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
@@ -203,31 +207,35 @@ function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
     })
       .visibility(toVisibility(params.showWindow && !params.useDocked))
 
-    StyleIconButton({
-      icon: $r('sys.symbol.clock'),
-      alternateColor: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
-        ? 'rgba(35, 42, 53, 0.62)'
-        : (params.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)'),
-      backgroundAnimationDurationMs: params.controller?.floatingButtonTransitionDurationMs ?? 0,
-      onTouchDownCallback: () => params.onInteraction(),
-      onClickCallback: () => {
-        params.onOpenWindow();
-      }
-    })
-      .visibility(toVisibility(!params.showWindow && (params.controller?.isPlaying ?? false)))
-      .scale({
-        x: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
-          ? 1
-          : (params.controller?.floatingButtonPulseScale ?? 1),
-        y: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
-          ? 1
-          : (params.controller?.floatingButtonPulseScale ?? 1),
-        centerX: 22,
-        centerY: 22
+    Column() {
+      StyleIconButton({
+        icon: $r('sys.symbol.clock'),
+        alternateColor: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+          ? 'rgba(35, 42, 53, 0.62)'
+          : (params.controller?.floatingButtonColor ?? 'rgba(35, 42, 53, 0.62)'),
+        backgroundAnimationDurationMs: params.controller?.floatingButtonTransitionDurationMs ?? 0,
+        onTouchDownCallback: () => params.onInteraction(),
+        onClickCallback: () => {
+          params.onOpenWindow();
+        }
       })
-      .animation({ duration: params.controller?.floatingButtonTransitionDurationMs ?? 0, curve: Curve.EaseOut })
-      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
-      .margin(ContainerPadding)
+        .visibility(toVisibility(!params.showWindow && (params.controller?.isPlaying ?? false)))
+        .scale({
+          x: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+            ? 1
+            : (params.controller?.floatingButtonPulseScale ?? 1),
+          y: (!(params.controller?.isPlaying ?? false) || (params.controller?.currentBeat ?? -1) < 0)
+            ? 1
+            : (params.controller?.floatingButtonPulseScale ?? 1),
+          centerX: 22,
+          centerY: 22
+        })
+        .animation({ duration: params.controller?.floatingButtonTransitionDurationMs ?? 0, curve: Curve.EaseOut })
+        .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.92, y: 0.92 })))
+        .margin(ContainerPadding)
+    }
+    .alignItems(HorizontalAlign.Start)
+    .padding({ top: params.overlaySafeTopVp })
   }
   .width('100%')
   .height('100%')
@@ -493,6 +501,10 @@ struct PDFView {
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
+  /** 系统栏避让高度（px），与窗口 getWindowAvoidArea 一致，用于根布局 padding */
+  @Local avoidAreaTopPx: number = 0;
+  @Local avoidAreaBottomPx: number = 0;
+  avoidAreaChangeCallback: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
   private overlayManager: OverlayManager | undefined = undefined;
   private metronomeOverlayContent: ComponentContent<MetronomeOverlayParams> | undefined = undefined;
   private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
@@ -905,6 +917,7 @@ struct PDFView {
       dockedTopOffsetVp: this.getDockedMetronomeTopOffsetVp(),
       hostScale: this.useDockedMetronomePanel ? 1 : this.metronomePanelScale,
       hostOffset: this.getClampedMetronomeOffset(),
+      overlaySafeTopVp: this.getUIContext().px2vp(this.avoidAreaTopPx),
       onInteraction: () => this.focusPanel('metronome'),
       onTouchStateChanged: (active: boolean) => {
         this.isPanelGestureActive = active;
@@ -1198,6 +1211,11 @@ struct PDFView {
         this.syncPanelOverlays();
       };
       this.mainWindow.on('windowSizeChange', this.windowSizeChangeCallback);
+      this.avoidAreaChangeCallback = (_data: window.AvoidAreaOptions) => {
+        this.syncAvoidAreasFromMainWindow();
+      };
+      this.syncAvoidAreasFromMainWindow();
+      this.mainWindow.on('avoidAreaChange', this.avoidAreaChangeCallback);
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
@@ -1244,6 +1262,7 @@ struct PDFView {
         width: rect.width,
         height: rect.height
       });
+      this.syncAvoidAreasFromMainWindow();
       this.syncPanelOverlays();
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口大小出错: ${error}.`);
@@ -1313,6 +1332,14 @@ struct PDFView {
       }
     }
 
+    if (this.avoidAreaChangeCallback) {
+      try {
+        this.mainWindow.off('avoidAreaChange', this.avoidAreaChangeCallback);
+      } catch (_e) { /* ignore */
+      }
+      this.avoidAreaChangeCallback = undefined;
+    }
+
     // 清除透明度定时器
     if (this.transparencyTimeoutId) {
       clearTimeout(this.transparencyTimeoutId);
@@ -1369,6 +1396,23 @@ struct PDFView {
 
   immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
     sharableTarget.share(this.makeSharedData());
+  }
+
+  /** 从主窗口同步状态栏与导航指示条避让高度（px）；用于节拍器迷你浮标，根布局不再整体 padding */
+  private syncAvoidAreasFromMainWindow(): void {
+    try {
+      const systemArea = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      const navArea = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      const nextTop = systemArea.topRect.height;
+      const nextBottom = navArea.bottomRect.height;
+      const changed = nextTop !== this.avoidAreaTopPx || nextBottom !== this.avoidAreaBottomPx;
+      this.avoidAreaTopPx = nextTop;
+      this.avoidAreaBottomPx = nextBottom;
+      if (changed) {
+        this.syncPanelOverlays();
+      }
+    } catch (_e) {
+    }
   }
 
   immersiveListening() {
