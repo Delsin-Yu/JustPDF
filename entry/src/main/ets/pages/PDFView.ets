@@ -1899,7 +1899,7 @@ struct PDFView {
       return;
     }
 
-    if (isSingleFingerTouch) {
+    if (isSingleFingerTouch && this.viewerViewModel.annotateMode === 'drag') {
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
       if (event.type == TouchType.Down) {
         this.lastTouchPoint = touchPoint;
