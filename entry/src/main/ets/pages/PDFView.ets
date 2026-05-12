@@ -40,6 +40,8 @@ const LONG_PRESS_DELAY_MS: number = 100;
 const LONG_PRESS_DURATION_MS: number = 500;
 const LONG_PRESS_MOVE_THRESHOLD: number = 10;
 const LONG_PRESS_TICK_INTERVAL: number = 16;
+// 屏侧翻页：平移超过该阈值（像素，与触摸坐标一致）则视为拖动手势，忽略随后触发的翻页按钮点击
+const PAGE_FLIP_SUPPRESS_MOVE_PX: number = 12;
 
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
@@ -413,11 +415,17 @@ struct PDFView {
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
   freeWindowModeCallback: ((isInFreeWindowMode: boolean) => void) | undefined = undefined;
   lastTouchPoint: Vector2 | undefined = undefined;
+  /** 当前单指拖动手势起点，用于判断屏侧翻页是否应被平移取消 */
+  panSessionStartPoint: Vector2 | undefined = undefined;
+  /** 在侧栏透明按钮上抬起时，若发生过平移/捏合/滚轮缩放则置为 true，以忽略误触的翻页 */
+  suppressSidePageFlipFromGesture: boolean = false;
   lastPinchDistance: number | undefined = undefined;
   lastPinchCenter: Vector2 | undefined = undefined;
   lastDualFingerEndTime: number = 0;
   isDualFingerActive: boolean = false;
   lastMousePoint: Vector2 | undefined = undefined;
+  /** 拖动模式下鼠标左/右键按下时的位置，用于屏侧翻页与平移的区分 */
+  mousePanSessionStart: Vector2 | undefined = undefined;
   activeMouseButton: number = 0; // 当前是否有双指手势激活
   settings: RenderingContextSettings = new RenderingContextSettings(true);
   // 绘制/注释状态
@@ -1620,6 +1628,23 @@ struct PDFView {
     this.gotoPage(this.viewerViewModel.navigateToNextPage());
   }
 
+  /** 屏侧透明翻页区：若当前手势为平移/捏合/滚轮缩放则消费一次点击而不翻页 */
+  navigatePrevPageFromSideFlipZone(): void {
+    if (this.suppressSidePageFlipFromGesture) {
+      this.suppressSidePageFlipFromGesture = false;
+      return;
+    }
+    this.navigatePrevPage();
+  }
+
+  navigateNextPageFromSideFlipZone(): void {
+    if (this.suppressSidePageFlipFromGesture) {
+      this.suppressSidePageFlipFromGesture = false;
+      return;
+    }
+    this.navigateNextPage();
+  }
+
   async refreshDisplayedPages(): Promise<void> {
     for (let i = 0; i < this.viewerViewModel.displayedPageIndices.length; i++) {
       const pageIndex = this.viewerViewModel.displayedPageIndices[i];
@@ -1830,10 +1855,19 @@ struct PDFView {
       const touchPoint = Vec2(event.touches[0].x, event.touches[0].y);
       if (event.type == TouchType.Down) {
         this.lastTouchPoint = touchPoint;
+        this.panSessionStartPoint = touchPoint;
+        this.suppressSidePageFlipFromGesture = false;
         if (!this.viewerViewModel.isAnnotatePaletteVisible) {
           this.startLongPressDetection(touchPoint.x, touchPoint.y);
         }
       } else if (event.type == TouchType.Move) {
+        if (this.panSessionStartPoint !== undefined) {
+          const sx = touchPoint.x - this.panSessionStartPoint.x;
+          const sy = touchPoint.y - this.panSessionStartPoint.y;
+          if (sx * sx + sy * sy > PAGE_FLIP_SUPPRESS_MOVE_PX * PAGE_FLIP_SUPPRESS_MOVE_PX) {
+            this.suppressSidePageFlipFromGesture = true;
+          }
+        }
         if (this.longPressTouchDown && this.lastTouchPoint !== undefined) {
           const dx = touchPoint.x - this.longPressPosX;
           const dy = touchPoint.y - this.longPressPosY;
@@ -1852,9 +1886,12 @@ struct PDFView {
       } else if (event.type == TouchType.Up) {
         this.cancelLongPress();
         this.lastTouchPoint = undefined;
+        this.panSessionStartPoint = undefined;
       }
     } else if (isDualTouch) {
       this.cancelLongPress();
+      this.suppressSidePageFlipFromGesture = true;
+      this.panSessionStartPoint = undefined;
       // 捏合放大处理 - 始终启用，不受注释模式影响
       // 标记双指手势激活，防止在绘制/擦除模式下意外创建笔画
       this.isDualFingerActive = true;
@@ -1909,6 +1946,7 @@ struct PDFView {
     } else {
       // 重置所有触摸跟踪
       this.lastTouchPoint = undefined;
+      this.panSessionStartPoint = undefined;
       this.lastPinchDistance = undefined;
       this.lastPinchCenter = undefined;
       // 如果双指手势之前处于激活状态，记录结束时间
@@ -1935,6 +1973,10 @@ struct PDFView {
       } else if (isRightButton) {
         this.activeMouseButton = 2;
       }
+      if (this.viewerViewModel.annotateMode === 'drag' && (isLeftButton || isRightButton)) {
+        this.mousePanSessionStart = mousePoint;
+        this.suppressSidePageFlipFromGesture = false;
+      }
     } else if (event.action === MouseAction.Move) {
       if (this.lastMousePoint !== undefined && this.activeMouseButton !== 0) {
         const delta = Vec2(
@@ -1944,6 +1986,13 @@ struct PDFView {
 
         if (this.viewerViewModel.annotateMode === 'drag') {
           if (this.activeMouseButton === 1 || this.activeMouseButton === 2) {
+            if (this.mousePanSessionStart !== undefined) {
+              const sx = mousePoint.x - this.mousePanSessionStart.x;
+              const sy = mousePoint.y - this.mousePanSessionStart.y;
+              if (sx * sx + sy * sy > PAGE_FLIP_SUPPRESS_MOVE_PX * PAGE_FLIP_SUPPRESS_MOVE_PX) {
+                this.suppressSidePageFlipFromGesture = true;
+              }
+            }
             this.viewerViewModel.panBy(delta, this.getUIContext());
           }
         } else {
@@ -1957,6 +2006,7 @@ struct PDFView {
     } else if (event.action === MouseAction.Release) {
       this.lastMousePoint = undefined;
       this.activeMouseButton = 0;
+      this.mousePanSessionStart = undefined;
     }
   }
 
@@ -2009,6 +2059,7 @@ struct PDFView {
     if (scrollAmount != undefined && scrollAmount != 0) {
       const mousePoint = Vec2(event.x, event.y);
       const zoomFactor = scrollAmount > 0 ? 1.1 : 0.9;
+      this.suppressSidePageFlipFromGesture = true;
       this.viewerViewModel.zoomAround(mousePoint, zoomFactor, Vec2(0, 0), this.getUIContext());
 
       this.checkAndUpdateRenderScale();
@@ -2292,7 +2343,7 @@ struct PDFView {
 
         Button(PageFlipButtonOption)
           .size(PageFlipButtonSize)
-          .onClick(() => this.navigatePrevPage())
+          .onClick(() => this.navigatePrevPageFromSideFlipZone())
           .alignRules(TopLeft)
           .backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
@@ -2300,7 +2351,7 @@ struct PDFView {
 
         Button(PageFlipButtonOption)
           .size(PageFlipButtonSize)
-          .onClick(() => this.navigateNextPage())
+          .onClick(() => this.navigateNextPageFromSideFlipZone())
           .alignRules(TopRight)
           .backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
