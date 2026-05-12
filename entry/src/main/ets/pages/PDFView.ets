@@ -2520,3 +2520,4 @@ struct PDFView {
     .height('100%')
   }
 }
+}
