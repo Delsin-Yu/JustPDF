@@ -1,5 +1,12 @@
 import { SymbolGlyphModifier } from '@kit.ArkUI';
-import { ButtonColor, ButtonColorSemiTransparent } from '../../components/UIComponents';
+import {
+  ButtonColorSemiTransparent,
+  DropdownMenuBackgroundColor,
+  DropdownMenuPrimaryBlurStyle,
+  DropdownMenuSubmenuBackgroundColor,
+  DropdownMenuSubmenuBlurStyle,
+  dropdownMenuBindMenuOptions
+} from '../../components/UIComponents';
 
 @ComponentV2
 export struct PDFViewerActionMenu {
@@ -60,7 +67,8 @@ export struct PDFViewerActionMenu {
     Menu() {
       this.buildLeafMenuItems(items)
     }
-      .backgroundColor(ButtonColor)
+      .backgroundColor(DropdownMenuSubmenuBackgroundColor)
+      .backgroundBlurStyle(DropdownMenuSubmenuBlurStyle)
   }
 
   @Builder
@@ -104,6 +112,12 @@ export struct PDFViewerActionMenu {
           symbolStartIcon: this.tunerIcon
         })
           .onClick(() => this.onToggleTuner())
+
+        MenuItem({
+          content: '批注',
+          symbolStartIcon: this.annotateIcon
+        })
+          .onClick(() => this.onAnnotate())
       }
 
       MenuItemGroup() {
@@ -129,18 +143,14 @@ export struct PDFViewerActionMenu {
         })
 
         MenuItem({
-          content: '批注',
-          symbolStartIcon: this.annotateIcon
-        })
-          .onClick(() => this.onAnnotate())
-
-        MenuItem({
-          content: '保存批注',
+          content: '保存文档',
           symbolStartIcon: this.saveIcon
         })
           .onClick(() => this.onSaveAnnotation())
       }
     }
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
     .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND)
   }
 
@@ -158,11 +168,7 @@ export struct PDFViewerActionMenu {
         .hitTestBehavior(HitTestMode.Block)
         .monopolizeEvents(true)
         .backgroundColor(ButtonColorSemiTransparent)
-        .bindMenu(this.buildActionMenu, {
-          backgroundColor: ButtonColor,
-          outlineColor: Color.Transparent,
-          placement: Placement.Top
-        })
+        .bindMenu(this.buildActionMenu, dropdownMenuBindMenuOptions(Placement.Top))
     }
     .alignItems(HorizontalAlign.Start)
   }

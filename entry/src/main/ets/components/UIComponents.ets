@@ -14,6 +14,32 @@ const ButtonColorHighlight: ResourceColor = 'rgba(160, 160, 160, 0.9)';
 
 export const ButtonColorSemiTransparent: ResourceColor = 'rgba(50, 50, 50, 0.2)';
 
+/**
+ * 一级下拉菜单背色：半透明深色。
+ * bindMenu 默认 backgroundBlurStyle 为 COMPONENT_ULTRA_THICK，过重；此处配合轻薄模糊
+ * DropdownMenuPrimaryBlurStyle，避免发闷又保留轻微毛玻璃。（见 ts-universal-attributes-menu.md）
+ */
+export const DropdownMenuBackgroundColor: ResourceColor = 'rgba(12, 12, 14, 0.58)';
+
+/** 侧滑展开的二级子菜单：更不透明，减轻「过透」 */
+export const DropdownMenuSubmenuBackgroundColor: ResourceColor = 'rgba(16, 17, 22, 0.86)';
+
+/** 一级菜单 / 普通弹出 Menu：轻薄组件模糊 */
+export const DropdownMenuPrimaryBlurStyle: BlurStyle = BlurStyle.COMPONENT_ULTRA_THIN;
+
+/** 二级子菜单：略高一档模糊，与更不透明底色搭配 */
+export const DropdownMenuSubmenuBlurStyle: BlurStyle = BlurStyle.COMPONENT_THIN;
+
+/** bindMenu 的 MenuOptions：半透明背板 + 轻薄模糊（非 NONE、非默认 ULTRA_THICK） */
+export function dropdownMenuBindMenuOptions(placement: Placement): MenuOptions {
+  return {
+    backgroundColor: DropdownMenuBackgroundColor,
+    backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+    outlineColor: Color.Transparent,
+    placement: placement
+  };
+}
+
 const BaseColor: ResourceColor = `rgba(0, 0, 0, 1)`;
 const TrackColor: ResourceColor = 'rgba(0, 0, 0, 0.2)';
 const ScrollBarWidth: Length = '40vp';
@@ -169,11 +195,7 @@ export struct StyleButton {
     .hitTestBehavior(HitTestMode.Block)
     .monopolizeEvents(true)
     .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
-    .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
-      backgroundColor: ButtonColor,
-      outlineColor: Color.Transparent,
-      placement: this.menuPlacement
-    })
+    .bindMenu(this.menuElement == undefined ? [] : this.menuElement, dropdownMenuBindMenuOptions(this.menuPlacement))
     .onClick(() => this.onClickCallback())
   }
 }
@@ -209,11 +231,7 @@ export struct StyleIconButton {
     .monopolizeEvents(true)
     .backgroundColor(this.alternateColor != undefined ? this.alternateColor : ButtonColor)
     .animation({ duration: this.backgroundAnimationDurationMs, curve: Curve.EaseOut })
-    .bindMenu(this.menuElement == undefined ? [] : this.menuElement, {
-      backgroundColor: ButtonColor,
-      outlineColor: Color.Transparent,
-      placement: this.menuPlacement
-    })
+    .bindMenu(this.menuElement == undefined ? [] : this.menuElement, dropdownMenuBindMenuOptions(this.menuPlacement))
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.onTouchDownCallback();

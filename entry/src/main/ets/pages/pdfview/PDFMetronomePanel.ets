@@ -1,6 +1,6 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ButtonColor, ContainerPadding, StyleIconButton, toVisibility } from '../../components/UIComponents';
+import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, StyleIconButton, toVisibility } from '../../components/UIComponents';
 import { PDFMetronomeController } from './PDFMetronomeController';
 import { SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
 
@@ -324,7 +324,8 @@ export struct PDFMetronomePanelContent {
           });
       }, (_item: MenuElement, index: number) => `metronome-popup-item-${index}`);
     }
-    .backgroundColor(ButtonColor)
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
   }
 
   build() {
@@ -535,6 +536,8 @@ export struct PDFMetronomePanelContent {
                       });
                     },
                     placement: Placement.BottomRight,
+                    backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+                    popupColor: Color.Transparent,
                     autoCancel: true,
                     showInSubWindow: false,
                     followTransformOfTarget: true,
@@ -573,6 +576,8 @@ export struct PDFMetronomePanelContent {
                     });
                   },
                   placement: Placement.BottomRight,
+                  backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+                  popupColor: Color.Transparent,
                   autoCancel: true,
                   showInSubWindow: false,
                   followTransformOfTarget: true,

@@ -1,5 +1,5 @@
 import { ScrollSpinBox } from "../../components/ScrollSpinBox";
-import { ButtonColor, ContainerPadding, getCheckIcon, toVisibility } from "../../components/UIComponents";
+import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, getCheckIcon, toVisibility } from "../../components/UIComponents";
 import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import {
@@ -409,7 +409,8 @@ export struct PDFTunerPanelContent {
         }, (option: TunerNoteNamingModeOption) => `mode-naming-${option.mode}`);
       }
     }
-    .backgroundColor(ButtonColor)
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
   }
 
   @Builder
@@ -417,7 +418,8 @@ export struct PDFTunerPanelContent {
     Menu() {
       this.buildLeafMenu(this.getReferencePresetMenu(), () => this.hideReferencePresetPopup());
     }
-    .backgroundColor(ButtonColor)
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
   }
 
   @Builder
@@ -425,7 +427,8 @@ export struct PDFTunerPanelContent {
     Menu() {
       this.buildLeafMenu(this.getTransposePresetMenu(), () => this.hideTransposePresetPopup());
     }
-    .backgroundColor(ButtonColor)
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
   }
 
   @Builder
@@ -442,7 +445,8 @@ export struct PDFTunerPanelContent {
           });
       }, (option: TunerFilterPresetOption) => `filter-preset-${option.id}`);
     }
-    .backgroundColor(ButtonColor)
+    .backgroundColor(DropdownMenuBackgroundColor)
+    .backgroundBlurStyle(DropdownMenuPrimaryBlurStyle)
   }
 
   private hideReferencePresetPopup(): void {
@@ -815,6 +819,8 @@ export struct PDFTunerPanelContent {
             .bindPopup(this.showReferencePresetPopup, {
               builder: this.buildReferencePresetPopup,
               placement: Placement.BottomRight,
+              backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+              popupColor: Color.Transparent,
               autoCancel: true,
               showInSubWindow: false,
               followTransformOfTarget: true,
@@ -838,6 +844,8 @@ export struct PDFTunerPanelContent {
               .bindPopup(this.showTransposePresetPopup, {
                 builder: this.buildTransposePresetPopup,
                 placement: Placement.BottomRight,
+                backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+                popupColor: Color.Transparent,
                 autoCancel: true,
                 showInSubWindow: false,
                 followTransformOfTarget: true,
@@ -858,6 +866,8 @@ export struct PDFTunerPanelContent {
               .bindPopup(this.showModePopup, {
                 builder: this.buildFlatModeMenu,
                 placement: Placement.BottomRight,
+                backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+                popupColor: Color.Transparent,
                 autoCancel: true,
                 showInSubWindow: false,
                 followTransformOfTarget: true,
@@ -902,6 +912,8 @@ export struct PDFTunerPanelContent {
                   .bindPopup(this.showFilterPresetPopup, {
                     builder: this.buildFilterPresetPopup,
                     placement: Placement.BottomRight,
+                    backgroundBlurStyle: DropdownMenuPrimaryBlurStyle,
+                    popupColor: Color.Transparent,
                     autoCancel: true,
                     showInSubWindow: false,
                     followTransformOfTarget: true,
