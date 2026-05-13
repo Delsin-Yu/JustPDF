@@ -8,7 +8,19 @@ export const ViewerMinRenderScale: number = 4;
 const ViewerScaleThresholds: number[] = [2.0];
 
 export type PDFPageDisplayMode = 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
-export type PDFPageFlipMode = 'side' | 'button' | 'extern';
+export type PDFPageFlipMode = 'side' | 'button' | 'extern' | 'horizontalSlide';
+
+/** 与 clampViewPan 一致的视口与内容边界（单位 vp，与 viewPan 一致） */
+export interface PanClampBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  relaxX: number;
+  relaxY: number;
+  scaledViewSizeVp: Vector2;
+  viewportSizeVp: Vector2;
+}
 export type PDFAnnotateMode = 'drag' | 'draw' | 'erase';
 
 // 批注浮窗记住的「绘制 / 擦除」工具（不含 drag）。
@@ -25,7 +37,7 @@ export class PDFViewerViewModel {
   @Trace public currentPageIndex: number = 0;
   @Trace public totalPageCount: number = 0;
   @Trace public pageDisplayMode: PDFPageDisplayMode = 'single';
-  @Trace public pageFlipMode: PDFPageFlipMode = 'side';
+  @Trace public pageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   @Trace public annotateMode: PDFAnnotateMode = 'drag';
   @Trace public paletteToolMode: PalettePersistedTool = 'draw';
   @Trace public viewPan: Vector2 = Vec2(0, 0);
@@ -37,8 +49,13 @@ export class PDFViewerViewModel {
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
   @Trace public isAnnotatePaletteVisible: boolean = false;
-  private savedPageFlipMode: PDFPageFlipMode = 'side';
+  private savedPageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
+  /**
+   * 横向滑动已提交、目标页尚未完成 load 时，作为 peek / navigate 的「逻辑当前首页」，
+   * 避免连滑第二次仍从旧 currentPageIndex 计算到同一套。
+   */
+  private slideNavEffectiveStartIndex: number | undefined = undefined;
 
   constructor(minScale: number = 0.5, maxScale: number = 9.0) {
     this.minScale = minScale;
@@ -51,7 +68,12 @@ export class PDFViewerViewModel {
       this.showControls = preferencesValue.getSync('showControls', true) as boolean;
       this.showSlider = preferencesValue.getSync('showSlider', true) as boolean;
       this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
-      this.pageFlipMode = preferencesValue.getSync('pageFlipMode', 'side') as PDFPageFlipMode;
+      const flipRaw: string = preferencesValue.getSync('pageFlipMode', 'horizontalSlide') as string;
+      if (flipRaw === 'side' || flipRaw === 'button' || flipRaw === 'extern' || flipRaw === 'horizontalSlide') {
+        this.pageFlipMode = flipRaw as PDFPageFlipMode;
+      } else {
+        this.pageFlipMode = 'horizontalSlide';
+      }
       this.annotateMode = 'drag';
       let tool: PalettePersistedTool = 'draw';
       if (preferencesValue.hasSync(PaletteToolModePreferenceKey)) {
@@ -107,6 +129,8 @@ export class PDFViewerViewModel {
         return '按钮翻页';
       case 'extern':
         return '外设翻页';
+      case 'horizontalSlide':
+        return '横向滑动';
     }
   }
 
@@ -138,6 +162,21 @@ export class PDFViewerViewModel {
     return Math.max(0, this.totalPageCount - 1);
   }
 
+  /** 横向滑动提交瞬间设置，goto 完成或普通导航时清除 */
+  setSlideNavEffectiveStartIndex(index: number): void {
+    this.slideNavEffectiveStartIndex = index;
+  }
+
+  clearSlideNavEffectiveStartIndex(): void {
+    this.slideNavEffectiveStartIndex = undefined;
+  }
+
+  private getSlideNavBaseIndex(): number {
+    return this.slideNavEffectiveStartIndex !== undefined
+      ? this.slideNavEffectiveStartIndex
+      : this.currentPageIndex;
+  }
+
   commitPageTarget(targetIndex: number): number[] {
     if (this.totalPageCount <= 0) {
       this.currentPageIndex = 0;
@@ -150,29 +189,40 @@ export class PDFViewerViewModel {
     return this.displayedPageIndices;
   }
 
+  /** 在未 commit 前解析某「首页」索引对应的各槽页面索引（与 commitPageTarget 后一致），供先 load 再提交导航 */
+  getDisplayedIndicesForTargetPage(targetPageIndex: number): number[] {
+    if (this.totalPageCount <= 0) {
+      return [];
+    }
+    const c = Math.max(0, Math.min(targetPageIndex, this.totalPageCount - 1));
+    return this.calculateDisplayIndices(c);
+  }
+
   navigateToPreviousPage(): number {
+    const base = this.getSlideNavBaseIndex();
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
       this.pageDisplayMode === 'triContinuous') {
-      return this.currentPageIndex - 1;
+      return base - 1;
     }
     if (this.pageDisplayMode === 'dual') {
-      const currentPair = Math.floor(this.currentPageIndex / 2);
+      const currentPair = Math.floor(base / 2);
       return Math.max(0, (currentPair - 1) * 2);
     }
-    const currentGroup = Math.floor(this.currentPageIndex / 3);
+    const currentGroup = Math.floor(base / 3);
     return Math.max(0, (currentGroup - 1) * 3);
   }
 
   navigateToNextPage(): number {
+    const base = this.getSlideNavBaseIndex();
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
       this.pageDisplayMode === 'triContinuous') {
-      return Math.min(this.currentPageIndex + 1, this.getLastNavigableIndex());
+      return Math.min(base + 1, this.getLastNavigableIndex());
     }
     if (this.pageDisplayMode === 'dual') {
-      const currentPair = Math.floor(this.currentPageIndex / 2);
+      const currentPair = Math.floor(base / 2);
       return (currentPair + 1) * 2;
     }
-    const currentGroup = Math.floor(this.currentPageIndex / 3);
+    const currentGroup = Math.floor(base / 3);
     return (currentGroup + 1) * 3;
   }
 
@@ -207,7 +257,7 @@ export class PDFViewerViewModel {
     this.savedPageFlipMode = this.pageFlipMode;
     this.setAnnotateMode(resolvedTool);
     this.isAnnotatePaletteVisible = true;
-    if (this.pageFlipMode === 'side') {
+    if (this.pageFlipMode === 'side' || this.pageFlipMode === 'horizontalSlide') {
       this.setPageFlipMode('button');
     }
   }
@@ -272,7 +322,8 @@ export class PDFViewerViewModel {
     return Math.max(this.minScale, Math.min(this.maxScale, Math.min(scaleX, scaleY)));
   }
 
-  clampViewPan(uiContext: UIContext): void {
+  /** 与 clampViewPan 使用同一套公式，供横向滑动翻页判断左右边界 */
+  getPanClampBounds(uiContext: UIContext): PanClampBounds {
     const viewSizeVp = pxToVp(this.viewSize, uiContext);
     const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
     const scaledViewSizeVp = mul(viewSizeVp, this.viewScale);
@@ -280,30 +331,79 @@ export class PDFViewerViewModel {
     const relaxX = viewportSizeVp.x * boundaryRelaxation;
     const relaxY = viewportSizeVp.y * boundaryRelaxation;
 
-    let clampedX = this.viewPan.x;
-    let clampedY = this.viewPan.y;
-
+    let minX: number;
+    let maxX: number;
     if (scaledViewSizeVp.x <= viewportSizeVp.x) {
-      clampedX = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
+      const centered = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
+      minX = centered;
+      maxX = centered;
     } else {
-      const minX = -(scaledViewSizeVp.x - viewportSizeVp.x) - relaxX;
-      const maxX = relaxX;
-      clampedX = Math.max(minX, Math.min(maxX, this.viewPan.x));
+      minX = -(scaledViewSizeVp.x - viewportSizeVp.x) - relaxX;
+      maxX = relaxX;
     }
 
+    let minY: number;
+    let maxY: number;
     if (scaledViewSizeVp.y <= viewportSizeVp.y) {
-      clampedY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
+      const centeredY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
+      minY = centeredY;
+      maxY = centeredY;
     } else {
-      const minY = -(scaledViewSizeVp.y - viewportSizeVp.y) - relaxY;
-      const maxY = relaxY;
-      clampedY = Math.max(minY, Math.min(maxY, this.viewPan.y));
+      minY = -(scaledViewSizeVp.y - viewportSizeVp.y) - relaxY;
+      maxY = relaxY;
     }
 
+    return {
+      minX,
+      maxX,
+      minY,
+      maxY,
+      relaxX,
+      relaxY,
+      scaledViewSizeVp,
+      viewportSizeVp
+    };
+  }
+
+  /** 横向可滚动且已贴右端（可向左拖出下一页预览） */
+  isAtHorizontalScrollRightEnd(uiContext: UIContext, epsilonVp: number = 2): boolean {
+    const b = this.getPanClampBounds(uiContext);
+    if (b.scaledViewSizeVp.x <= b.viewportSizeVp.x) {
+      return false;
+    }
+    return this.viewPan.x <= b.minX + b.relaxX * 0.35 + epsilonVp;
+  }
+
+  /** 横向可滚动且已贴左端（可向右拖出上一页预览） */
+  isAtHorizontalScrollLeftEnd(uiContext: UIContext, epsilonVp: number = 2): boolean {
+    const b = this.getPanClampBounds(uiContext);
+    if (b.scaledViewSizeVp.x <= b.viewportSizeVp.x) {
+      return false;
+    }
+    return this.viewPan.x >= b.maxX - b.relaxX * 0.35 - epsilonVp;
+  }
+
+  /** 内容宽于视口时需横向平移才能看全 */
+  canPanHorizontally(uiContext: UIContext): boolean {
+    const b = this.getPanClampBounds(uiContext);
+    return b.scaledViewSizeVp.x > b.viewportSizeVp.x;
+  }
+
+  clampViewPan(uiContext: UIContext): void {
+    const b = this.getPanClampBounds(uiContext);
+    const clampedX = Math.max(b.minX, Math.min(b.maxX, this.viewPan.x));
+    const clampedY = Math.max(b.minY, Math.min(b.maxY, this.viewPan.y));
     this.viewPan = Vec2(clampedX, clampedY);
   }
 
   panBy(delta: Vector2, uiContext: UIContext): void {
     this.viewPan = Vec2(this.viewPan.x + delta.x, this.viewPan.y + delta.y);
+    this.clampViewPan(uiContext);
+  }
+
+  /** 使用 vp 增量平移（用于横向滑动翻页时与 pageTurnOffsetVp 单位一致） */
+  panByDeltaVp(deltaVp: Vector2, uiContext: UIContext): void {
+    this.viewPan = Vec2(this.viewPan.x + deltaVp.x, this.viewPan.y + deltaVp.y);
     this.clampViewPan(uiContext);
   }
 
@@ -372,6 +472,11 @@ export class PDFViewerViewModel {
   buildPageFlipModeMenu(): MenuElement[] {
     return [
       {
+        value: '横向滑动',
+        action: () => this.setPageFlipMode('horizontalSlide'),
+        symbolIcon: getCheckIcon(this.pageFlipMode == 'horizontalSlide')
+      },
+      {
         value: '屏侧翻页',
         action: () => this.setPageFlipMode('side'),
         symbolIcon: getCheckIcon(this.pageFlipMode == 'side')
@@ -404,6 +509,52 @@ export class PDFViewerViewModel {
         action: () => onGotoPage(this.getLastNavigableIndex())
       }
     ];
+  }
+
+  /** 横向滑动预览：下一页（跨页）索引；若无下一套则返回空数组 */
+  peekNextSetIndices(): number[] {
+    if (this.totalPageCount <= 0) {
+      return [];
+    }
+    const baseDisplayed: number[] = this.slideNavEffectiveStartIndex !== undefined
+      ? this.calculateDisplayIndices(this.slideNavEffectiveStartIndex)
+      : this.displayedPageIndices;
+    const raw = this.navigateToNextPage();
+    const t = Math.max(0, Math.min(raw, this.totalPageCount - 1));
+    const nextSet = this.calculateDisplayIndices(t);
+    if (PDFViewerViewModel.pageSetsEqual(nextSet, baseDisplayed)) {
+      return [];
+    }
+    return nextSet;
+  }
+
+  /** 横向滑动预览：上一套页面索引；若无上一套则返回空数组 */
+  peekPrevSetIndices(): number[] {
+    if (this.totalPageCount <= 0) {
+      return [];
+    }
+    const baseDisplayed: number[] = this.slideNavEffectiveStartIndex !== undefined
+      ? this.calculateDisplayIndices(this.slideNavEffectiveStartIndex)
+      : this.displayedPageIndices;
+    const raw = this.navigateToPreviousPage();
+    const t = Math.max(0, raw);
+    const prevSet = this.calculateDisplayIndices(t);
+    if (PDFViewerViewModel.pageSetsEqual(prevSet, baseDisplayed)) {
+      return [];
+    }
+    return prevSet;
+  }
+
+  private static pageSetsEqual(a: number[], b: number[]): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private calculateDisplayIndices(targetIndex: number): number[] {
