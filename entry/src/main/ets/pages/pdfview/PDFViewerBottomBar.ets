@@ -8,7 +8,7 @@ import {
 @ComponentV2
 export struct PDFViewerBottomBar {
   @Param showControls: boolean = true;
-  @Param pageFlipMode: 'side' | 'button' | 'extern' = 'side';
+  @Param pageFlipMode: 'side' | 'button' | 'extern' | 'horizontalSlide' = 'horizontalSlide';
   @Param annotateMode: 'drag' | 'draw' | 'erase' = 'drag';
   @Param currentPageIndex: number = 0;
   @Param totalPageCount: number = 0;
@@ -38,7 +38,9 @@ export struct PDFViewerBottomBar {
         alternateColor: ButtonColorSemiTransparent,
         onClickCallback: () => this.onPrevPage()
       })
-        .visibility(toVisibility(this.pageFlipMode == 'button' || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')))
+        .visibility(toVisibility(this.pageFlipMode == 'button'
+          || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')
+          || (this.pageFlipMode == 'horizontalSlide' && this.annotateMode != 'drag')))
       Text(this.formatPageFraction())
         .height(44)
         .padding({ left: 16, right: 16 })
@@ -58,7 +60,9 @@ export struct PDFViewerBottomBar {
         alternateColor: ButtonColorSemiTransparent,
         onClickCallback: () => this.onNextPage()
       })
-        .visibility(toVisibility(this.pageFlipMode == 'button' || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')))
+        .visibility(toVisibility(this.pageFlipMode == 'button'
+          || (this.pageFlipMode == 'side' && this.annotateMode != 'drag')
+          || (this.pageFlipMode == 'horizontalSlide' && this.annotateMode != 'drag')))
     }
   }
 }
