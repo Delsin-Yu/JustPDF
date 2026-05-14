@@ -2557,6 +2557,13 @@ struct PDFView {
     const clampedTarget = Math.max(0, Math.min(targetIndex, Math.max(0, this.viewerViewModel.totalPageCount - 1)));
     const indicesToLoad = this.viewerViewModel.getDisplayedIndicesForTargetPage(clampedTarget);
 
+    // 取消上一次导航结束时安排的预取，否则 300ms 后仍以「旧中心」淘汰远页，
+    // 会取消当前正在 load 的目标页 taskpool 任务（日志: task has been canceled），导致停在某页永不 commit。
+    if (this.prefetchDebounceId !== undefined) {
+      clearTimeout(this.prefetchDebounceId);
+      this.prefetchDebounceId = undefined;
+    }
+
     if (!deferSlideVisualReset) {
       this.viewerViewModel.clearSlideNavEffectiveStartIndex();
       this.resetHorizontalSlidePreview();
