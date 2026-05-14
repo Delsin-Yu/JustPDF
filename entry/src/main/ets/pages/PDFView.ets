@@ -7,7 +7,7 @@ import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
-import { common } from '@kit.AbilityKit';
+import { AbilityConstant, common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
@@ -1302,6 +1302,7 @@ struct PDFView {
     this.immersiveListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
+    context.eventHub.on('memoryPressure', this.onMemoryPressure);
 
     // 翻页遮罩：切到屏侧翻页时先显示渐变遮罩再渐出
     this.viewerViewModel.onPageFlipModeChanged = (mode: PDFPageFlipMode) => {
@@ -1387,6 +1388,7 @@ struct PDFView {
     this.immersiveDisablingListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
+    context.eventHub.off('memoryPressure', this.onMemoryPressure);
 
     // 取消注册窗口状态监听
     if (this.windowStatusCallback) {
@@ -1461,6 +1463,21 @@ struct PDFView {
     this.metronomeController.stopPlayback();
     this.immersiveDisablingListening();
   }
+
+  /** 系统内存压力：在微任务中释放光栅，避免阻塞 Ability 回调主线程 */
+  onMemoryPressure = (level: AbilityConstant.MemoryLevel): void => {
+    setTimeout((): void => {
+      try {
+        this.pageDataSource.applyMemoryPressure(
+          level,
+          this.viewerViewModel.displayedPageIndices,
+          this.viewerViewModel.currentPageIndex
+        );
+      } catch (e) {
+        hilog.error(0, 'PDFView', `applyMemoryPressure 失败: ${e}`);
+      }
+    }, 0);
+  };
 
   makeSharedData(): systemShare.SharedData {
     const shareData: systemShare.SharedData = new systemShare.SharedData({

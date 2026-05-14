@@ -196,7 +196,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   onMemoryLevel(level: AbilityConstant.MemoryLevel): void {
-    hilog.warn(0, 'PDFView', 'Ability onMemoryLevel, level: %{public}d', level);
+    try {
+      this.context.eventHub.emit('memoryPressure', level);
+    } catch (_e) {
+    }
   }
 
   restoreWindowState(): void {

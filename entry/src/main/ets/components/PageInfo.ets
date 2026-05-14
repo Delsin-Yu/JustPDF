@@ -1,4 +1,5 @@
 import { pdfService } from '@kit.PDFKit';
+import { AbilityConstant } from '@kit.AbilityKit';
 import { mul, pxToVp, Vec2, Vector2 } from '../components/Numbers';
 import { taskpool, util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -57,11 +58,19 @@ export interface History {
   pageIndex: number;
 }
 
+/** 光栅化「预览档」缩放，用于快速首帧；须小于 MIN_RENDER_SCALE */
+export const PREVIEW_RENDER_SCALE: number = 1;
+/** 与 PDF 页面坐标一致的布局倍率（页面框在 vp 中的尺度），与光栅 renderScale 无关 */
+export const DISPLAY_LAYOUT_SCALE: number = 2;
+/** 阅读器默认可用光栅档位下限（与 PDFViewerViewModel.ViewerMinRenderScale 对齐） */
+export const MIN_RENDER_SCALE: number = 4;
+
 export interface PageCache {
   pixelMap: PixelMap;
   renderScale: number;
   baseSize: Vector2; // 原始页面大小（无缩放）
-  displaySize: Vector2; // UI 显示大小（始终为 MIN_RENDER_SCALE）
+  /** 布局用页面框尺寸（与 DISPLAY_LAYOUT_SCALE 一致），与光栅 renderScale 无关 */
+  displaySize: Vector2;
 }
 
 @Concurrent
@@ -86,7 +95,7 @@ function cachePage(documentPath: string, documentIndex: number, renderScale: num
     matrix.rotate = 0;
     const pixelMap = page.getCustomPagePixelMap(matrix, false, true);
 
-    // 显示大小始终为 MIN_RENDER_SCALE (2)，以保持一致的 UI 缩放
+    // 布局倍率固定为 2，与模块常量 DISPLAY_LAYOUT_SCALE 一致（@Concurrent 内不可用模块级常量）
     const displaySize = mul(baseSize, 2);
 
     return {
@@ -108,8 +117,6 @@ export interface ReadonlyPageInfo {
   readonly pageThumbnail: image.PixelMap | undefined;
   retainThumbnail(preferredSize: Vector2): void;
 }
-
-export const MIN_RENDER_SCALE: number = 4;
 
 interface PendingCacheTask {
   task: taskpool.Task;
@@ -183,26 +190,43 @@ export class PageInfo implements ReadonlyPageInfo {
   /**
    * Ensures the page is cached at the specified render scale.
    * If already cached or caching is in progress, this is a no-op.
-   * @param sandboxPath Path to the PDF file
-   * @param renderScale The render scale to cache at
-   * @param priority Task priority (LOW for background, HIGH for immediate)
-   * @returns Promise that resolves when caching is complete, or undefined if already cached/pending
    */
   public ensureCached(
     renderScale: number,
     priority: taskpool.Priority
   ): Promise<PageCache> | undefined {
-    // Skip if already cached or has pending task
     if (this.caches.has(renderScale) || this.pendingTasks.has(renderScale)) {
       return undefined;
     }
+    return this.startNewCacheTask(renderScale, priority);
+  }
 
+  /**
+   * 若已有缓存或正在加载则返回对应 Promise；否则启动任务并返回其 Promise。
+   */
+  private resolveOrStartCacheTask(renderScale: number, priority: taskpool.Priority): Promise<PageCache> {
+    const cached = this.caches.get(renderScale);
+    if (cached !== undefined) {
+      return Promise.resolve(cached);
+    }
+    const pending = this.pendingTasks.get(renderScale);
+    if (pending !== undefined) {
+      return pending.promise;
+    }
+    return this.startNewCacheTask(renderScale, priority);
+  }
+
+  private startNewCacheTask(renderScale: number, priority: taskpool.Priority): Promise<PageCache> {
     const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale);
     const promise = taskpool.execute(task, priority)
       .then(result => {
         const pageCache = result as PageCache;
         this.caches.set(renderScale, pageCache as PageCache);
         this.pendingTasks.delete(renderScale);
+        if (renderScale === PREVIEW_RENDER_SCALE && this.associatedSource !== undefined &&
+          this.globalPageIndex !== undefined) {
+          this.associatedSource.notifyPreviewCacheFilled(this.globalPageIndex);
+        }
         return pageCache as PageCache;
       })
       .catch((error: Error) => {
@@ -222,19 +246,81 @@ export class PageInfo implements ReadonlyPageInfo {
     for (const pendingTask of this.pendingTasks.values()) {
       try {
         taskpool.cancel(pendingTask.task);
-      } catch (error) {
+      } catch (_error) {
         // Task may have already completed or been cancelled.
       }
     }
     this.pendingTasks.clear();
   }
 
+  private cancelPendingWhere(predicate: (scale: number) => boolean): void {
+    const scales: number[] = [];
+    for (const pair of this.pendingTasks.entries()) {
+      if (predicate(pair[0])) {
+        scales.push(pair[0]);
+      }
+    }
+    for (const scale of scales) {
+      const pendingTask = this.pendingTasks.get(scale);
+      if (pendingTask !== undefined) {
+        try {
+          taskpool.cancel(pendingTask.task);
+        } catch (_error) {
+        }
+        this.pendingTasks.delete(scale);
+      }
+    }
+  }
+
   /**
-   * Evicts all viewer caches, releasing PixelMaps and cancelling pending tasks.
-   * Used to free memory for pages that are far from the current view.
+   * 释放高于预览档的光栅缓存（保留 PREVIEW_RENDER_SCALE），并取消对应 pending。
    */
-  public evictViewerCache(): void {
-    // Release all cached PixelMaps
+  public evictHighResolutionCaches(): void {
+    const scalesToRemove: number[] = [];
+    for (const pair of this.caches.entries()) {
+      if (pair[0] > PREVIEW_RENDER_SCALE) {
+        scalesToRemove.push(pair[0]);
+      }
+    }
+    for (const scale of scalesToRemove) {
+      const cache = this.caches.get(scale);
+      if (cache !== undefined) {
+        try {
+          cache.pixelMap.release();
+        } catch (error) {
+          hilog.warn(0, 'PDFView', `释放 PixelMap 时出错: ${error}`);
+        }
+        this.caches.delete(scale);
+      }
+    }
+    this.cancelPendingWhere((s: number) => s > PREVIEW_RENDER_SCALE);
+  }
+
+  /** 仅移除预览档光栅（用于全局预算或内存回收） */
+  public evictPreviewRasterOnly(): void {
+    const cache = this.caches.get(PREVIEW_RENDER_SCALE);
+    if (cache !== undefined) {
+      try {
+        cache.pixelMap.release();
+      } catch (error) {
+        hilog.warn(0, 'PDFView', `释放预览 PixelMap 时出错: ${error}`);
+      }
+      this.caches.delete(PREVIEW_RENDER_SCALE);
+    }
+    this.cancelPendingWhere((s: number) => s === PREVIEW_RENDER_SCALE);
+  }
+
+  public hasPreviewRasterInCache(): boolean {
+    return this.caches.has(PREVIEW_RENDER_SCALE);
+  }
+
+  /**
+   * 释放全部阅读器光栅缓存与 pending（离开文档或内存危急）。
+   */
+  public evictAllViewerCaches(): void {
+    if (this.associatedSource !== undefined && this.globalPageIndex !== undefined) {
+      this.associatedSource.clearPreviewLruSlot(this.globalPageIndex);
+    }
     for (const cache of this.caches.values()) {
       try {
         cache.pixelMap.release();
@@ -243,9 +329,14 @@ export class PageInfo implements ReadonlyPageInfo {
       }
     }
     this.caches.clear();
-    
-    // Cancel pending cache tasks
     this.cancelPendingTasks();
+  }
+
+  /**
+   * @deprecated 语义同 evictAllViewerCaches，保留名称以兼容既有调用。
+   */
+  public evictViewerCache(): void {
+    this.evictAllViewerCaches();
   }
 
   /**
@@ -284,6 +375,27 @@ export class PageInfo implements ReadonlyPageInfo {
       }
       this.pageThumbnail = undefined;
     }
+  }
+
+  /**
+   * 取低于 targetScale 的已缓存档位中**质量最高**的一档，用于加载更高档时的占位。
+   * 避免同时存在预览与 4x 时误选最低档导致缩放瞬间画面变糊。
+   */
+  private getBestCachedScaleBelow(targetScale: number): PageCache | undefined {
+    let bestScale: number | undefined = undefined;
+    let bestCache: PageCache | undefined = undefined;
+    for (const pair of this.caches.entries()) {
+      const scale = pair[0];
+      const cache = pair[1];
+      if (scale >= targetScale) {
+        continue;
+      }
+      if (bestScale === undefined || scale > bestScale) {
+        bestScale = scale;
+        bestCache = cache;
+      }
+    }
+    return bestCache;
   }
 
   private getLowestRenderScaleCache(): PageCache | undefined {
@@ -325,6 +437,10 @@ export class PageInfo implements ReadonlyPageInfo {
 
     // Cancel pending cache tasks
     this.cancelPendingTasks();
+
+    if (this.associatedSource !== undefined && this.globalPageIndex !== undefined) {
+      this.associatedSource.clearPreviewLruSlot(this.globalPageIndex);
+    }
   }
 
   public setPagePath(pagePath: string): void {
@@ -464,56 +580,51 @@ export class PageInfo implements ReadonlyPageInfo {
     renderScale: number,
     onHighResReady?: (cache: PageCache) => void
   ): Promise<PageCache> {
-    // Check if already cached
+    if (this.associatedSource !== undefined && this.globalPageIndex !== undefined) {
+      this.associatedSource.notePageRasterAccess(this.globalPageIndex);
+    }
+
     const cached = this.caches.get(renderScale);
     if (cached !== undefined) {
       return cached;
     }
 
-    // Check if there's a pending task
-    const pendingTask = this.pendingTasks.get(renderScale);
-    if (pendingTask !== undefined) {
-      return await pendingTask.promise;
-    }
-
-    // Get fallback cache (lowest render scale available)
-    const fallbackCache = this.getLowestRenderScaleCache();
-
-    // Determine priority based on render scale
-    const priority = renderScale === MIN_RENDER_SCALE
-      ? taskpool.Priority.HIGH
-      : taskpool.Priority.MEDIUM;
-
-    // Create and execute the caching task
-    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale);
-    const promise = taskpool.execute(task, priority)
-      .then(result => {
-        let pageCache: PageCache = result as PageCache;
-        this.caches.set(renderScale, pageCache);
-        this.pendingTasks.delete(renderScale);
-        return pageCache;
-      })
-      .catch((error: Error) => {
-        this.pendingTasks.delete(renderScale);
-        hilog.error(0, 'PDFView', `在缩放 ${renderScale} 下缓存页面 ${this.localPageIndex} 失败: ${error.message}`);
-        throw error;
-      });
-
-    this.pendingTasks.set(renderScale, { task, promise });
-
-    // If we have a fallback cache, return it immediately while high-res loads in background
-    if (fallbackCache !== undefined) {
-      // Set up callback to update display when high-res is ready
-      if (onHighResReady) {
-        promise.then((highResCache) => {
-          onHighResReady(highResCache as PageCache);
+    const fallback = this.getBestCachedScaleBelow(renderScale);
+    if (fallback !== undefined) {
+      const targetPriority = renderScale === MIN_RENDER_SCALE ? taskpool.Priority.HIGH : taskpool.Priority.MEDIUM;
+      const targetPromise = this.resolveOrStartCacheTask(renderScale, targetPriority);
+      if (onHighResReady !== undefined) {
+        targetPromise.then((c: PageCache) => {
+          onHighResReady(c);
+        }).catch((_e: Error) => {
         });
       }
-      return fallbackCache;
+      return fallback;
     }
 
-    // Otherwise wait for the promise to complete
-    return await promise as PageCache;
+    if (renderScale > PREVIEW_RENDER_SCALE) {
+      const targetPriority = renderScale === MIN_RENDER_SCALE ? taskpool.Priority.HIGH : taskpool.Priority.MEDIUM;
+      const targetPromise = this.resolveOrStartCacheTask(renderScale, targetPriority);
+      if (onHighResReady !== undefined) {
+        targetPromise.then((c: PageCache) => {
+          onHighResReady(c);
+        }).catch((_e: Error) => {
+        });
+      }
+      await this.resolveOrStartCacheTask(PREVIEW_RENDER_SCALE, taskpool.Priority.HIGH);
+      const hiReady = this.caches.get(renderScale);
+      if (hiReady !== undefined) {
+        return hiReady;
+      }
+      const pvReady = this.caches.get(PREVIEW_RENDER_SCALE);
+      if (pvReady !== undefined) {
+        return pvReady;
+      }
+      return await targetPromise;
+    }
+
+    const soloPriority = renderScale === MIN_RENDER_SCALE ? taskpool.Priority.HIGH : taskpool.Priority.MEDIUM;
+    return await this.resolveOrStartCacheTask(renderScale, soloPriority);
   }
 
   get strokesCount(): number {
@@ -524,6 +635,216 @@ export class PageInfo implements ReadonlyPageInfo {
 export class PageStore implements IDataSource {
   private pages: PageInfo[] = [];
   private listeners: DataChangeListener[] = [];
+  /** 最近一次预取中心，供预览池预算与内存回调使用 */
+  private lastPrefetchCenterIndex: number = 0;
+  private lastPrefetchDisplayed: number[] = [];
+  private lastPrefetchWindowRadius: number = 5;
+  /** 持有预览光栅的页索引，队尾为最近使用 */
+  private previewLru: number[] = [];
+  /** 与系统内存压力联动，临时收紧预览池 */
+  private previewBudgetMultiplier: number = 1.0;
+
+  private indexInDisplayed(arr: number[], v: number): boolean {
+    return arr.indexOf(v) >= 0;
+  }
+
+  private maxPreviewSlotsForTotal(totalPages: number): number {
+    if (totalPages <= 80) {
+      return Math.min(48, totalPages);
+    }
+    if (totalPages <= 400) {
+      return 36;
+    }
+    if (totalPages <= 1200) {
+      return Math.min(32, 24 + Math.floor(totalPages / 120));
+    }
+    return Math.max(16, Math.min(28, Math.floor(totalPages / 100)));
+  }
+
+  private adaptivePrefetchRange(baseRange: number, totalPages: number): number {
+    if (totalPages <= 80) {
+      return Math.min(baseRange + 2, 8);
+    }
+    if (totalPages <= 400) {
+      return Math.min(baseRange, 5);
+    }
+    return Math.min(3, baseRange);
+  }
+
+  private countPagesWithPreviewCache(): number {
+    let n = 0;
+    for (const p of this.pages) {
+      if (p.hasPreviewRasterInCache()) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  private touchPreviewLru(pageIndex: number): void {
+    const pos = this.previewLru.indexOf(pageIndex);
+    if (pos >= 0) {
+      this.previewLru.splice(pos, 1);
+    }
+    this.previewLru.push(pageIndex);
+  }
+
+  private removePreviewLru(pageIndex: number): void {
+    const pos = this.previewLru.indexOf(pageIndex);
+    if (pos >= 0) {
+      this.previewLru.splice(pos, 1);
+    }
+  }
+
+  /** 预览光栅被释放时同步 LRU（由 PageInfo 全量淘汰等路径调用） */
+  public clearPreviewLruSlot(pageIndex: number | undefined): void {
+    if (pageIndex === undefined || pageIndex < 0 || pageIndex >= this.pages.length) {
+      return;
+    }
+    this.removePreviewLru(pageIndex);
+  }
+
+  private rebuildPreviewLruFromCaches(): void {
+    const next: number[] = [];
+    for (let i = 0; i < this.pages.length; i++) {
+      if (this.pages[i].hasPreviewRasterInCache()) {
+        next.push(i);
+      }
+    }
+    this.previewLru = next;
+  }
+
+  private isProtectedForPreviewBudget(
+    pageIndex: number,
+    centerIndex: number,
+    displayedPageIndices: number[]
+  ): boolean {
+    if (this.indexInDisplayed(displayedPageIndices, pageIndex)) {
+      return true;
+    }
+    const r = this.lastPrefetchWindowRadius;
+    return Math.abs(pageIndex - centerIndex) <= r;
+  }
+
+  /**
+   * 限制全局预览光栅数量；优先淘汰 LRU 中队首且不在保护带内的页。
+   */
+  public enforcePreviewBudget(centerIndex: number, displayedPageIndices: number[]): void {
+    const total = this.totalPageCount();
+    const maxSlots =
+      Math.floor(this.maxPreviewSlotsForTotal(total) * this.previewBudgetMultiplier);
+    const floorSlots = Math.max(6, Math.min(maxSlots, total));
+    let guard = 0;
+    while (this.countPagesWithPreviewCache() > floorSlots && guard < total + 16) {
+      guard++;
+      let evicted = false;
+      for (let i = 0; i < this.previewLru.length; i++) {
+        const idx = this.previewLru[i];
+        if (!this.isProtectedForPreviewBudget(idx, centerIndex, displayedPageIndices)) {
+          this.previewLru.splice(i, 1);
+          this.pages[idx].evictPreviewRasterOnly();
+          evicted = true;
+          break;
+        }
+      }
+      if (!evicted) {
+        if (!this.evictFurthestNonDisplayedPreview(centerIndex, displayedPageIndices)) {
+          break;
+        }
+      }
+    }
+  }
+
+  private evictFurthestNonDisplayedPreview(centerIndex: number, displayedPageIndices: number[]): boolean {
+    let bestIdx = -1;
+    let bestDist = -1;
+    for (let p = 0; p < this.pages.length; p++) {
+      if (!this.pages[p].hasPreviewRasterInCache()) {
+        continue;
+      }
+      if (this.indexInDisplayed(displayedPageIndices, p)) {
+        continue;
+      }
+      const d = Math.abs(p - centerIndex);
+      if (d > bestDist) {
+        bestDist = d;
+        bestIdx = p;
+      }
+    }
+    if (bestIdx < 0) {
+      return false;
+    }
+    this.removePreviewLru(bestIdx);
+    this.pages[bestIdx].evictPreviewRasterOnly();
+    return true;
+  }
+
+  public notifyPreviewCacheFilled(pageIndex: number): void {
+    this.touchPreviewLru(pageIndex);
+    this.enforcePreviewBudget(this.lastPrefetchCenterIndex, this.lastPrefetchDisplayed);
+  }
+
+  public notePageRasterAccess(pageIndex: number): void {
+    if (pageIndex < 0 || pageIndex >= this.pages.length) {
+      return;
+    }
+    if (this.pages[pageIndex].hasPreviewRasterInCache()) {
+      this.touchPreviewLru(pageIndex);
+    }
+  }
+
+  /**
+   * 响应系统内存压力（由 UIAbility.onMemoryLevel 经 eventHub 转发，勿在主回调内做重释放）。
+   */
+  public applyMemoryPressure(
+    level: AbilityConstant.MemoryLevel,
+    displayedPageIndices: number[],
+    currentPageIndex: number
+  ): void {
+    const center = this.lastPrefetchCenterIndex;
+    const displayed =
+      displayedPageIndices.length > 0 ? displayedPageIndices.slice() : [currentPageIndex];
+
+    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_MODERATE) {
+      this.previewBudgetMultiplier = 1.0;
+      return;
+    }
+
+    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_LOW) {
+      this.previewBudgetMultiplier = 0.55;
+      for (let i = 0; i < this.pages.length; i++) {
+        if (this.indexInDisplayed(displayed, i)) {
+          continue;
+        }
+        this.pages[i].evictHighResolutionCaches();
+      }
+      this.enforcePreviewBudget(center, displayed);
+      return;
+    }
+
+    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_CRITICAL) {
+      this.previewBudgetMultiplier = 0.35;
+      for (let i = 0; i < this.pages.length; i++) {
+        if (this.indexInDisplayed(displayed, i)) {
+          this.pages[i].evictHighResolutionCaches();
+        } else {
+          this.pages[i].evictAllViewerCaches();
+        }
+      }
+      this.rebuildPreviewLruFromCaches();
+      this.enforcePreviewBudget(center, displayed);
+      return;
+    }
+
+    this.previewBudgetMultiplier = 0.5;
+    for (let i = 0; i < this.pages.length; i++) {
+      if (this.indexInDisplayed(displayed, i)) {
+        continue;
+      }
+      this.pages[i].evictHighResolutionCaches();
+    }
+    this.enforcePreviewBudget(center, displayed);
+  }
 
   public totalCount(): number {
     return this.pages.length;
@@ -583,31 +904,49 @@ export class PageStore implements IDataSource {
     displayedPageIndices: number[] = []
   ): void {
     const totalPages = this.totalPageCount();
-    
-    // Prefetch pages within range
-    for (let offset = -prefetchRange; offset <= prefetchRange; offset++) {
-      const pageIndex = centerIndex + offset;
-      if (pageIndex < 0 || pageIndex >= totalPages) continue;
-      
-      // Determine priority: HIGH for center, MEDIUM for adjacent
-      const priority = offset === 0
-        ? taskpool.Priority.HIGH
-        : taskpool.Priority.MEDIUM;
-      
+    if (totalPages <= 0) {
+      return;
+    }
+    const clampedCenter = Math.max(0, Math.min(centerIndex, totalPages - 1));
+    this.lastPrefetchCenterIndex = clampedCenter;
+    this.lastPrefetchDisplayed = displayedPageIndices.slice();
+    this.lastPrefetchWindowRadius = Math.max(prefetchRange, 4);
+
+    const adaptiveRange = this.adaptivePrefetchRange(prefetchRange, totalPages);
+
+    for (let offset = -adaptiveRange; offset <= adaptiveRange; offset++) {
+      const pageIndex = clampedCenter + offset;
+      if (pageIndex < 0 || pageIndex >= totalPages) {
+        continue;
+      }
+      const absOff = Math.abs(offset);
+      const renderPriority = offset === 0 ? taskpool.Priority.HIGH : taskpool.Priority.MEDIUM;
+      const previewPriority =
+        absOff === 0 ? taskpool.Priority.HIGH :
+          (absOff <= 1 ? taskpool.Priority.MEDIUM : taskpool.Priority.LOW);
+
       try {
-        this.getPageInfo(pageIndex).ensureCached(MIN_RENDER_SCALE, priority);
-      } catch (error) {
+        this.getPageInfo(pageIndex).ensureCached(PREVIEW_RENDER_SCALE, previewPriority);
+        this.getPageInfo(pageIndex).ensureCached(MIN_RENDER_SCALE, renderPriority);
+      } catch (_e) {
       }
     }
-    
-    // Evict viewer caches for pages outside eviction range
+
+    const farFullEvictAt = evictionRange + 3;
     for (let globalIndex = 0; globalIndex < this.pages.length; globalIndex++) {
+      const distance = Math.abs(globalIndex - clampedCenter);
+      if (distance <= evictionRange || displayedPageIndices.includes(globalIndex)) {
+        continue;
+      }
       const pageInfo = this.pages[globalIndex];
-      const distance = Math.abs(globalIndex - centerIndex);
-      if (distance > evictionRange && !displayedPageIndices.includes(globalIndex)) {
-        pageInfo.evictViewerCache();
+      if (totalPages > 500 && distance > farFullEvictAt) {
+        pageInfo.evictAllViewerCaches();
+      } else {
+        pageInfo.evictHighResolutionCaches();
       }
     }
+
+    this.enforcePreviewBudget(clampedCenter, displayedPageIndices);
   }
 
   public async getPageCacheAsync(
