@@ -10,6 +10,8 @@ export struct PDFPageSlot {
   @Param canvasSize: Vector2 = { x: 0, y: 0 };
   @Param canvasScale: ScaleOptions = { x: 1, y: 1, centerX: 0, centerY: 0 };
   @Param visible: boolean = true;
+  /** true 且 visible=false 时使用 Hidden 占位（仍参与布局）；用于双/三页主行「无该页」时避免 None 拆掉槽宽或透明层叠残影 */
+  @Param occupyLayoutWhenHidden: boolean = false;
   @Param drawCanvasVisible: boolean = false;
   @Param annotateCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
   @Param drawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
@@ -45,6 +47,10 @@ export struct PDFPageSlot {
       }
     }
     .size(toSizePx(this.viewSize))
-    .visibility(toVisibility(this.visible))
+    .visibility(
+      this.visible
+        ? Visibility.Visible
+        : (this.occupyLayoutWhenHidden ? Visibility.Hidden : Visibility.None)
+    )
   }
 }

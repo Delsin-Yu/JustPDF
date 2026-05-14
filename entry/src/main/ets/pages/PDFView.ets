@@ -51,6 +51,8 @@ const PAGE_TURN_FLICK_MIN_PROGRESS: number = 0.038;
 const PAGE_TURN_ELASTIC_EXTRA_RATIO: number = 0.38;
 /** 手指位移换算为翻页偏移的增益，略大于 1 可减少「拖很远才够翻页」的感觉 */
 const PAGE_TURN_DRAG_GAIN: number = 1.55;
+/** 横向滑动邻页预览条挂载时的淡入、取消/收尾时的淡出时长（毫秒） */
+const SLIDE_PREVIEW_FADE_MS: number = 500;
 
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
@@ -580,55 +582,12 @@ struct PDFView {
   // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
   // 避免快速翻页后显示内容与当前页码不符。
   private pageLoadVersion: number = 0;
+  /**
+   * 与 loadAndDisplayPages 同步：commit 前 displayedPageIndices 仍为旧套，
+   * 高分辨率异步回调须按此列表写入主槽，避免少页视图时空槽被旧页位图盖一帧。
+   */
+  private mainSlotPagesBeingLoaded: number[] = [];
   private documentLoadVersion: number = 0;
-  private lastPreviewGeometryLogKey: string = '';
-
-  private formatPageIndices(indices: number[]): string {
-    return `[${indices.join(',')}]`;
-  }
-
-  /** 横向滑动诊断日志：只在该模式下输出，追踪主视图更新来源。 */
-  private logSlideMainUpdate(reason: string, details: string = ''): void {
-    if (this.viewerViewModel.pageFlipMode !== 'horizontalSlide') {
-      return;
-    }
-    const suffix = details.length > 0 ? ` ${details}` : '';
-    hilog.info(0, 'PDFView', `[slide-main] t=${Date.now()} reason=${reason}${suffix}` +
-      ` current=${this.viewerViewModel.currentPageIndex}` +
-      ` displayed=${this.formatPageIndices(this.viewerViewModel.displayedPageIndices)}` +
-      ` loadVersion=${this.pageLoadVersion}` +
-      ` dir=${this.pageTurnDirection}` +
-      ` offset=${this.pageTurnOffsetVp.toFixed(2)}` +
-      ` commit=${this.pageTurnCommitAnimating}` +
-      ` crossfade=${this.pageTurnCrossfadeT.toFixed(2)}` +
-      ` neighborOpacity=${this.pageTurnNeighborAppearOpacity.toFixed(2)}` +
-      ` previewLocked=${this.pageTurnPreviewOffsetLocked}` +
-      ` previewOffset=${this.pageTurnPreviewOffsetVp.toFixed(2)}` +
-      ` mainAdvance=${this.pageTurnMainAdvanceVp.toFixed(2)}` +
-      ` prevAdvance=${this.pageTurnPrevAdvanceVp.toFixed(2)}` +
-      ` gotoInFlight=${this.slideGotoInFlight}`);
-  }
-
-  private logSlidePreviewGeometry(side: 'next' | 'prev', reason: string, details: string): void {
-    if (this.viewerViewModel.pageFlipMode !== 'horizontalSlide') {
-      return;
-    }
-    const key = `${side}|${reason}|${details}`;
-    if (key === this.lastPreviewGeometryLogKey) {
-      return;
-    }
-    this.lastPreviewGeometryLogKey = key;
-    hilog.info(0, 'PDFView', `[slide-preview] t=${Date.now()} side=${side} reason=${reason} ${details}` +
-      ` viewSize=${this.viewerViewModel.viewSize.x}x${this.viewerViewModel.viewSize.y}` +
-      ` viewScale=${this.viewerViewModel.viewScale.toFixed(4)}` +
-      ` viewPan=${this.viewerViewModel.viewPan.x.toFixed(2)},${this.viewerViewModel.viewPan.y.toFixed(2)}` +
-      ` current=${this.viewerViewModel.currentPageIndex}` +
-      ` displayed=${this.formatPageIndices(this.viewerViewModel.displayedPageIndices)}` +
-      ` loadVersion=${this.pageLoadVersion}` +
-      ` dir=${this.pageTurnDirection}` +
-      ` offset=${this.pageTurnOffsetVp.toFixed(2)}` +
-      ` locked=${this.pageTurnPreviewOffsetLocked}`);
-  }
   tutorialDialogController: CustomDialogController = new CustomDialogController({
     builder: TutorialDialogBuilder(),
     width: '60%',
@@ -1550,7 +1509,6 @@ struct PDFView {
     const requiredScale = this.viewerViewModel.getRenderScaleForViewScale();
 
     if (requiredScale !== this.currentRenderScale) {
-      this.logSlideMainUpdate('checkAndUpdateRenderScale', `from=${this.currentRenderScale} to=${requiredScale}`);
       this.currentRenderScale = requiredScale;
       // 以新缩放重新渲染当前显示的页面
       await this.updateDisplayedPagesAtScale(requiredScale);
@@ -1560,26 +1518,21 @@ struct PDFView {
   // 以指定的渲染缩放更新显示的页面
   async updateDisplayedPagesAtScale(renderScale: number): Promise<void> {
     const loadVersion = this.pageLoadVersion;
-    this.logSlideMainUpdate('updateDisplayedPagesAtScale:start', `renderScale=${renderScale} capturedLoadVersion=${loadVersion}`);
     for (const pageIndex of this.viewerViewModel.displayedPageIndices) {
       const cache = await this.getPageCache(pageIndex, renderScale, loadVersion);
       // 在等待期间若已发生页面切换则丢弃结果
       if (loadVersion !== this.pageLoadVersion) {
-        this.logSlideMainUpdate('updateDisplayedPagesAtScale:drop', `page=${pageIndex} capturedLoadVersion=${loadVersion}`);
         return;
       }
       // 更新相应视图的 pixelMap
       const displayIndex = this.viewerViewModel.displayedPageIndices.indexOf(pageIndex);
       if (displayIndex === 0) {
-        this.logSlideMainUpdate('mainSlot:updateScale', `slot=0 page=${pageIndex} renderScale=${renderScale}`);
         this.view1PixelMap = cache.pixelMap;
         this.view1ViewSize = cache.displaySize;
       } else if (displayIndex === 1) {
-        this.logSlideMainUpdate('mainSlot:updateScale', `slot=1 page=${pageIndex} renderScale=${renderScale}`);
         this.view2PixelMap = cache.pixelMap;
         this.view2ViewSize = cache.displaySize;
       } else if (displayIndex === 2) {
-        this.logSlideMainUpdate('mainSlot:updateScale', `slot=2 page=${pageIndex} renderScale=${renderScale}`);
         this.view3PixelMap = cache.pixelMap;
         this.view3ViewSize = cache.displaySize;
       }
@@ -1590,9 +1543,17 @@ struct PDFView {
 
   updateViewerViewSize(): void {
     this.viewerViewModel.updateViewSize(this.view1ViewSize, this.view2ViewSize, this.view3ViewSize);
-    this.logSlideMainUpdate('updateViewerViewSize',
-      `viewSize=${this.viewerViewModel.viewSize.x}x${this.viewerViewModel.viewSize.y}` +
-        ` slotSizes=${this.view1ViewSize.x}x${this.view1ViewSize.y},${this.view2ViewSize.x}x${this.view2ViewSize.y},${this.view3ViewSize.x}x${this.view3ViewSize.y}`);
+  }
+
+  /**
+   * 高分辨率就绪时解析主槽索引：load 未完成前以 mainSlotPagesBeingLoaded 为准，否则以 displayed 为准。
+   * @returns 槽位 0..2，或 -1 表示不应写入主槽
+   */
+  private resolveMainSlotIndexForPage(targetIndex: number): number {
+    if (this.mainSlotPagesBeingLoaded.length > 0) {
+      return this.mainSlotPagesBeingLoaded.indexOf(targetIndex);
+    }
+    return this.viewerViewModel.displayedPageIndices.indexOf(targetIndex);
   }
 
   async getPageCache(targetIndex: number, renderScale: number = ViewerMinRenderScale,
@@ -1606,19 +1567,17 @@ struct PDFView {
         if (loadVersion !== this.pageLoadVersion) {
           return;
         }
+        const displayIndex = this.resolveMainSlotIndexForPage(targetIndex);
+        if (displayIndex < 0) {
+          return;
+        }
         // Automatically update display when high-res version is ready
-        if (this.viewerViewModel.displayedPageIndices.includes(targetIndex)) {
-          const displayIndex = this.viewerViewModel.displayedPageIndices.indexOf(targetIndex);
-          if (displayIndex === 0) {
-            this.logSlideMainUpdate('mainSlot:highResCallback', `slot=0 page=${targetIndex} capturedLoadVersion=${loadVersion}`);
-            this.view1PixelMap = highResCache.pixelMap;
-          } else if (displayIndex === 1) {
-            this.logSlideMainUpdate('mainSlot:highResCallback', `slot=1 page=${targetIndex} capturedLoadVersion=${loadVersion}`);
-            this.view2PixelMap = highResCache.pixelMap;
-          } else if (displayIndex === 2) {
-            this.logSlideMainUpdate('mainSlot:highResCallback', `slot=2 page=${targetIndex} capturedLoadVersion=${loadVersion}`);
-            this.view3PixelMap = highResCache.pixelMap;
-          }
+        if (displayIndex === 0) {
+          this.view1PixelMap = highResCache.pixelMap;
+        } else if (displayIndex === 1) {
+          this.view2PixelMap = highResCache.pixelMap;
+        } else if (displayIndex === 2) {
+          this.view3PixelMap = highResCache.pixelMap;
         }
         this.applyTransitionHighResIfNeeded(targetIndex, highResCache);
       }
@@ -1671,7 +1630,6 @@ struct PDFView {
 
   /** 立即清除横向滑动预览条带（无淡出） */
   private clearHorizontalSlidePreviewState(): void {
-    this.logSlideMainUpdate('clearHorizontalSlidePreviewState:before');
     this.pendingSlideGotoTarget = undefined;
     // 使尚未完成的 loadTransitionNeighbor 回调全部失效，避免收尾后仍 assign / 再触发淡入造成邻条 Next/Prev 闪跳
     this.transitionNeighborGen++;
@@ -1682,7 +1640,6 @@ struct PDFView {
     this.pageTurnPreviewOffsetVp = 0;
     this.pageTurnMainAdvanceVp = 0;
     this.pageTurnPrevAdvanceVp = 0;
-    this.lastPreviewGeometryLogKey = '';
     this.slideVelocityVpPerMs = 0;
     this.lastSlideSampleTimeMs = 0;
     this.pageTurnCommitAnimating = false;
@@ -1731,8 +1688,8 @@ struct PDFView {
   /** defer goto 收尾：邻条淡出后再清条带并 resetViewToFit，避免视口与条带位移叠帧闪动 */
   private fadeDeferSlideGotoTeardown(navToken: number): void {
     const hasStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
-    this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:start', `navToken=${navToken} hasStrip=${hasStrip}`);
     if (!hasStrip) {
+      this.ensureMainRowEmptySlotsMatchDisplayed();
       this.clearHorizontalSlidePreviewState();
       this.resetViewToFit();
       this.redrawStrokes();
@@ -1741,33 +1698,29 @@ struct PDFView {
       }
       return;
     }
-    // 先于淡出再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborAppearFade / assign
+    // 先于淡出再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborPreviewFadeIn / assign
     this.transitionNeighborGen++;
     this.slideNeighborAppearFadeGen++;
     const g = this.slideNeighborAppearFadeGen;
     // 预览层先钉在中心盖住一帧级别的主层重绘窗口；主层再独立归零并恢复可见。
     this.lockCommittedPreviewAtCenter();
-    this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:restoreMain', `navToken=${navToken}`);
+    // 邻条常窄于双页主行全宽，恢复主层可见前强制对齐空槽，避免右侧仍一帧旧位图。
+    this.ensureMainRowEmptySlotsMatchDisplayed();
     this.pageTurnCommitAnimating = false;
     this.pageTurnCrossfadeT = 0;
     this.pageTurnOffsetVp = 0;
     this.pageTurnNeighborAppearOpacity = 1;
-    this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:holdPreview', `navToken=${navToken}`);
     setTimeout(() => {
       if (g !== this.slideNeighborAppearFadeGen || this.slideGotoCompletionToken !== navToken) {
-        this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:staleHold', `navToken=${navToken}`);
         return;
       }
-      this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:startPreviewFade', `navToken=${navToken}`);
       this.getUIContext().animateTo({
-        duration: 100,
+        duration: SLIDE_PREVIEW_FADE_MS,
         curve: Curve.EaseIn,
         onFinish: () => {
           if (g !== this.slideNeighborAppearFadeGen) {
-            this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:staleFinish', `navToken=${navToken}`);
             return;
           }
-          this.logSlideMainUpdate('fadeDeferSlideGotoTeardown:finish', `navToken=${navToken}`);
           this.clearHorizontalSlidePreviewState();
           this.resetViewToFit();
           this.redrawStrokes();
@@ -1781,27 +1734,33 @@ struct PDFView {
     }, 34);
   }
 
-  /** 邻条真实内容就绪后的短促淡入（不跟手）；与正在进行的淡入叠代时取消旧动画 */
-  private startSlideNeighborAppearFade(): void {
+  /**
+   * 邻条挂载（占位或真实图）时从全透明淡入；与 slideNeighborAppearFadeGen 配合取消旧动画。
+   * 淡入在条带出现时即开始，不等整页加载完成，也不复用提交动画的 crossfade 通道。
+   */
+  private startSlideNeighborPreviewFadeIn(): void {
     if (this.viewerViewModel.pageFlipMode !== 'horizontalSlide') {
       return;
     }
     this.slideNeighborAppearFadeGen++;
     const g = this.slideNeighborAppearFadeGen;
-    this.pageTurnNeighborAppearOpacity = 0.2;
-    this.getUIContext().animateTo({ duration: 110, curve: Curve.EaseOut }, () => {
-      if (g !== this.slideNeighborAppearFadeGen) {
-        return;
+    this.pageTurnNeighborAppearOpacity = 0;
+    this.getUIContext().animateTo({
+      duration: SLIDE_PREVIEW_FADE_MS,
+      curve: Curve.EaseOut,
+      onFinish: () => {
+        if (g !== this.slideNeighborAppearFadeGen) {
+          return;
+        }
+        this.pageTurnNeighborAppearOpacity = 1;
       }
+    }, () => {
       this.pageTurnNeighborAppearOpacity = 1;
     });
   }
 
-  /** 左侧邻条：预览淡入淡出 + 提交收尾交叉淡化 */
+  /** 左侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制；提交时主条单独用 crossfade 淡出 */
   private getSlidePrevStripOpacity(): number {
-    if (this.pageTurnCommitAnimating && this.pageTurnDirection === 1) {
-      return this.pageTurnCrossfadeT;
-    }
     if (this.transPrevIndices.length > 0) {
       return this.pageTurnNeighborAppearOpacity;
     }
@@ -1813,11 +1772,8 @@ struct PDFView {
     return this.pageTurnCommitAnimating ? (1 - this.pageTurnCrossfadeT) : 1;
   }
 
-  /** 右侧邻条：预览淡入淡出 + 提交收尾交叉淡化 */
+  /** 右侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制 */
   private getSlideNextStripOpacity(): number {
-    if (this.pageTurnCommitAnimating && this.pageTurnDirection === -1) {
-      return this.pageTurnCrossfadeT;
-    }
     if (this.transNextIndices.length > 0) {
       return this.pageTurnNeighborAppearOpacity;
     }
@@ -1834,7 +1790,6 @@ struct PDFView {
     const scale = this.viewerViewModel.viewScale;
     this.pageTurnMainAdvanceVp = ui.px2vp((this.viewerViewModel.viewSize.x + ContainerSpacing) * scale);
     this.pageTurnPrevAdvanceVp = ui.px2vp((this.getPrevStripWidthPx() + ContainerSpacing) * scale);
-    this.logSlideMainUpdate('snapshotPageTurnGeometry');
   }
 
   /** 松手后动画应收尾的相对偏移（不含 baseline）：下一套为负、上一套为正 */
@@ -1928,8 +1883,6 @@ struct PDFView {
         ? this.pageTurnMainAdvanceVp
         : ui.px2vp((this.viewerViewModel.viewSize.x + ContainerSpacing) * scale);
       const result = slideOffsetVp + advanceVp;
-      this.logSlidePreviewGeometry(side, 'translate',
-        `result=${result.toFixed(2)} slideOffset=${slideOffsetVp.toFixed(2)} advance=${advanceVp.toFixed(2)} snapshot=${usingSnapshot}`);
       return result;
     }
     const usingSnapshot = this.pageTurnPrevAdvanceVp > 0;
@@ -1937,8 +1890,6 @@ struct PDFView {
       ? this.pageTurnPrevAdvanceVp
       : ui.px2vp((this.getPrevStripWidthPx() + ContainerSpacing) * scale);
     const result = slideOffsetVp - advanceVp;
-    this.logSlidePreviewGeometry(side, 'translate',
-      `result=${result.toFixed(2)} slideOffset=${slideOffsetVp.toFixed(2)} advance=${advanceVp.toFixed(2)} snapshot=${usingSnapshot}`);
     return result;
   }
 
@@ -1953,8 +1904,6 @@ struct PDFView {
         : ui.px2vp((this.viewerViewModel.viewSize.x + ContainerSpacing) * scale);
       this.pageTurnPreviewOffsetVp = -advanceVp;
       this.pageTurnPreviewOffsetLocked = true;
-      this.logSlidePreviewGeometry('next', 'lockCenter',
-        `previewOffset=${this.pageTurnPreviewOffsetVp.toFixed(2)} advance=${advanceVp.toFixed(2)} snapshot=${usingSnapshot}`);
       return;
     }
     if (this.pageTurnDirection === 1 && this.transPrevIndices.length > 0) {
@@ -1964,13 +1913,10 @@ struct PDFView {
         : ui.px2vp((this.getPrevStripWidthPx() + ContainerSpacing) * scale);
       this.pageTurnPreviewOffsetVp = advanceVp;
       this.pageTurnPreviewOffsetLocked = true;
-      this.logSlidePreviewGeometry('prev', 'lockCenter',
-        `previewOffset=${this.pageTurnPreviewOffsetVp.toFixed(2)} advance=${advanceVp.toFixed(2)} snapshot=${usingSnapshot}`);
       return;
     }
     this.pageTurnPreviewOffsetLocked = false;
     this.pageTurnPreviewOffsetVp = 0;
-    this.logSlideMainUpdate('lockCommittedPreviewAtCenter:skip');
   }
 
   private applyElasticPageTurnOffset(rawVp: number, viewportWvp: number): number {
@@ -1990,9 +1936,8 @@ struct PDFView {
   }
 
   private beginPageTurnSession(direction: number, firstHorizDeltaVp: number, viewportWvp: number): void {
-    this.logSlideMainUpdate('beginPageTurnSession', `direction=${direction} firstDelta=${firstHorizDeltaVp.toFixed(2)} viewportW=${viewportWvp.toFixed(2)}`);
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 1;
+    this.pageTurnNeighborAppearOpacity = 0;
     this.pageTurnDragActive = true;
     this.pageTurnDirection = direction;
     this.pageTurnPreviewOffsetLocked = false;
@@ -2015,7 +1960,6 @@ struct PDFView {
 
   private async loadTransitionNeighbor(kind: 'next' | 'prev', gen: number): Promise<void> {
     const indices = kind === 'next' ? this.viewerViewModel.peekNextSetIndices() : this.viewerViewModel.peekPrevSetIndices();
-    this.logSlideMainUpdate('loadTransitionNeighbor:start', `kind=${kind} gen=${gen} indices=${this.formatPageIndices(indices)}`);
     if (indices.length === 0) {
       return;
     }
@@ -2026,6 +1970,7 @@ struct PDFView {
       this.transPrevIndices = indices;
       this.applyTransitionPlaceholders('prev', indices);
     }
+    this.startSlideNeighborPreviewFadeIn();
     const loadVersion = this.pageLoadVersion;
     const tasks: Array<Promise<void>> = [];
     for (let i = 0; i < indices.length; i++) {
@@ -2034,21 +1979,15 @@ struct PDFView {
       tasks.push(this.getPageCache(pageIndex, this.currentRenderScale, loadVersion)
         .then(cache => {
           if (gen !== this.transitionNeighborGen || loadVersion !== this.pageLoadVersion) {
-            this.logSlideMainUpdate('loadTransitionNeighbor:drop',
-              `kind=${kind} slot=${slot} page=${pageIndex} gen=${gen} currentGen=${this.transitionNeighborGen} capturedLoadVersion=${loadVersion}`);
             return;
           }
-          this.logSlideMainUpdate('transitionSlot:update', `kind=${kind} slot=${slot} page=${pageIndex} gen=${gen}`);
           this.assignTransitionSlot(kind, slot, cache);
         }));
     }
     await Promise.all(tasks);
     if (gen !== this.transitionNeighborGen) {
-      this.logSlideMainUpdate('loadTransitionNeighbor:dropAfterAll', `kind=${kind} gen=${gen} currentGen=${this.transitionNeighborGen}`);
       return;
     }
-    this.logSlideMainUpdate('loadTransitionNeighbor:ready', `kind=${kind} gen=${gen}`);
-    this.startSlideNeighborAppearFade();
   }
 
   private applyTransitionPlaceholders(kind: 'next' | 'prev', indices: number[]): void {
@@ -2181,26 +2120,42 @@ struct PDFView {
     const committed =
       (dir !== 0 && progress >= ratioReq) || this.shouldFlickCommit(dir, progress);
     this.pageTurnDragActive = false;
-    this.logSlideMainUpdate('finalizeHorizontalSlideOnUp',
-      `committed=${committed} progress=${progress.toFixed(3)} threshold=${ratioReq.toFixed(3)} velocity=${this.slideVelocityVpPerMs.toFixed(3)}`);
 
     if (!committed || dir === 0) {
       this.pendingSlideGotoTarget = undefined;
       this.pageTurnCommitAnimating = false;
       this.pageTurnCrossfadeT = 0;
+      const hasPreviewStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
+      this.slideNeighborAppearFadeGen++;
+      const cancelAnimGen = this.slideNeighborAppearFadeGen;
       this.getUIContext().animateTo({
         duration: 200,
         curve: Curve.EaseInOut,
         onFinish: () => {
-          this.logSlideMainUpdate('cancelSlideAnimation:finish');
-          this.clearHorizontalSlidePreviewState();
+          if (cancelAnimGen !== this.slideNeighborAppearFadeGen) {
+            return;
+          }
+          if (!hasPreviewStrip) {
+            this.clearHorizontalSlidePreviewState();
+          }
         }
       }, () => {
         this.pageTurnOffsetVp = 0;
-        if (this.transPrevIndices.length > 0 || this.transNextIndices.length > 0) {
-          this.pageTurnNeighborAppearOpacity = 0;
-        }
       });
+      if (hasPreviewStrip) {
+        this.getUIContext().animateTo({
+          duration: SLIDE_PREVIEW_FADE_MS,
+          curve: Curve.EaseIn,
+          onFinish: () => {
+            if (cancelAnimGen !== this.slideNeighborAppearFadeGen) {
+              return;
+            }
+            this.clearHorizontalSlidePreviewState();
+          }
+        }, () => {
+          this.pageTurnNeighborAppearOpacity = 0;
+        });
+      }
       return;
     }
 
@@ -2208,7 +2163,6 @@ struct PDFView {
     const targetPrev = Math.max(0, this.viewerViewModel.navigateToPreviousPage());
     const targetPage = dir === -1 ? targetNext : targetPrev;
     this.pendingSlideGotoTarget = targetPage;
-    this.logSlideMainUpdate('slideCommit:target', `targetPage=${targetPage} targetNext=${targetNext} targetPrev=${targetPrev}`);
     this.viewerViewModel.setSlideNavEffectiveStartIndex(targetPage);
     this.snapshotPageTurnGeometry();
 
@@ -2220,7 +2174,6 @@ struct PDFView {
       this.pageTurnNeighborAppearOpacity = 1;
       this.pageTurnCommitAnimating = true;
       this.pageTurnCrossfadeT = 1;
-      this.logSlideMainUpdate('slideCommit:nearEndGoto', `targetPage=${targetPage}`);
       void this.gotoPage(targetPage, true);
       return;
     }
@@ -2238,7 +2191,6 @@ struct PDFView {
           return;
         }
         // 提交动画结束后仍保持旧主层隐藏，等 gotoPage 写入目标页后再恢复，避免旧页回闪一帧。
-        this.logSlideMainUpdate('slideCommitAnimation:finish', `targetPage=${targetPage}`);
         void this.gotoPage(targetPage, true);
       }
     }, () => {
@@ -2289,21 +2241,17 @@ struct PDFView {
       loading = this.transNext3Loading;
     }
     if (pm === undefined) {
-      this.logSlideMainUpdate('mainSlot:seedNext:missing', `mainSlot=${mainSlot} transSlot=${transSlot}`);
       return false;
     }
     if (mainSlot === 0) {
-      this.logSlideMainUpdate('mainSlot:seedNext', `mainSlot=0 transSlot=${transSlot} loading=${loading}`);
       this.view1PixelMap = pm;
       this.view1ViewSize = vs;
       this.view1Loading = loading;
     } else if (mainSlot === 1) {
-      this.logSlideMainUpdate('mainSlot:seedNext', `mainSlot=1 transSlot=${transSlot} loading=${loading}`);
       this.view2PixelMap = pm;
       this.view2ViewSize = vs;
       this.view2Loading = loading;
     } else {
-      this.logSlideMainUpdate('mainSlot:seedNext', `mainSlot=2 transSlot=${transSlot} loading=${loading}`);
       this.view3PixelMap = pm;
       this.view3ViewSize = vs;
       this.view3Loading = loading;
@@ -2329,21 +2277,17 @@ struct PDFView {
       loading = this.transPrev3Loading;
     }
     if (pm === undefined) {
-      this.logSlideMainUpdate('mainSlot:seedPrev:missing', `mainSlot=${mainSlot} transSlot=${transSlot}`);
       return false;
     }
     if (mainSlot === 0) {
-      this.logSlideMainUpdate('mainSlot:seedPrev', `mainSlot=0 transSlot=${transSlot} loading=${loading}`);
       this.view1PixelMap = pm;
       this.view1ViewSize = vs;
       this.view1Loading = loading;
     } else if (mainSlot === 1) {
-      this.logSlideMainUpdate('mainSlot:seedPrev', `mainSlot=1 transSlot=${transSlot} loading=${loading}`);
       this.view2PixelMap = pm;
       this.view2ViewSize = vs;
       this.view2Loading = loading;
     } else {
-      this.logSlideMainUpdate('mainSlot:seedPrev', `mainSlot=2 transSlot=${transSlot} loading=${loading}`);
       this.view3PixelMap = pm;
       this.view3ViewSize = vs;
       this.view3Loading = loading;
@@ -2358,8 +2302,6 @@ struct PDFView {
     const seeded: boolean[] = [false, false, false];
     const preferPrevStrip = this.pageTurnDirection === 1;
     const nSlots = Math.min(3, indices.length);
-    this.logSlideMainUpdate('trySeedMainViewsFromTransition:start',
-      `indices=${this.formatPageIndices(indices)} preferPrev=${preferPrevStrip}`);
     for (let mainSlot = 0; mainSlot < nSlots; mainSlot++) {
       const pageIndex = indices[mainSlot];
       let done = false;
@@ -2388,17 +2330,48 @@ struct PDFView {
       }
       seeded[mainSlot] = done;
     }
-    this.logSlideMainUpdate('trySeedMainViewsFromTransition:finish',
-      `indices=${this.formatPageIndices(indices)} seeded=${seeded.join(',')}`);
     return seeded;
+  }
+
+  /**
+   * 按当前 displayed 与期望槽位数对齐空主槽（透明占位或清除）。
+   * 仅用于横向滑动 defer 收尾：在恢复主层可见前调用。
+   */
+  private ensureMainRowEmptySlotsMatchDisplayed(): void {
+    const indices = this.viewerViewModel.displayedPageIndices;
+    const expectedSlots = this.viewerViewModel.getExpectedSlotCount();
+    const refPage = indices.length > 0 ? indices[indices.length - 1] : 0;
+
+    if (indices.length <= 1) {
+      if (expectedSlots >= 2) {
+        this.view2PixelMap = this.transparentPlaceholderPixelMap;
+        this.view2ViewSize = this.getPageDisplaySize(refPage);
+        this.view2Loading = false;
+      } else {
+        this.view2PixelMap = undefined;
+        this.view2ViewSize = Vec2(0, 0);
+      }
+    }
+
+    if (indices.length <= 2) {
+      if (expectedSlots >= 3) {
+        this.view3PixelMap = this.transparentPlaceholderPixelMap;
+        this.view3ViewSize = this.getPageDisplaySize(refPage);
+        this.view3Loading = false;
+      } else {
+        this.view3PixelMap = undefined;
+        this.view3ViewSize = Vec2(0, 0);
+      }
+    }
+
+    this.updateViewerViewSize();
   }
 
   // 加载页面缓存并更新视图状态
   private async loadAndDisplayPages(indices: number[], seedFromActiveTransitionStrip: boolean = false): Promise<void> {
     // 捕获当前加载版本；若在异步过程中 gotoPage 再次被调用则放弃过期的状态更新
     const loadVersion = this.pageLoadVersion;
-    this.logSlideMainUpdate('loadAndDisplayPages:start',
-      `indices=${this.formatPageIndices(indices)} seed=${seedFromActiveTransitionStrip} capturedLoadVersion=${loadVersion}`);
+    this.mainSlotPagesBeingLoaded = indices.slice();
     // 立即设置占位白色矩形并预计算目标页面尺寸
     this.view1Loading = false;
     this.view2Loading = false;
@@ -2413,50 +2386,42 @@ struct PDFView {
 
     if (indices.length > 0) {
       if (!seeded[0]) {
-        this.logSlideMainUpdate('mainSlot:placeholder', `slot=0 page=${indices[0]} capturedLoadVersion=${loadVersion}`);
         this.view1PixelMap = this.placeholderPixelMap;
         this.view1ViewSize = this.getPageDisplaySize(indices[0]);
         this.view1Loading = true;
       }
     } else {
-      this.logSlideMainUpdate('mainSlot:clear', `slot=0 capturedLoadVersion=${loadVersion}`);
       this.view1PixelMap = undefined;
     }
 
     if (indices.length > 1) {
       if (!seeded[1]) {
-        this.logSlideMainUpdate('mainSlot:placeholder', `slot=1 page=${indices[1]} capturedLoadVersion=${loadVersion}`);
         this.view2PixelMap = this.placeholderPixelMap;
         this.view2ViewSize = this.getPageDisplaySize(indices[1]);
         this.view2Loading = true;
       }
     } else if (expectedSlots >= 2) {
       // 空占位：透明区域保持与最后一个实际页面相同大小，避免多页模式下末尾出现布局跳变
-      this.logSlideMainUpdate('mainSlot:transparentPlaceholder', `slot=1 capturedLoadVersion=${loadVersion}`);
       this.view2PixelMap = this.transparentPlaceholderPixelMap;
       this.view2ViewSize = this.getPageDisplaySize(indices[indices.length - 1]);
       this.view2Loading = false;
     } else {
-      this.logSlideMainUpdate('mainSlot:clear', `slot=1 capturedLoadVersion=${loadVersion}`);
       this.view2PixelMap = undefined;
       this.view2ViewSize = Vec2(0, 0);
     }
 
     if (indices.length > 2) {
       if (!seeded[2]) {
-        this.logSlideMainUpdate('mainSlot:placeholder', `slot=2 page=${indices[2]} capturedLoadVersion=${loadVersion}`);
         this.view3PixelMap = this.placeholderPixelMap;
         this.view3ViewSize = this.getPageDisplaySize(indices[2]);
         this.view3Loading = true;
       }
     } else if (expectedSlots >= 3) {
       // 空占位：透明区域保持与最后一个实际页面相同大小，避免多页模式下末尾出现布局跳变
-      this.logSlideMainUpdate('mainSlot:transparentPlaceholder', `slot=2 capturedLoadVersion=${loadVersion}`);
       this.view3PixelMap = this.transparentPlaceholderPixelMap;
       this.view3ViewSize = this.getPageDisplaySize(indices[indices.length - 1]);
       this.view3Loading = false;
     } else {
-      this.logSlideMainUpdate('mainSlot:clear', `slot=2 capturedLoadVersion=${loadVersion}`);
       this.view3PixelMap = undefined;
       this.view3ViewSize = Vec2(0, 0);
     }
@@ -2471,10 +2436,8 @@ struct PDFView {
       tasks.push(this.getPageCache(indices[0], this.currentRenderScale, loadVersion)
         .then(cache => {
           if (loadVersion !== this.pageLoadVersion) {
-            this.logSlideMainUpdate('mainSlot:cacheDrop', `slot=0 page=${indices[0]} capturedLoadVersion=${loadVersion}`);
             return;
           }
-          this.logSlideMainUpdate('mainSlot:cacheUpdate', `slot=0 page=${indices[0]} capturedLoadVersion=${loadVersion}`);
           this.view1PixelMap = cache.pixelMap;
           this.view1ViewSize = cache.displaySize;
           this.view1Loading = false;
@@ -2487,10 +2450,8 @@ struct PDFView {
       tasks.push(this.getPageCache(indices[1], this.currentRenderScale, loadVersion)
         .then(cache => {
           if (loadVersion !== this.pageLoadVersion) {
-            this.logSlideMainUpdate('mainSlot:cacheDrop', `slot=1 page=${indices[1]} capturedLoadVersion=${loadVersion}`);
             return;
           }
-          this.logSlideMainUpdate('mainSlot:cacheUpdate', `slot=1 page=${indices[1]} capturedLoadVersion=${loadVersion}`);
           this.view2PixelMap = cache.pixelMap;
           this.view2ViewSize = cache.displaySize;
           this.view2Loading = false;
@@ -2503,10 +2464,8 @@ struct PDFView {
       tasks.push(this.getPageCache(indices[2], this.currentRenderScale, loadVersion)
         .then(cache => {
           if (loadVersion !== this.pageLoadVersion) {
-            this.logSlideMainUpdate('mainSlot:cacheDrop', `slot=2 page=${indices[2]} capturedLoadVersion=${loadVersion}`);
             return;
           }
-          this.logSlideMainUpdate('mainSlot:cacheUpdate', `slot=2 page=${indices[2]} capturedLoadVersion=${loadVersion}`);
           this.view3PixelMap = cache.pixelMap;
           this.view3ViewSize = cache.displaySize;
           this.view3Loading = false;
@@ -2518,17 +2477,15 @@ struct PDFView {
 
     // 若在加载期间已切到其他页面，不再更新视图大小
     if (loadVersion !== this.pageLoadVersion) {
-      this.logSlideMainUpdate('loadAndDisplayPages:dropAfterAll', `capturedLoadVersion=${loadVersion}`);
+      this.mainSlotPagesBeingLoaded = [];
       return;
     }
 
     // 更新总体视图大小
     this.updateViewerViewSize();
-    this.logSlideMainUpdate('loadAndDisplayPages:finish', `capturedLoadVersion=${loadVersion}`);
   }
 
   async gotoPage(targetIndex: number, deferSlideVisualReset: boolean = false): Promise<void> {
-    this.logSlideMainUpdate('gotoPage:start', `targetIndex=${targetIndex} defer=${deferSlideVisualReset}`);
     this.pendingSlideGotoTarget = undefined;
     if (targetIndex < 0 || targetIndex >= this.viewerViewModel.totalPageCount) {
       if (deferSlideVisualReset) {
@@ -2550,8 +2507,6 @@ struct PDFView {
     // 递增加载版本以使上一个 gotoPage 发起的所有异步回调失效
     this.pageLoadVersion++;
     const navToken = this.pageLoadVersion;
-    this.logSlideMainUpdate('gotoPage:token',
-      `target=${clampedTarget} indices=${this.formatPageIndices(indicesToLoad)} navToken=${navToken} defer=${deferSlideVisualReset}`);
 
     if (deferSlideVisualReset) {
       this.slideGotoInFlight = true;
@@ -2563,10 +2518,9 @@ struct PDFView {
 
     // 先加载位图再 commit，避免 displayed 已指向新页而主槽仍画上一套造成「目标→旧页→目标」闪动
     await this.loadAndDisplayPages(indicesToLoad, deferSlideVisualReset);
-    this.logSlideMainUpdate('gotoPage:afterLoad', `target=${clampedTarget} navToken=${navToken}`);
 
     if (navToken !== this.pageLoadVersion) {
-      this.logSlideMainUpdate('gotoPage:dropAfterLoad', `target=${clampedTarget} navToken=${navToken}`);
+      this.mainSlotPagesBeingLoaded = [];
       if (deferSlideVisualReset && this.slideGotoCompletionToken === navToken) {
         this.slideGotoInFlight = false;
       }
@@ -2574,7 +2528,9 @@ struct PDFView {
     }
 
     this.viewerViewModel.commitPageTarget(clampedTarget);
-    this.logSlideMainUpdate('gotoPage:commitPageTarget', `target=${clampedTarget} navToken=${navToken}`);
+    this.mainSlotPagesBeingLoaded = [];
+    // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
+    this.redrawStrokes();
 
     // Debounce prefetch/eviction to avoid cache churn during rapid scrolling
     if (this.prefetchDebounceId !== undefined) {
@@ -2586,21 +2542,15 @@ struct PDFView {
     }, 300);
 
     if (deferSlideVisualReset) {
-      this.logSlideMainUpdate('gotoPage:deferTeardown', `target=${clampedTarget} navToken=${navToken}`);
       this.fadeDeferSlideGotoTeardown(navToken);
     } else {
-      this.logSlideMainUpdate('gotoPage:resetImmediate', `target=${clampedTarget} navToken=${navToken}`);
       this.resetViewToFit();
       this.redrawStrokes();
     }
   }
 
   resetViewToFit(): void {
-    this.logSlideMainUpdate('resetViewToFit:before',
-      `viewScale=${this.viewerViewModel.viewScale.toFixed(4)} pan=${this.viewerViewModel.viewPan.x.toFixed(2)},${this.viewerViewModel.viewPan.y.toFixed(2)}`);
     this.viewerViewModel.resetViewToFit(this.getUIContext());
-    this.logSlideMainUpdate('resetViewToFit:after',
-      `viewScale=${this.viewerViewModel.viewScale.toFixed(4)} pan=${this.viewerViewModel.viewPan.x.toFixed(2)},${this.viewerViewModel.viewPan.y.toFixed(2)}`);
   }
 
   /** 横向滑动过程中不让布局回调抢先重置 fit，交给提交/取消收尾统一处理。 */
@@ -2635,27 +2585,22 @@ struct PDFView {
   }
 
   async refreshDisplayedPages(): Promise<void> {
-    this.logSlideMainUpdate('refreshDisplayedPages:start');
     for (let i = 0; i < this.viewerViewModel.displayedPageIndices.length; i++) {
       const pageIndex = this.viewerViewModel.displayedPageIndices[i];
       const cache = await this.getPageCache(pageIndex, this.currentRenderScale);
       if (i === 0) {
-        this.logSlideMainUpdate('mainSlot:refreshDisplayedPages', `slot=0 page=${pageIndex}`);
         this.view1PixelMap = cache.pixelMap;
         this.view1ViewSize = cache.displaySize;
       } else if (i === 1) {
-        this.logSlideMainUpdate('mainSlot:refreshDisplayedPages', `slot=1 page=${pageIndex}`);
         this.view2PixelMap = cache.pixelMap;
         this.view2ViewSize = cache.displaySize;
       } else if (i === 2) {
-        this.logSlideMainUpdate('mainSlot:refreshDisplayedPages', `slot=2 page=${pageIndex}`);
         this.view3PixelMap = cache.pixelMap;
         this.view3ViewSize = cache.displaySize;
       }
     }
     this.updateViewerViewSize();
     this.redrawStrokes();
-    this.logSlideMainUpdate('refreshDisplayedPages:finish');
   }
 
   redrawStrokes(): void {
@@ -3361,7 +3306,9 @@ struct PDFView {
             viewSize: this.view2ViewSize,
             canvasSize: this.getCanvasSize(this.viewerViewModel.displayedPageIndices[1] ?? 0),
             canvasScale: this.getCanvasScale(1),
-            visible: this.viewerViewModel.shouldShowSecondSlot(),
+            visible: this.viewerViewModel.shouldShowSecondSlot() &&
+              this.viewerViewModel.displayedPageIndices.length >= 2,
+            occupyLayoutWhenHidden: this.viewerViewModel.shouldShowSecondSlot(),
             drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag',
             annotateCtx: this.view2Ctx,
             drawCtx: this.view2DrawCtx,
@@ -3375,7 +3322,9 @@ struct PDFView {
             viewSize: this.view3ViewSize,
             canvasSize: this.getCanvasSize(this.viewerViewModel.displayedPageIndices[2] ?? 0),
             canvasScale: this.getCanvasScale(2),
-            visible: this.viewerViewModel.shouldShowThirdSlot(),
+            visible: this.viewerViewModel.shouldShowThirdSlot() &&
+              this.viewerViewModel.displayedPageIndices.length >= 3,
+            occupyLayoutWhenHidden: this.viewerViewModel.shouldShowThirdSlot(),
             drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag',
             annotateCtx: this.view3Ctx,
             drawCtx: this.view3DrawCtx,
@@ -3534,10 +3483,7 @@ struct PDFView {
             this.syncPanelOverlays();
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             if (!this.shouldDeferViewportFitReset()) {
-              this.logSlideMainUpdate('viewportAreaChange:resetFit');
               this.resetViewToFit();
-            } else {
-              this.logSlideMainUpdate('viewportAreaChange:deferFit');
             }
           })
           .hitTestBehavior(HitTestMode.Transparent)
