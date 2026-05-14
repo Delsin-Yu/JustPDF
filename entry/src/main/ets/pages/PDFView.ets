@@ -596,8 +596,12 @@ struct PDFView {
   settingsDialogController: CustomDialogController = new CustomDialogController({
     builder: SettingsDialogBuilder({
       showSlider: this.viewerViewModel.showSlider,
+      horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
       onSliderToggled: (show: boolean) => {
         this.viewerViewModel.setShowSlider(show);
+      },
+      onHorizontalSlideSensitivityChange: (level: number) => {
+        this.viewerViewModel.setHorizontalSlideSensitivity(level);
       }
     }),
     width: '40%',
@@ -619,8 +623,12 @@ struct PDFView {
     this.settingsDialogController = new CustomDialogController({
       builder: SettingsDialogBuilder({
         showSlider: this.viewerViewModel.showSlider,
+        horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
         onSliderToggled: (show: boolean) => {
           this.viewerViewModel.setShowSlider(show);
+        },
+        onHorizontalSlideSensitivityChange: (level: number) => {
+          this.viewerViewModel.setHorizontalSlideSensitivity(level);
         }
       }),
       width: '40%'
@@ -1795,23 +1803,66 @@ struct PDFView {
     return 0;
   }
 
+  private clampSlideTuning(value: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, value));
+  }
+
+  /** -1（钝）～+1（敏），由设置中 0～10 档映射 */
+  private getHorizontalSlideSensK(): number {
+    const level = this.clampSlideTuning(this.viewerViewModel.horizontalSlideSensitivity, 0, 10);
+    return (level - 5) / 5;
+  }
+
+  private getSlideDragGainEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(PAGE_TURN_DRAG_GAIN * (1 + 0.28 * k), 1.12, 1.98);
+  }
+
+  private getSlideCommitRatioSlowEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(PAGE_TURN_COMMIT_RATIO_SLOW * (1 - 0.35 * k), 0.13, 0.34);
+  }
+
+  private getSlideCommitRatioFastEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(PAGE_TURN_COMMIT_RATIO_FAST * (1 - 0.45 * k), 0.034, 0.12);
+  }
+
+  private getSlideSpeedRefVpPerMsEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(0.52 * (1 - 0.22 * k), 0.36, 0.64);
+  }
+
+  private getSlideFlickVpPerMsEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(PAGE_TURN_FLICK_VP_PER_MS * (1 - 0.34 * k), 0.25, 0.58);
+  }
+
+  private getSlideFlickMinProgressEff(): number {
+    const k = this.getHorizontalSlideSensK();
+    return this.clampSlideTuning(PAGE_TURN_FLICK_MIN_PROGRESS * (1 - 0.34 * k), 0.022, 0.058);
+  }
+
   /** 速度越快，所需 |offset|/viewport 比例越低；单位 vp/ms */
   private getDynamicCommitProgressThreshold(speedVpPerMs: number): number {
-    const refV = 0.52;
+    const refV = this.getSlideSpeedRefVpPerMsEff();
+    const fast = this.getSlideCommitRatioFastEff();
+    const slow = this.getSlideCommitRatioSlowEff();
     const s = Math.min(1, Math.abs(speedVpPerMs) / refV);
-    return PAGE_TURN_COMMIT_RATIO_FAST + (PAGE_TURN_COMMIT_RATIO_SLOW - PAGE_TURN_COMMIT_RATIO_FAST) * (1 - s);
+    return fast + (slow - fast) * (1 - s);
   }
 
   private shouldFlickCommit(direction: number, progress: number): boolean {
-    if (progress < PAGE_TURN_FLICK_MIN_PROGRESS) {
+    if (progress < this.getSlideFlickMinProgressEff()) {
       return false;
     }
     const v = this.slideVelocityVpPerMs;
+    const flick = this.getSlideFlickVpPerMsEff();
     if (direction === -1) {
-      return v <= -PAGE_TURN_FLICK_VP_PER_MS;
+      return v <= -flick;
     }
     if (direction === 1) {
-      return v >= PAGE_TURN_FLICK_VP_PER_MS;
+      return v >= flick;
     }
     return false;
   }
@@ -1935,7 +1986,7 @@ struct PDFView {
     this.pageTurnPreviewOffsetVp = 0;
     this.suppressSidePageFlipFromGesture = true;
     this.pageTurnOffsetVp =
-      this.applyElasticPageTurnOffset(firstHorizDeltaVp * PAGE_TURN_DRAG_GAIN, viewportWvp);
+      this.applyElasticPageTurnOffset(firstHorizDeltaVp * this.getSlideDragGainEff(), viewportWvp);
     this.transitionNeighborGen++;
     const gen = this.transitionNeighborGen;
     this.slideVelocityVpPerMs = 0;
@@ -2057,13 +2108,13 @@ struct PDFView {
     if (this.pageTurnDragActive) {
       vvm.panByDeltaVp(Vec2(0, dvp.y), ui);
       this.pageTurnOffsetVp = this.applyElasticPageTurnOffset(
-        this.pageTurnOffsetVp + dvp.x * PAGE_TURN_DRAG_GAIN,
+        this.pageTurnOffsetVp + dvp.x * this.getSlideDragGainEff(),
         viewportWvp
       );
       const now = Date.now();
       if (this.lastSlideSampleTimeMs > 0) {
         const dtMs = Math.max(1, now - this.lastSlideSampleTimeMs);
-        const instVpPerMs = (dvp.x * PAGE_TURN_DRAG_GAIN) / dtMs;
+        const instVpPerMs = (dvp.x * this.getSlideDragGainEff()) / dtMs;
         this.slideVelocityVpPerMs = 0.42 * this.slideVelocityVpPerMs + 0.58 * instVpPerMs;
       }
       this.lastSlideSampleTimeMs = now;

@@ -27,6 +27,7 @@ export type PDFAnnotateMode = 'drag' | 'draw' | 'erase';
 export type PalettePersistedTool = 'draw' | 'erase';
 
 const PaletteToolModePreferenceKey: string = 'paletteToolMode';
+const HorizontalSlideSensitivityPreferenceKey: string = 'horizontalSlideSensitivity';
 
 @ObservedV2
 export class PDFViewerViewModel {
@@ -46,6 +47,8 @@ export class PDFViewerViewModel {
   @Trace public viewSize: Vector2 = Vec2(0, 0);
   @Trace public showControls: boolean = true;
   @Trace public showSlider: boolean = true;
+  /** 横向滑动翻页灵敏度档位 0～10（设置滑块），5 为默认手感 */
+  @Trace public horizontalSlideSensitivity: number = 5;
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
   @Trace public isAnnotatePaletteVisible: boolean = false;
@@ -67,6 +70,12 @@ export class PDFViewerViewModel {
     try {
       this.showControls = preferencesValue.getSync('showControls', true) as boolean;
       this.showSlider = preferencesValue.getSync('showSlider', true) as boolean;
+      const rawSens: preferences.ValueType = preferencesValue.getSync(HorizontalSlideSensitivityPreferenceKey, 5);
+      if (typeof rawSens === 'number') {
+        this.horizontalSlideSensitivity = Math.max(0, Math.min(10, Math.round(rawSens)));
+      } else {
+        this.horizontalSlideSensitivity = 5;
+      }
       this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
       const flipRaw: string = preferencesValue.getSync('pageFlipMode', 'horizontalSlide') as string;
       if (flipRaw === 'side' || flipRaw === 'button' || flipRaw === 'extern' || flipRaw === 'horizontalSlide') {
@@ -281,6 +290,15 @@ export class PDFViewerViewModel {
   setShowSlider(value: boolean): void {
     this.showSlider = value;
     this.persistPreference('showSlider', value, '保存滑块偏好出错');
+  }
+
+  setHorizontalSlideSensitivity(level: number): void {
+    const clamped = Math.max(0, Math.min(10, Math.round(level)));
+    if (clamped === this.horizontalSlideSensitivity) {
+      return;
+    }
+    this.horizontalSlideSensitivity = clamped;
+    this.persistPreference(HorizontalSlideSensitivityPreferenceKey, clamped, '保存横向滑动灵敏度出错');
   }
 
   updateViewSize(view1Size: Vector2, view2Size: Vector2, view3Size: Vector2): void {
