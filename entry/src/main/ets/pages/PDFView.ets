@@ -51,8 +51,8 @@ const PAGE_TURN_FLICK_MIN_PROGRESS: number = 0.038;
 const PAGE_TURN_ELASTIC_EXTRA_RATIO: number = 0.38;
 /** 手指位移换算为翻页偏移的增益，略大于 1 可减少「拖很远才够翻页」的感觉 */
 const PAGE_TURN_DRAG_GAIN: number = 1.55;
-/** 横向滑动邻页预览条挂载时的淡入、取消/收尾时的淡出时长（毫秒） */
-const SLIDE_PREVIEW_FADE_MS: number = 500;
+/** 横向滑动：邻条取消 / defer 收尾淡出时长（毫秒），宜短以减轻连滑时的节奏感与「浮层」感 */
+const SLIDE_NEIGHBOR_FADE_OUT_MS: number = 160;
 
 const PageFlipButtonOption: ButtonOptions = { type: ButtonType.Normal }
 const PageFlipButtonSize: SizeOptions = { width: '30%', height: '100%' }
@@ -1715,7 +1715,7 @@ struct PDFView {
         return;
       }
       this.getUIContext().animateTo({
-        duration: SLIDE_PREVIEW_FADE_MS,
+        duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
         curve: Curve.EaseIn,
         onFinish: () => {
           if (g !== this.slideNeighborAppearFadeGen) {
@@ -1731,35 +1731,22 @@ struct PDFView {
       }, () => {
         this.pageTurnNeighborAppearOpacity = 0;
       });
-    }, 34);
+    }, 0);
   }
 
   /**
-   * 邻条挂载（占位或真实图）时从全透明淡入；与 slideNeighborAppearFadeGen 配合取消旧动画。
-   * 淡入在条带出现时即开始，不等整页加载完成，也不复用提交动画的 crossfade 通道。
+   * 邻条挂载（占位或真实图）时立即显示为不透明。
+   * 不再做长淡入：连滑时反复 0→1 会与主条位移叠出「浮层脉冲」；与主条保持全不透明一起更接近连续拖动。
    */
   private startSlideNeighborPreviewFadeIn(): void {
     if (this.viewerViewModel.pageFlipMode !== 'horizontalSlide') {
       return;
     }
     this.slideNeighborAppearFadeGen++;
-    const g = this.slideNeighborAppearFadeGen;
-    this.pageTurnNeighborAppearOpacity = 0;
-    this.getUIContext().animateTo({
-      duration: SLIDE_PREVIEW_FADE_MS,
-      curve: Curve.EaseOut,
-      onFinish: () => {
-        if (g !== this.slideNeighborAppearFadeGen) {
-          return;
-        }
-        this.pageTurnNeighborAppearOpacity = 1;
-      }
-    }, () => {
-      this.pageTurnNeighborAppearOpacity = 1;
-    });
+    this.pageTurnNeighborAppearOpacity = 1;
   }
 
-  /** 左侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制；提交时主条单独用 crossfade 淡出 */
+  /** 左侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制 */
   private getSlidePrevStripOpacity(): number {
     if (this.transPrevIndices.length > 0) {
       return this.pageTurnNeighborAppearOpacity;
@@ -1767,9 +1754,13 @@ struct PDFView {
     return 1;
   }
 
-  /** 中间主条：仅提交动画期间淡出 */
+  /**
+   * 中间主条不透明度。
+   * 提交动画期间不再淡出主条：否则邻条叠在上层、主条渐隐，连滑时像「手指上飘着一块页、底下还在翻」；
+   * 仅靠位移与邻条即可衔接，观感更接近连续纸带。
+   */
   private getSlideCurrentStripOpacity(): number {
-    return this.pageTurnCommitAnimating ? (1 - this.pageTurnCrossfadeT) : 1;
+    return 1;
   }
 
   /** 右侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制 */
@@ -1937,7 +1928,7 @@ struct PDFView {
 
   private beginPageTurnSession(direction: number, firstHorizDeltaVp: number, viewportWvp: number): void {
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 0;
+    this.pageTurnNeighborAppearOpacity = 1;
     this.pageTurnDragActive = true;
     this.pageTurnDirection = direction;
     this.pageTurnPreviewOffsetLocked = false;
@@ -2144,7 +2135,7 @@ struct PDFView {
       });
       if (hasPreviewStrip) {
         this.getUIContext().animateTo({
-          duration: SLIDE_PREVIEW_FADE_MS,
+          duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
           curve: Curve.EaseIn,
           onFinish: () => {
             if (cancelAnimGen !== this.slideNeighborAppearFadeGen) {
@@ -2185,12 +2176,12 @@ struct PDFView {
     const commitAnimGuard = this.slideCommitAnimGen;
     this.getUIContext().animateTo({
       duration: dur,
-      curve: Curve.EaseInOut,
+      curve: Curve.EaseOut,
       onFinish: () => {
         if (commitAnimGuard !== this.slideCommitAnimGen) {
           return;
         }
-        // 提交动画结束后仍保持旧主层隐藏，等 gotoPage 写入目标页后再恢复，避免旧页回闪一帧。
+        // 位移到位后再 goto：主条不再做淡出，由邻条与位移承担过渡，goto 后 reset 偏移。
         void this.gotoPage(targetPage, true);
       }
     }, () => {
@@ -3346,7 +3337,7 @@ struct PDFView {
         .translate({ x: this.pageTurnOffsetVp, y: 0 })
         .opacity(this.getSlideCurrentStripOpacity())
 
-        // 左侧预览条须叠在主文档层之上，否则提交动画交叉淡化时主层会完全挡住左侧条（仅向后滑明显闪一下）。
+        // 左侧预览条叠在主文档层之上，否则主条全宽时会挡住左侧邻条的可视区域。
         if (this.transPrevIndices.length > 0) {
           Row(ContainerCfg) {
             PDFPageSlot({
