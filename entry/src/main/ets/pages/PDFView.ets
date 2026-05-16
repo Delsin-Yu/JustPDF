@@ -33,6 +33,14 @@ import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
 import { PDFAnnotateMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './pdfview/AnnotateLongPressIndicator';
 import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth, PDFAnnotationPalette } from './pdfview/PDFAnnotationPalette';
+import { PDFBookmarkController, PDFBookmarkListItem } from './pdfview/PDFBookmarkController';
+import {
+  BookmarkPanelContentHeight,
+  BookmarkPanelContentWidth,
+  BookmarkTitleDialogBuilder,
+  getFloatingBookmarkTotalWidth,
+  PDFBookmarkPanelContent
+} from './pdfview/PDFBookmarkPanel';
 import {
   ModalBodyTextColor,
   ModalButtonPrimaryColor,
@@ -86,8 +94,13 @@ const DefaultTunerOffsetY: number = 112;
 const DefaultPaletteScale: number = 1.0;
 const PaletteMinScale: number = 0.5;
 const PaletteMaxScale: number = 1.5;
+const DefaultBookmarkScale: number = 1.0;
+const BookmarkMinScale: number = 0.7;
+const BookmarkMaxScale: number = 1.3;
+const DefaultBookmarkOffsetX: number = 24;
+const DefaultBookmarkOffsetY: number = 96;
 
-type OverlayPanelKey = 'metronome' | 'tuner';
+type OverlayPanelKey = 'metronome' | 'tuner' | 'bookmark';
 interface FloatingPanelOffset {
   x: number;
   y: number;
@@ -425,6 +438,121 @@ function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayParams) {
   .hitTestBehavior(HitTestMode.Transparent)
 }
 
+interface BookmarkOverlayOptions {
+  showWindow: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  entries: PDFBookmarkListItem[];
+  selectedId: string;
+  hasUnsavedBookmarks: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onSelect: (id: string) => void;
+  onNavigate: (pageIndex: number) => void;
+  onAddAtCurrentPage: () => void;
+  onDeleteSelected: () => void;
+  onRenameSelected: () => void;
+  onSaveDocument: () => void;
+  onClose: () => void;
+  onTouchStateChanged: (active: boolean) => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+}
+
+class BookmarkOverlayParams {
+  showWindow: boolean;
+  useDocked: boolean;
+  dockedTopOffsetVp: number;
+  entries: PDFBookmarkListItem[];
+  selectedId: string;
+  hasUnsavedBookmarks: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onSelect: (id: string) => void;
+  onNavigate: (pageIndex: number) => void;
+  onAddAtCurrentPage: () => void;
+  onDeleteSelected: () => void;
+  onRenameSelected: () => void;
+  onSaveDocument: () => void;
+  onClose: () => void;
+  onTouchStateChanged: (active: boolean) => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+
+  constructor(options: BookmarkOverlayOptions) {
+    this.showWindow = options.showWindow;
+    this.useDocked = options.useDocked;
+    this.dockedTopOffsetVp = options.dockedTopOffsetVp;
+    this.entries = options.entries;
+    this.selectedId = options.selectedId;
+    this.hasUnsavedBookmarks = options.hasUnsavedBookmarks;
+    this.hostScale = options.hostScale;
+    this.hostOffset = options.hostOffset;
+    this.onSelect = options.onSelect;
+    this.onNavigate = options.onNavigate;
+    this.onAddAtCurrentPage = options.onAddAtCurrentPage;
+    this.onDeleteSelected = options.onDeleteSelected;
+    this.onRenameSelected = options.onRenameSelected;
+    this.onSaveDocument = options.onSaveDocument;
+    this.onClose = options.onClose;
+    this.onTouchStateChanged = options.onTouchStateChanged;
+    this.onWindowAreaHeightChanged = options.onWindowAreaHeightChanged;
+    this.onHostDragStart = options.onHostDragStart;
+    this.onHostDragUpdate = options.onHostDragUpdate;
+    this.onHostDragEnd = options.onHostDragEnd;
+    this.onHostPinchStart = options.onHostPinchStart;
+    this.onHostPinchUpdate = options.onHostPinchUpdate;
+    this.onHostPinchEnd = options.onHostPinchEnd;
+  }
+}
+
+@Builder
+function BuildBookmarkOverlay(params: BookmarkOverlayParams) {
+  Stack() {
+    if (params.showWindow && !params.useDocked) {
+      PDFBookmarkPanelContent({
+        entries: params.entries,
+        selectedId: params.selectedId,
+        hasUnsavedBookmarks: params.hasUnsavedBookmarks,
+        useDocked: false,
+        dockedTopOffsetVp: 0,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        showDragHandle: true,
+        onSelect: params.onSelect,
+        onNavigate: params.onNavigate,
+        onAddAtCurrentPage: params.onAddAtCurrentPage,
+        onDeleteSelected: params.onDeleteSelected,
+        onRenameSelected: params.onRenameSelected,
+        onSave: params.onSaveDocument,
+        onClose: params.onClose,
+        onTouchStateChanged: params.onTouchStateChanged,
+        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd
+      })
+    }
+  }
+  .width('100%')
+  .height('100%')
+  .alignContent(Alignment.TopStart)
+  .hitTestBehavior(HitTestMode.Transparent)
+}
+
 @Entry
 @ComponentV2
 struct PDFView {
@@ -548,7 +676,10 @@ struct PDFView {
     onRequestGotoPage: (pageIndex: number) => {
       this.gotoPage(pageIndex);
     },
-    onRedrawRequested: () => this.redrawStrokes(),
+    onRedrawRequested: () => {
+      this.redrawStrokes();
+      this.syncPanelOverlays();
+    },
     onRefreshDisplayedPages: () => this.refreshDisplayedPages(),
     getPreferences: () => this.preferences
   }, CanvasOverSampling);
@@ -556,6 +687,10 @@ struct PDFView {
     getUIContext: () => this.getUIContext(),
     getHostContext: () => this.getUIContext().getHostContext() as common.UIAbilityContext,
     onVisualStateChanged: () => this.syncPanelOverlays()
+  });
+  @Local bookmarkController: PDFBookmarkController = new PDFBookmarkController({
+    getDocument: () => this.document,
+    onTreeChanged: () => this.syncPanelOverlays()
   });
   @Local tunerController: PDFTunerController = new PDFTunerController();
   @Local showTunerPanel: boolean = false;
@@ -566,6 +701,7 @@ struct PDFView {
   @Local metronomeViewportHeightVp: number = 0;
   @Local metronomePanelHeightVp: number = 0;
   @Local useDockedTunerPanel: boolean = false;
+  @Local useDockedBookmarkPanel: boolean = false;
   @Local tunerPanelScale: number = FloatingTunerDefaultScale;
   @Local tunerPanelOffset: FloatingPanelOffset = { x: DefaultTunerOffsetX, y: DefaultTunerOffsetY };
   @Local tunerViewportWidthVp: number = 0;
@@ -579,6 +715,11 @@ struct PDFView {
   @Local pageFlipShadeOpacity: number = 0;
   @Local palettePanelScale: number = DefaultPaletteScale;
   @Local palettePanelOffset: FloatingPanelOffset = { x: 0, y: 0 };
+  @Local bookmarkPanelScale: number = DefaultBookmarkScale;
+  @Local bookmarkPanelOffset: FloatingPanelOffset = { x: DefaultBookmarkOffsetX, y: DefaultBookmarkOffsetY };
+  @Local bookmarkPanelHeightVp: number = 0;
+  @Local bookmarkViewportWidthVp: number = 0;
+  @Local bookmarkViewportHeightVp: number = 0;
   @Local longPressProgress: number = 0;
   @Local longPressPosX: number = 0;
   @Local longPressPosY: number = 0;
@@ -587,6 +728,9 @@ struct PDFView {
   private longPressAnimId: number | undefined = undefined;
   private paletteDragStartOffset: FloatingPanelOffset = { x: 0, y: 0 };
   private palettePinchStartScale: number = DefaultPaletteScale;
+  private bookmarkDragStartOffset: FloatingPanelOffset = { x: DefaultBookmarkOffsetX, y: DefaultBookmarkOffsetY };
+  private bookmarkPinchStartScale: number = DefaultBookmarkScale;
+  private bookmarkRenameDialogController: CustomDialogController | undefined = undefined;
   private longPressStartTime: number = 0;
   private longPressTouchDown: boolean = false;
   hotkeys: InputAction[] = [];
@@ -600,6 +744,7 @@ struct PDFView {
   private metronomeOverlayContent: ComponentContent<MetronomeOverlayParams> | undefined = undefined;
   private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
   private paletteOverlayContent: ComponentContent<AnnotationPaletteOverlayParams> | undefined = undefined;
+  private bookmarkOverlayContent: ComponentContent<BookmarkOverlayParams> | undefined = undefined;
   private metronomeDragStartOffset: FloatingPanelOffset = { x: 0, y: 0 };
   private tunerDragStartOffset: FloatingPanelOffset = { x: DefaultTunerOffsetX, y: DefaultTunerOffsetY };
   private metronomePinchStartScale: number = FloatingMetronomeDefaultScale;
@@ -633,6 +778,18 @@ struct PDFView {
     width: '40%',
   });
 
+  /** 与「更多」→「保存文档」相同：选择保存位置并写入 PDF（含书签与批注）。 */
+  private executeSaveDocument(): void {
+    void this.annotationController.executeSave()
+      .then((saved: boolean) => {
+        if (saved) {
+          this.bookmarkController.markDocumentSaved();
+        }
+        this.syncPanelOverlays();
+      })
+      .catch((error: Error) => hilog.error(0, 'PDFView', `保存文档出错: ${error.message}`));
+  }
+
   backToMainMenu(): void {
     // 关闭节拍器、调音器、批注画板三个浮层并把关闭状态推到 OverlayManager，
     // 防止离开 PDFView 后这些浮层在窗口级 OverlayManager 中残留显示，
@@ -640,6 +797,7 @@ struct PDFView {
     this.metronomeController.closeWindow();
     this.setTunerPanelVisible(false);
     this.viewerViewModel.closeAnnotatePalette();
+    this.viewerViewModel.closeBookmarkPanel();
     this.syncPanelOverlays();
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
     });
@@ -665,9 +823,13 @@ struct PDFView {
     this.lastWindowWidthPx = windowWidthPx;
     const metronomeTotalWidthPx = this.getUIContext().vp2px(getFloatingMetronomeTotalWidth(this.metronomePanelScale));
     const tunerTotalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerPanelScale));
-    const shouldDockBoth = windowWidthPx <= metronomeTotalWidthPx || windowWidthPx <= tunerTotalWidthPx;
-    this.useDockedMetronomePanel = shouldDockBoth;
-    this.useDockedTunerPanel = shouldDockBoth;
+    const bookmarkTotalWidthPx = this.getUIContext().vp2px(getFloatingBookmarkTotalWidth(this.bookmarkPanelScale));
+    const shouldDockPanels = windowWidthPx <= metronomeTotalWidthPx
+      || windowWidthPx <= tunerTotalWidthPx
+      || windowWidthPx <= bookmarkTotalWidthPx;
+    this.useDockedMetronomePanel = shouldDockPanels;
+    this.useDockedTunerPanel = shouldDockPanels;
+    this.useDockedBookmarkPanel = shouldDockPanels;
   }
 
   private isMetronomeDockedVisible(): boolean {
@@ -678,12 +840,34 @@ struct PDFView {
     return this.useDockedTunerPanel && this.isTunerPanelVisible();
   }
 
-  private hasAnyDockedVisiblePanel(): boolean {
-    return this.isMetronomeDockedVisible() || this.isTunerDockedVisible();
+  private isBookmarkPanelVisible(): boolean {
+    return this.viewerViewModel.isBookmarkPanelVisible;
   }
 
-  private isUnifiedDockedPanelVisible(): boolean {
-    return this.isMetronomeDockedVisible() && this.isTunerDockedVisible();
+  private isBookmarkDockedVisible(): boolean {
+    return this.useDockedBookmarkPanel && this.isBookmarkPanelVisible();
+  }
+
+  private hasAnyDockedVisiblePanel(): boolean {
+    return this.isMetronomeDockedVisible() || this.isTunerDockedVisible() || this.isBookmarkDockedVisible();
+  }
+
+  private getVisibleDockedPanelCount(): number {
+    let count = 0;
+    if (this.isMetronomeDockedVisible()) {
+      count += 1;
+    }
+    if (this.isTunerDockedVisible()) {
+      count += 1;
+    }
+    if (this.isBookmarkDockedVisible()) {
+      count += 1;
+    }
+    return count;
+  }
+
+  private isMultiDockedPanelVisible(): boolean {
+    return this.getVisibleDockedPanelCount() >= 2;
   }
 
   private getActiveDockedPanel(): OverlayPanelKey {
@@ -693,10 +877,16 @@ struct PDFView {
     if (this.activePanel === 'tuner' && this.isTunerDockedVisible()) {
       return 'tuner';
     }
+    if (this.activePanel === 'bookmark' && this.isBookmarkDockedVisible()) {
+      return 'bookmark';
+    }
     if (this.isMetronomeDockedVisible()) {
       return 'metronome';
     }
-    return 'tuner';
+    if (this.isTunerDockedVisible()) {
+      return 'tuner';
+    }
+    return 'bookmark';
   }
 
   private isDockedPanelTabActive(panel: OverlayPanelKey): boolean {
@@ -811,14 +1001,14 @@ struct PDFView {
     if (this.dockedPanelHeightVp > 0) {
       return this.dockedPanelHeightVp;
     }
-    if (this.isUnifiedDockedPanelVisible()) {
-      return (this.getActiveDockedPanel() === 'metronome' ? this.metronomePanelHeightVp : this.tunerPanelHeightVp)
-        + UnifiedDockTabBarHeightVp;
+    const tabBarHeight = this.isMultiDockedPanelVisible() ? UnifiedDockTabBarHeightVp : 0;
+    if (this.getActiveDockedPanel() === 'metronome') {
+      return this.metronomePanelHeightVp + tabBarHeight;
     }
-    if (this.isMetronomeDockedVisible()) {
-      return this.metronomePanelHeightVp;
+    if (this.getActiveDockedPanel() === 'tuner') {
+      return this.tunerPanelHeightVp + tabBarHeight;
     }
-    return this.tunerPanelHeightVp;
+    return this.bookmarkPanelHeightVp + tabBarHeight;
   }
 
   private handleDockedPanelHeightChanged(heightVp: number): void {
@@ -836,6 +1026,25 @@ struct PDFView {
 
   private getFloatingTunerMinYVp(): number {
     return this.getCurrentDockedPanelHeightVp();
+  }
+
+  private getFloatingBookmarkMinYVp(): number {
+    return this.getCurrentDockedPanelHeightVp();
+  }
+
+  private updateBookmarkViewport(windowSize: window.Size): void {
+    this.bookmarkViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
+    this.bookmarkViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
+    this.updatePanelDocking(windowSize.width);
+  }
+
+  private handleBookmarkPanelHeightChanged(heightVp: number): void {
+    if (Math.abs(this.bookmarkPanelHeightVp - heightVp) < 0.001) {
+      return;
+    }
+    this.bookmarkPanelHeightVp = heightVp;
+    this.syncPanelOffsetsToBounds();
+    this.syncPanelOverlays();
   }
 
   private clampMetronomeScale(scale: number): number {
@@ -893,6 +1102,13 @@ struct PDFView {
       || Math.abs(nextTunerOffset.y - this.tunerPanelOffset.y) >= 0.001) {
       this.tunerPanelOffset = nextTunerOffset;
       this.tunerDragStartOffset = { x: nextTunerOffset.x, y: nextTunerOffset.y };
+    }
+
+    const nextBookmarkOffset = this.getClampedBookmarkOffset();
+    if (Math.abs(nextBookmarkOffset.x - this.bookmarkPanelOffset.x) >= 0.001
+      || Math.abs(nextBookmarkOffset.y - this.bookmarkPanelOffset.y) >= 0.001) {
+      this.bookmarkPanelOffset = nextBookmarkOffset;
+      this.bookmarkDragStartOffset = { x: nextBookmarkOffset.x, y: nextBookmarkOffset.y };
     }
   }
 
@@ -1094,6 +1310,13 @@ struct PDFView {
           this.createAnnotationPaletteOverlayParams()
         );
       }
+      if (!this.bookmarkOverlayContent) {
+        this.bookmarkOverlayContent = new ComponentContent(
+          this.getUIContext(),
+          wrapBuilder<[BookmarkOverlayParams]>(BuildBookmarkOverlay),
+          this.createBookmarkOverlayParams()
+        );
+      }
       this.syncPanelOverlays();
     } catch (error) {
       hilog.error(0, 'PDFView', `初始化浮层管理器出错: ${error}.`);
@@ -1121,6 +1344,10 @@ struct PDFView {
       if (this.paletteOverlayContent) {
         this.paletteOverlayContent.update(this.createAnnotationPaletteOverlayParams());
         this.overlayManager.addComponentContent(this.paletteOverlayContent, 2);
+      }
+      if (this.bookmarkOverlayContent) {
+        this.bookmarkOverlayContent.update(this.createBookmarkOverlayParams());
+        this.overlayManager.addComponentContent(this.bookmarkOverlayContent, 3);
       }
     } catch (error) {
       hilog.error(0, 'PDFView', `同步浮层状态出错: ${error}.`);
@@ -1152,6 +1379,11 @@ struct PDFView {
         this.paletteOverlayContent.dispose();
         this.paletteOverlayContent = undefined;
       }
+      if (this.bookmarkOverlayContent) {
+        this.overlayManager.removeComponentContent(this.bookmarkOverlayContent);
+        this.bookmarkOverlayContent.dispose();
+        this.bookmarkOverlayContent = undefined;
+      }
     } catch (error) {
       hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
     }
@@ -1179,10 +1411,17 @@ struct PDFView {
     Column() {
       if (this.hasAnyDockedVisiblePanel()) {
         Column({ space: 0 }) {
-          if (this.isUnifiedDockedPanelVisible()) {
+          if (this.isMultiDockedPanelVisible()) {
             Row({ space: 10 }) {
-              this.buildDockedPanelTab('节拍器', 'metronome')
-              this.buildDockedPanelTab('调音器', 'tuner')
+              if (this.isMetronomeDockedVisible()) {
+                this.buildDockedPanelTab('节拍器', 'metronome')
+              }
+              if (this.isTunerDockedVisible()) {
+                this.buildDockedPanelTab('调音器', 'tuner')
+              }
+              if (this.isBookmarkDockedVisible()) {
+                this.buildDockedPanelTab('书签', 'bookmark')
+              }
             }
             .width('100%')
             .padding({
@@ -1221,7 +1460,7 @@ struct PDFView {
                     this.syncPanelOverlays();
                   }
                 })
-              } else if (this.isTunerDockedVisible()) {
+              } else if (this.getActiveDockedPanel() === 'tuner' && this.isTunerDockedVisible()) {
                 PDFTunerPanelContent({
                   controller: this.tunerController,
                   useDocked: true,
@@ -1244,6 +1483,51 @@ struct PDFView {
                     this.setTunerPanelVisible(false);
                     this.syncPanelOverlays();
                   }
+                })
+              } else if (this.isBookmarkDockedVisible()) {
+                PDFBookmarkPanelContent({
+                  entries: this.bookmarkController.entries,
+                  selectedId: this.bookmarkController.selectedId,
+                  hasUnsavedBookmarks: this.bookmarkController.isDirty,
+                  useDocked: true,
+                  dockedTopOffsetVp: 0,
+                  hostScale: 1,
+                  hostOffset: { x: 0, y: 0 },
+                  showDragHandle: false,
+                  onSelect: (id: string) => {
+                    this.bookmarkController.setSelectedId(id);
+                    this.syncPanelOverlays();
+                  },
+                  onNavigate: (pageIndex: number) => {
+                    void this.gotoPage(pageIndex);
+                  },
+                  onAddAtCurrentPage: () => {
+                    this.bookmarkController.addBookmarkAtPage(
+                      this.viewerViewModel.currentPageIndex,
+                      this.viewerViewModel.totalPageCount
+                    );
+                    this.syncPanelOverlays();
+                  },
+                  onDeleteSelected: () => {
+                    this.bookmarkController.removeSelected();
+                    this.syncPanelOverlays();
+                  },
+                  onRenameSelected: () => this.openBookmarkRenameDialog(),
+                  onSave: () => this.executeSaveDocument(),
+                  onClose: () => {
+                    this.viewerViewModel.closeBookmarkPanel();
+                    this.syncPanelOverlays();
+                  },
+                  onTouchStateChanged: (active: boolean) => {
+                    this.isPanelGestureActive = active;
+                  },
+                  onWindowAreaHeightChanged: (heightVp: number) => this.handleBookmarkPanelHeightChanged(heightVp),
+                  onHostDragStart: () => this.handleBookmarkHostDragStart(),
+                  onHostDragUpdate: (event: GestureEvent) => this.handleBookmarkHostDragUpdate(event),
+                  onHostDragEnd: () => this.handleBookmarkHostDragEnd(),
+                  onHostPinchStart: () => this.handleBookmarkHostPinchStart(),
+                  onHostPinchUpdate: (event: GestureEvent) => this.handleBookmarkHostPinchUpdate(event),
+                  onHostPinchEnd: () => this.handleBookmarkHostPinchEnd()
                 })
               }
             }
@@ -1311,6 +1595,7 @@ struct PDFView {
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
         this.updateMetronomeViewport(_windowSize);
         this.updateTunerViewport(_windowSize);
+        this.updateBookmarkViewport(_windowSize);
         this.syncPanelOffsetsToBounds();
         this.syncPanelOverlays();
       };
@@ -1352,7 +1637,7 @@ struct PDFView {
       this.annotationController.executeRedo();
       this.syncPanelOverlays();
     }));
-    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.annotationController.executeSave()));
+    this.hotkeys.push(new InputAction([KeyCode.KEYCODE_S], true, false, () => this.executeSaveDocument()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
 
@@ -1395,6 +1680,7 @@ struct PDFView {
 
     await this.createPlaceholderPixelMap();
     await this.gotoPage(0);
+    this.bookmarkController.refresh();
     this.isDocumentLoading = false;
     this.triggerPageFlipShadeIntro();
     this.startTransparencyTimeout();
@@ -3483,11 +3769,7 @@ struct PDFView {
         this.annotationController.executeRedo();
         this.syncPanelOverlays();
       },
-      onSave: () => {
-        this.annotationController.executeSave()
-          .then(() => this.syncPanelOverlays())
-          .catch((error: Error) => hilog.error(0, 'PDFView', `保存批注出错: ${error.message}`));
-      },
+      onSave: () => this.executeSaveDocument(),
       onClose: () => {
         this.annotationController.flushPendingDrawColorPreferences();
         this.viewerViewModel.closeAnnotatePalette();
@@ -3502,6 +3784,150 @@ struct PDFView {
       onHostPinchStart: () => this.handlePaletteHostPinchStart(),
       onHostPinchUpdate: (event: GestureEvent) => this.handlePaletteHostPinchUpdate(event),
       onHostPinchEnd: () => this.handlePaletteHostPinchEnd()
+    });
+  }
+
+  private getClampedBookmarkOffset(offset: FloatingPanelOffset = this.bookmarkPanelOffset): FloatingPanelOffset {
+    if (this.useDockedBookmarkPanel) {
+      return { x: 0, y: 0 };
+    }
+    const scaledW = getFloatingBookmarkTotalWidth(this.bookmarkPanelScale);
+    const scaledH = (this.bookmarkPanelHeightVp > 0 ? this.bookmarkPanelHeightVp : BookmarkPanelContentHeight)
+      * this.bookmarkPanelScale;
+    const viewportWidthVp = this.bookmarkViewportWidthVp > 0
+      ? this.bookmarkViewportWidthVp
+      : this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
+    const viewportHeightVp = this.bookmarkViewportHeightVp > 0
+      ? this.bookmarkViewportHeightVp
+      : this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    const minY = this.getFloatingBookmarkMinYVp();
+    const maxX = viewportWidthVp - scaledW - FloatingPanelMarginVp;
+    const maxY = viewportHeightVp - scaledH - FloatingPanelMarginVp;
+    return {
+      x: Math.max(0, Math.min(offset.x, Math.max(0, maxX))),
+      y: Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
+    };
+  }
+
+  private openBookmarkRenameDialog(): void {
+    if (this.bookmarkController.selectedId.length === 0) {
+      return;
+    }
+    this.bookmarkRenameDialogController = new CustomDialogController({
+      builder: BookmarkTitleDialogBuilder({
+        initialTitle: this.bookmarkController.getSelectedTitle(),
+        onCancel: () => {},
+        onConfirm: (title: string) => {
+          this.bookmarkController.renameSelected(title);
+          this.syncPanelOverlays();
+        }
+      }),
+      alignment: DialogAlignment.Center,
+      autoCancel: true,
+      customStyle: true,
+      maskColor: 'rgba(0, 0, 0, 0.38)'
+    });
+    this.bookmarkRenameDialogController.open();
+  }
+
+  private handleBookmarkHostDragStart(): void {
+    this.focusPanel('bookmark');
+    this.isPanelGestureActive = true;
+    const clampedOffset = this.getClampedBookmarkOffset();
+    this.bookmarkPanelOffset = clampedOffset;
+    this.bookmarkDragStartOffset = { x: clampedOffset.x, y: clampedOffset.y };
+    this.syncPanelOverlays();
+  }
+
+  private handleBookmarkHostDragUpdate(event: GestureEvent): void {
+    this.bookmarkPanelOffset = this.getClampedBookmarkOffset({
+      x: this.bookmarkDragStartOffset.x + event.offsetX * this.bookmarkPanelScale,
+      y: this.bookmarkDragStartOffset.y + event.offsetY * this.bookmarkPanelScale
+    });
+    this.syncPanelOverlays();
+  }
+
+  private handleBookmarkHostDragEnd(): void {
+    this.isPanelGestureActive = false;
+    this.syncPanelOverlays();
+  }
+
+  private handleBookmarkHostPinchStart(): void {
+    this.isPanelGestureActive = true;
+    this.bookmarkPinchStartScale = this.bookmarkPanelScale;
+  }
+
+  private handleBookmarkHostPinchUpdate(event: GestureEvent): void {
+    this.bookmarkPanelScale = Math.max(BookmarkMinScale, Math.min(BookmarkMaxScale, this.bookmarkPinchStartScale * event.scale));
+    this.bookmarkPanelOffset = this.getClampedBookmarkOffset();
+    this.syncPanelOverlays();
+  }
+
+  private handleBookmarkHostPinchEnd(): void {
+    this.bookmarkPinchStartScale = this.bookmarkPanelScale;
+    this.isPanelGestureActive = false;
+    this.syncPanelOverlays();
+  }
+
+  private toggleBookmarkPanel(): void {
+    this.focusPanel('bookmark');
+    this.viewerViewModel.toggleBookmarkPanel();
+    if (this.viewerViewModel.isBookmarkPanelVisible) {
+      try {
+        const rect = this.mainWindow.getWindowProperties().windowRect;
+        this.updateBookmarkViewport({ width: rect.width, height: rect.height });
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+    this.syncPanelOverlays();
+  }
+
+  private createBookmarkOverlayParams(): BookmarkOverlayParams {
+    return new BookmarkOverlayParams({
+      showWindow: this.viewerViewModel.isBookmarkPanelVisible,
+      useDocked: this.useDockedBookmarkPanel,
+      dockedTopOffsetVp: 0,
+      entries: this.bookmarkController.entries,
+      selectedId: this.bookmarkController.selectedId,
+      hasUnsavedBookmarks: this.bookmarkController.isDirty,
+      hostScale: this.useDockedBookmarkPanel ? 1 : this.bookmarkPanelScale,
+      hostOffset: this.getClampedBookmarkOffset(),
+      onSelect: (id: string) => {
+        this.bookmarkController.setSelectedId(id);
+        this.syncPanelOverlays();
+      },
+      onNavigate: (pageIndex: number) => {
+        void this.gotoPage(pageIndex);
+      },
+      onAddAtCurrentPage: () => {
+        this.bookmarkController.addBookmarkAtPage(
+          this.viewerViewModel.currentPageIndex,
+          this.viewerViewModel.totalPageCount
+        );
+        this.viewerViewModel.openBookmarkPanel();
+        this.syncPanelOverlays();
+      },
+      onDeleteSelected: () => {
+        this.bookmarkController.removeSelected();
+        this.syncPanelOverlays();
+      },
+      onRenameSelected: () => this.openBookmarkRenameDialog(),
+      onSaveDocument: () => this.executeSaveDocument(),
+      onClose: () => {
+        this.viewerViewModel.closeBookmarkPanel();
+        this.syncPanelOverlays();
+      },
+      onTouchStateChanged: (active: boolean) => {
+        this.isPanelGestureActive = active;
+      },
+      onWindowAreaHeightChanged: (heightVp: number) => this.handleBookmarkPanelHeightChanged(heightVp),
+      onHostDragStart: () => this.handleBookmarkHostDragStart(),
+      onHostDragUpdate: (event: GestureEvent) => this.handleBookmarkHostDragUpdate(event),
+      onHostDragEnd: () => this.handleBookmarkHostDragEnd(),
+      onHostPinchStart: () => this.handleBookmarkHostPinchStart(),
+      onHostPinchUpdate: (event: GestureEvent) => this.handleBookmarkHostPinchUpdate(event),
+      onHostPinchEnd: () => this.handleBookmarkHostPinchEnd()
     });
   }
 
@@ -3862,11 +4288,16 @@ struct PDFView {
                 onAnnotate: () => {
                   this.enterAnnotateMode();
                 },
-                onSaveAnnotation: () => {
-                  this.annotationController.executeSave()
-                    .then(() => this.syncPanelOverlays())
-                    .catch((error: Error) => hilog.error(0, 'PDFView', `保存批注出错: ${error.message}`));
-                }
+                onBookmarks: () => {
+                  this.toggleBookmarkPanel();
+                },
+                showBookmarkShortcut: this.bookmarkController.hasBookmarks,
+                hasUnsavedBookmarks: this.bookmarkController.isDirty,
+                hasUnsavedDocument: this.bookmarkController.isDirty
+                  || this.annotationController.hasUnsavedStrokes,
+                hasUnsavedAnnotations: this.annotationController.hasUnsavedStrokes,
+                onToggleBookmark: () => this.toggleBookmarkPanel(),
+                onSaveAnnotation: () => this.executeSaveDocument()
               })
 
               Blank()

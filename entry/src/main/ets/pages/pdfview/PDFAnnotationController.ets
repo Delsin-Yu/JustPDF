@@ -413,24 +413,24 @@ export class PDFAnnotationController {
     this.dependencies.onRedrawRequested();
   }
 
-  async executeSave(): Promise<void> {
+  async executeSave(): Promise<boolean> {
     const saveUri = await this.pickSaveUri();
     if (!saveUri || saveUri.length === 0) {
-      return;
+      return false;
     }
 
     const affectedPage = this.collectAffectedAnnotations();
     if (!(await this.saveDocumentToTemp(affectedPage))) {
-      return;
+      return false;
     }
 
     if (!(await this.copyTempToSaveUri(saveUri, affectedPage))) {
       await this.writeEditRenderDocument();
-      return;
+      return false;
     }
 
     if (!(await this.commitTempToSandbox(affectedPage))) {
-      return;
+      return false;
     }
 
     this.dependencies.pageDataSource.clearAllStrokes();
@@ -440,6 +440,7 @@ export class PDFAnnotationController {
     this.hasUnsavedStrokes = false;
     this.importedPolylinePrepared = false;
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
+    return true;
   }
 
   private appendUndoHistory(history: History): void {
