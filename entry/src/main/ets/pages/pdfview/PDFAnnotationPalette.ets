@@ -1,4 +1,8 @@
-import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from './PDFPanelVisualConstants';
+import {
+  SharedPanelBackgroundColor,
+  SharedPanelControlHighlightColor,
+  UnsavedChangesIndicatorColor
+} from './PDFPanelVisualConstants';
 import { PDFAnnotateMode } from './PDFViewerViewModel';
 import {
   AnnotationColor,
@@ -312,12 +316,24 @@ export struct PDFAnnotationPalette {
           .enabled(this.redoCount > 0).opacity(this.redoCount > 0 ? 1.0 : 0.35)
           .onClick(() => this.onRedo())
 
-          Button({ type: ButtonType.Normal }) {
-            SymbolGlyph($r('sys.symbol.save')).fontSize(20).fontColor([Color.White])
+          Stack({ alignContent: Alignment.TopEnd }) {
+            Button({ type: ButtonType.Normal }) {
+              SymbolGlyph($r('sys.symbol.save')).fontSize(20).fontColor([Color.White])
+            }
+            .width(BtnSize).height(BtnSize).borderRadius(10)
+            .backgroundColor(Color.Transparent)
+            .onClick(() => this.onSave())
+
+            if (this.hasUnsaved) {
+              Text('')
+                .width(10)
+                .height(10)
+                .borderRadius(5)
+                .backgroundColor(UnsavedChangesIndicatorColor)
+            }
           }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(Color.Transparent)
-          .onClick(() => this.onSave())
+          .width(BtnSize)
+          .height(BtnSize)
         }
       }
     }
