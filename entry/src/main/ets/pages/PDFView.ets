@@ -335,6 +335,7 @@ function BuildTunerOverlay(params: TunerOverlayParams) {
 
 interface AnnotationPaletteOverlayOptions {
   showWindow: boolean;
+  readOnly: boolean;
   annotateMode: PDFAnnotateMode;
   undoCount: number;
   redoCount: number;
@@ -363,6 +364,7 @@ interface AnnotationPaletteOverlayOptions {
 
 class AnnotationPaletteOverlayParams {
   showWindow: boolean;
+  readOnly: boolean;
   annotateMode: PDFAnnotateMode;
   undoCount: number;
   redoCount: number;
@@ -390,6 +392,7 @@ class AnnotationPaletteOverlayParams {
 
   constructor(options: AnnotationPaletteOverlayOptions) {
     this.showWindow = options.showWindow;
+    this.readOnly = options.readOnly;
     this.annotateMode = options.annotateMode;
     this.undoCount = options.undoCount;
     this.redoCount = options.redoCount;
@@ -422,6 +425,7 @@ function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayParams) {
   Stack() {
     if (params.showWindow) {
       PDFAnnotationPalette({
+        readOnly: params.readOnly,
         annotateMode: params.annotateMode,
         undoCount: params.undoCount,
         redoCount: params.redoCount,
@@ -457,6 +461,7 @@ function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayParams) {
 
 interface BookmarkOverlayOptions {
   showWindow: boolean;
+  readOnly: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
   entries: PDFBookmarkListItem[];
@@ -483,6 +488,7 @@ interface BookmarkOverlayOptions {
 
 class BookmarkOverlayParams {
   showWindow: boolean;
+  readOnly: boolean;
   useDocked: boolean;
   dockedTopOffsetVp: number;
   entries: PDFBookmarkListItem[];
@@ -508,6 +514,7 @@ class BookmarkOverlayParams {
 
   constructor(options: BookmarkOverlayOptions) {
     this.showWindow = options.showWindow;
+    this.readOnly = options.readOnly;
     this.useDocked = options.useDocked;
     this.dockedTopOffsetVp = options.dockedTopOffsetVp;
     this.entries = options.entries;
@@ -541,6 +548,7 @@ function BuildBookmarkOverlay(params: BookmarkOverlayParams) {
         entries: params.entries,
         selectedId: params.selectedId,
         hasUnsavedBookmarks: params.hasUnsavedBookmarks,
+        readOnly: params.readOnly,
         useDocked: false,
         dockedTopOffsetVp: 0,
         hostScale: params.hostScale,
@@ -705,6 +713,7 @@ struct PDFView {
     document: this.document,
     getSystemPath: () => this.systemPath,
     getSandBoxPath: () => this.sandBoxPath,
+    getOpenPassword: () => this.sessionPdfPassword,
     getSaveTempPath: () => this.saveTempPath,
     getFileName: () => this.fileName,
     getUIContext: () => this.getUIContext(),
@@ -717,7 +726,13 @@ struct PDFView {
     },
     onRefreshDisplayedPages: () => this.refreshDisplayedPages(),
     getPreferences: () => this.preferences,
-    getOpenPassword: () => this.sessionPdfPassword,
+    onSavePhase: (message: string) => {
+      if (!this.isDocumentSaving) {
+        this.enterDocumentReadOnlyForSave();
+      }
+      this.isDocumentSaving = true;
+      this.documentSaveMessage = message;
+    },
     onAnnotatePreparePhase: (message: string, options?: AnnotatePreparePhaseOptions) => {
       this.isAnnotateModePreparing = true;
       this.isAnnotatePrepareBlockingEdits = options?.blocksEditing === true;
@@ -827,22 +842,6 @@ struct PDFView {
     width: '40%',
   });
 
-  /** 与「更多」→「保存文档」相同：选择保存位置并写入 PDF（含书签与批注）。 */
-  private executeSaveDocument(): void {
-    void this.annotationController.executeSave()
-      .then((saved: boolean) => {
-        if (saved) {
-          this.bookmarkController.markDocumentSaved();
-        }
-        this.syncPanelOverlays();
-      })
-      .catch((error: Error) => hilog.error(0, 'PDFView', `保存文档出错: ${error.message}`))
-      .finally(() => {
-        this.isDocumentSaving = false;
-        this.documentSaveMessage = '';
-      });
-  }
-
   private isDocumentReadOnly(): boolean {
     return this.isDocumentSaving || this.isAnnotatePrepareBlockingEdits;
   }
@@ -874,6 +873,86 @@ struct PDFView {
     this.isAnnotateModePreparing = false;
     this.isAnnotatePrepareBlockingEdits = false;
     this.annotatePrepareMessage = '';
+  }
+
+  /** 保存进行中：结束批注交互并关闭批注面板，避免与写入冲突。 */
+  private enterDocumentReadOnlyForSave(): void {
+    this.cancelLongPress();
+    const resetResult = this.annotationController.resetTransientState();
+    if (resetResult.clearedDraw) {
+      this.view1DrawCtx.reset();
+      this.view2DrawCtx.reset();
+      this.view3DrawCtx.reset();
+    }
+    if (resetResult.clearedErase) {
+      this.redrawStrokes();
+    }
+    this.viewerViewModel.closeAnnotatePalette();
+    this.syncPanelOverlays();
+  }
+
+  /** 与「更多」→「保存文档」相同：选择保存位置并写入 PDF（含书签与批注）。 */
+  private executeSaveDocument(): void {
+    if (this.isDocumentSaving || this.isAnnotateModePreparing) {
+      return;
+    }
+    void this.annotationController.executeSave()
+      .then((saved: boolean) => {
+        if (saved) {
+          this.bookmarkController.markDocumentSaved();
+        }
+        this.syncPanelOverlays();
+      })
+      .catch((error: Error) => hilog.error(0, 'PDFView', `保存文档出错: ${error.message}`))
+      .finally(() => {
+        this.isDocumentSaving = false;
+        this.documentSaveMessage = '';
+      });
+  }
+
+  private getTopRightStatusMessage(): string {
+    if (this.isDocumentSaving) {
+      return this.documentSaveMessage.length > 0 ? this.documentSaveMessage : '正在保存…';
+    }
+    if (this.isAnnotateModePreparing) {
+      return this.annotatePrepareMessage.length > 0 ? this.annotatePrepareMessage : '正在准备批注模式…';
+    }
+    return '';
+  }
+
+  @Builder
+  TopRightStatusIndicatorOverlay() {
+    if (this.isDocumentSaving || this.isAnnotateModePreparing) {
+      Row({ space: 8 }) {
+        LoadingProgress()
+          .width(22)
+          .height(22)
+          .color(ViewerPageLoadingIndicatorColor)
+        Text(this.getTopRightStatusMessage())
+          .fontSize(13)
+          .fontColor(ViewerPageLoadingTextColor)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .constraintSize({ maxWidth: '55%' })
+      .padding({
+        left: 12,
+        right: 12,
+        top: 8,
+        bottom: 8
+      })
+      .backgroundColor(ModalCardBackgroundColor)
+      .borderRadius(20)
+      .border({ width: 1, color: ModalCardBorderColor })
+      .shadow(ModalCardShadow)
+      .alignRules(TopRight)
+      .margin({
+        top: this.getUIContext().px2vp(this.avoidAreaTopPx) + 12,
+        right: 16
+      })
+      .hitTestBehavior(HitTestMode.None)
+      .zIndex(200)
+    }
   }
 
   backToMainMenu(): void {
@@ -1590,7 +1669,11 @@ struct PDFView {
                   onNavigate: (pageIndex: number) => {
                     void this.gotoPage(pageIndex);
                   },
+                  readOnly: this.isDocumentReadOnly(),
                   onAddAtCurrentPage: () => {
+                    if (this.isDocumentReadOnly()) {
+                      return;
+                    }
                     this.bookmarkController.addBookmarkAtPage(
                       this.viewerViewModel.currentPageIndex,
                       this.viewerViewModel.totalPageCount
@@ -1598,10 +1681,18 @@ struct PDFView {
                     this.syncPanelOverlays();
                   },
                   onDeleteSelected: () => {
+                    if (this.isDocumentReadOnly()) {
+                      return;
+                    }
                     this.bookmarkController.removeSelected();
                     this.syncPanelOverlays();
                   },
-                  onRenameSelected: () => this.openBookmarkRenameDialog(),
+                  onRenameSelected: () => {
+                    if (this.isDocumentReadOnly()) {
+                      return;
+                    }
+                    this.openBookmarkRenameDialog();
+                  },
                   onSave: () => this.executeSaveDocument(),
                   onClose: () => {
                     this.viewerViewModel.closeBookmarkPanel();
@@ -1730,14 +1821,23 @@ struct PDFView {
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], false, false, () => this.navigateNextPage()));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, false, () => {
+      if (this.isDocumentReadOnly()) {
+        return;
+      }
       this.annotationController.executeUndo();
       this.syncPanelOverlays();
     }));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Z], true, true, () => {
+      if (this.isDocumentReadOnly()) {
+        return;
+      }
       this.annotationController.executeRedo();
       this.syncPanelOverlays();
     }));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_Y], true, false, () => {
+      if (this.isDocumentReadOnly()) {
+        return;
+      }
       this.annotationController.executeRedo();
       this.syncPanelOverlays();
     }));
@@ -3646,6 +3746,9 @@ struct PDFView {
     pageIndex: number,
     event: TouchEvent
   ): void {
+    if (this.isDocumentReadOnly()) {
+      return;
+    }
     if (this.isPanelGestureActive) {
       const resetResult = this.annotationController.resetTransientState();
       if (resetResult.clearedDraw) {
@@ -3743,7 +3846,9 @@ struct PDFView {
       event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
 
     if (isTripleTouch) {
-      if (event.type === TouchType.Down && (this.annotationController.annotateMode === 'draw' || this.annotationController.annotateMode === 'erase')) {
+      if (!this.isDocumentReadOnly()
+        && event.type === TouchType.Down
+        && (this.annotationController.annotateMode === 'draw' || this.annotationController.annotateMode === 'erase')) {
         this.annotationController.executeUndo();
         this.syncPanelOverlays();
       }
@@ -3767,7 +3872,7 @@ struct PDFView {
         this.lastTouchPoint = touchPoint;
         this.panSessionStartPoint = touchPoint;
         this.suppressSidePageFlipFromGesture = false;
-        if (!this.viewerViewModel.isAnnotatePaletteVisible) {
+        if (!this.viewerViewModel.isAnnotatePaletteVisible && !this.isDocumentReadOnly()) {
           this.startLongPressDetection(touchPoint.x, touchPoint.y);
         }
       } else if (event.type == TouchType.Move) {
@@ -3935,6 +4040,9 @@ struct PDFView {
     pageIndex: number,
     event: MouseEvent
   ): void {
+    if (this.isDocumentReadOnly()) {
+      return;
+    }
     if (this.isPanelGestureActive) {
       return;
     }
@@ -4121,6 +4229,7 @@ struct PDFView {
   private createAnnotationPaletteOverlayParams(): AnnotationPaletteOverlayParams {
     return new AnnotationPaletteOverlayParams({
       showWindow: this.viewerViewModel.isAnnotatePaletteVisible,
+      readOnly: this.isDocumentReadOnly(),
       annotateMode: this.viewerViewModel.annotateMode,
       undoCount: this.annotationController.undoHistoryCount,
       redoCount: this.annotationController.redoHistoryCount,
@@ -4132,23 +4241,38 @@ struct PDFView {
       recentCustomColors: this.annotationController.recentCustomColors,
       onSetMode: (mode: PDFAnnotateMode) => this.handlePaletteSetMode(mode),
       onSelectDrawColor: (color: AnnotationColor) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.annotationController.setSelectedDrawColor(color);
         this.syncPanelOverlays();
       },
       onSetCustomDrawColor: (color: AnnotationColor) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.annotationController.setCustomDrawColor(color);
         this.syncPanelOverlays();
       },
       onCommitRecentCustomColor: (color: AnnotationColor) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.annotationController.pushRecentCustomColor(color);
         this.annotationController.flushPendingDrawColorPreferences();
         this.syncPanelOverlays();
       },
       onUndo: () => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.annotationController.executeUndo();
         this.syncPanelOverlays();
       },
       onRedo: () => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.annotationController.executeRedo();
         this.syncPanelOverlays();
       },
@@ -4193,6 +4317,9 @@ struct PDFView {
   }
 
   private openBookmarkRenameDialog(): void {
+    if (this.isDocumentReadOnly()) {
+      return;
+    }
     if (this.bookmarkController.selectedId.length === 0) {
       return;
     }
@@ -4269,6 +4396,7 @@ struct PDFView {
   private createBookmarkOverlayParams(): BookmarkOverlayParams {
     return new BookmarkOverlayParams({
       showWindow: this.viewerViewModel.isBookmarkPanelVisible,
+      readOnly: this.isDocumentReadOnly(),
       useDocked: this.useDockedBookmarkPanel,
       dockedTopOffsetVp: 0,
       entries: this.bookmarkController.entries,
@@ -4284,6 +4412,9 @@ struct PDFView {
         void this.gotoPage(pageIndex);
       },
       onAddAtCurrentPage: () => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.bookmarkController.addBookmarkAtPage(
           this.viewerViewModel.currentPageIndex,
           this.viewerViewModel.totalPageCount
@@ -4292,6 +4423,9 @@ struct PDFView {
         this.syncPanelOverlays();
       },
       onDeleteSelected: () => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
         this.bookmarkController.removeSelected();
         this.syncPanelOverlays();
       },
@@ -4315,6 +4449,9 @@ struct PDFView {
   }
 
   handlePaletteSetMode(mode: PDFAnnotateMode): void {
+    if (this.isDocumentReadOnly()) {
+      return;
+    }
     if (this.viewerViewModel.annotateMode === mode) {
       this.viewerViewModel.closeAnnotatePalette();
     } else {
@@ -4359,7 +4496,7 @@ struct PDFView {
             canvasSize: this.getCanvasSize(this.viewerViewModel.displayedPageIndices[0] ?? 0),
             canvasScale: this.getCanvasScale(0),
             visible: true,
-            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag',
+            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag' && !this.isDocumentReadOnly(),
             annotateCtx: this.view1Ctx,
             drawCtx: this.view1DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.viewerViewModel.displayedPageIndices[0] ?? 0, event),
@@ -4375,7 +4512,7 @@ struct PDFView {
             visible: this.viewerViewModel.shouldShowSecondSlot() &&
               this.viewerViewModel.displayedPageIndices.length >= 2,
             occupyLayoutWhenHidden: this.viewerViewModel.shouldShowSecondSlot(),
-            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag',
+            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag' && !this.isDocumentReadOnly(),
             annotateCtx: this.view2Ctx,
             drawCtx: this.view2DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.viewerViewModel.displayedPageIndices[1] ?? 0, event),
@@ -4391,7 +4528,7 @@ struct PDFView {
             visible: this.viewerViewModel.shouldShowThirdSlot() &&
               this.viewerViewModel.displayedPageIndices.length >= 3,
             occupyLayoutWhenHidden: this.viewerViewModel.shouldShowThirdSlot(),
-            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag',
+            drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag' && !this.isDocumentReadOnly(),
             annotateCtx: this.view3Ctx,
             drawCtx: this.view3DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.viewerViewModel.displayedPageIndices[2] ?? 0, event),
@@ -4705,6 +4842,8 @@ struct PDFView {
         .margin(ContainerPadding)
         .hitTestBehavior(HitTestMode.Transparent)
         .opacity(this.viewerViewModel.controlsTransparency)
+
+        this.TopRightStatusIndicatorOverlay()
       }
 
       if (this.isDocumentLoading) {
