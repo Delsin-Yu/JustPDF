@@ -52,6 +52,7 @@ export class PDFViewerViewModel {
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
   @Trace public isAnnotatePaletteVisible: boolean = false;
+  @Trace public isBookmarkPanelVisible: boolean = false;
   private savedPageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
   /**
@@ -280,6 +281,18 @@ export class PDFViewerViewModel {
     if (this.pageFlipMode !== this.savedPageFlipMode) {
       this.setPageFlipMode(this.savedPageFlipMode);
     }
+  }
+
+  toggleBookmarkPanel(): void {
+    this.isBookmarkPanelVisible = !this.isBookmarkPanelVisible;
+  }
+
+  openBookmarkPanel(): void {
+    this.isBookmarkPanelVisible = true;
+  }
+
+  closeBookmarkPanel(): void {
+    this.isBookmarkPanelVisible = false;
   }
 
   setShowControls(value: boolean): void {
