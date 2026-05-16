@@ -23,6 +23,7 @@
         "startWindowBackground": "$color:start_window_background",
         "startWindow": "$profile:start_window",
         "exported": true,
+        "continuable": true,
         "supportWindowMode": ["fullscreen", "floating"],
         "skills": [
           {
@@ -57,6 +58,16 @@
       }
     ],
     "requestPermissions": [
+      {
+        "name": "ohos.permission.DISTRIBUTED_DATASYNC",
+        "reason": "$string:permission_distributed_datasync_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
       {
         "name": "ohos.permission.MICROPHONE",
         "reason": "$string:permission_microphone_reason",
