@@ -7,6 +7,7 @@ import {
   DropdownMenuSubmenuBlurStyle,
   dropdownMenuBindMenuOptions
 } from '../../components/UIComponents';
+import { UnsavedChangesIndicatorColor } from './PDFPanelVisualConstants';
 
 @ComponentV2
 export struct PDFViewerActionMenu {
@@ -25,6 +26,13 @@ export struct PDFViewerActionMenu {
   @Param onToggleMetronome: () => void = () => {};
   @Param onToggleTuner: () => void = () => {};
   @Param onAnnotate: () => void = () => {};
+  @Param onBookmarks: () => void = () => {};
+  @Param showBookmarkShortcut: boolean = false;
+  @Param hasUnsavedBookmarks: boolean = false;
+  /** 保存文档菜单项：书签或批注有未保存更改时显示圆点 */
+  @Param hasUnsavedDocument: boolean = false;
+  @Param hasUnsavedAnnotations: boolean = false;
+  @Param onToggleBookmark: () => void = () => {};
   @Param onSaveAnnotation: () => void = () => {};
 
   private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
@@ -36,6 +44,7 @@ export struct PDFViewerActionMenu {
   private readonly flipModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.rectangle_rotate')).fontSize('20vp');
   private readonly jumpIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.arrow_right')).fontSize('20vp');
   private readonly annotateIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.pencil_waveform')).fontSize('20vp');
+  private readonly bookmarkIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.bookmark')).fontSize('20vp');
   private readonly saveIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.save')).fontSize('20vp');
   private readonly submenuArrowIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.chevron_forward'))
     .fontSize('18vp')
@@ -115,9 +124,21 @@ export struct PDFViewerActionMenu {
 
         MenuItem({
           content: '批注',
-          symbolStartIcon: this.annotateIcon
+          symbolStartIcon: this.annotateIcon,
+          labelInfo: this.hasUnsavedAnnotations ? '●' : ''
         })
+          .labelFont({ size: 12, weight: FontWeight.Bold })
+          .labelFontColor(UnsavedChangesIndicatorColor)
           .onClick(() => this.onAnnotate())
+
+        MenuItem({
+          content: '书签',
+          symbolStartIcon: this.bookmarkIcon,
+          labelInfo: this.hasUnsavedBookmarks ? '●' : ''
+        })
+          .labelFont({ size: 12, weight: FontWeight.Bold })
+          .labelFontColor(UnsavedChangesIndicatorColor)
+          .onClick(() => this.onBookmarks())
       }
 
       MenuItemGroup() {
@@ -144,8 +165,11 @@ export struct PDFViewerActionMenu {
 
         MenuItem({
           content: '保存文档',
-          symbolStartIcon: this.saveIcon
+          symbolStartIcon: this.saveIcon,
+          labelInfo: this.hasUnsavedDocument ? '●' : ''
         })
+          .labelFont({ size: 12, weight: FontWeight.Bold })
+          .labelFontColor(UnsavedChangesIndicatorColor)
           .onClick(() => this.onSaveAnnotation())
       }
     }
@@ -154,8 +178,45 @@ export struct PDFViewerActionMenu {
     .subMenuExpandingMode(SubMenuExpandingMode.SIDE_EXPAND)
   }
 
+  @Builder
+  private buildUnsavedIndicatorDot() {
+    Text('')
+      .width(10)
+      .height(10)
+      .borderRadius(5)
+      .backgroundColor(UnsavedChangesIndicatorColor)
+  }
+
+  @Builder
+  private buildBookmarkShortcutButton() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.bookmark'))
+          .fontSize(20)
+          .fontColor([Color.White])
+          .fontWeight(FontWeight.Bold)
+      }
+      .width(44)
+      .height(44)
+      .hitTestBehavior(HitTestMode.Block)
+      .monopolizeEvents(true)
+      .backgroundColor(ButtonColorSemiTransparent)
+      .onClick(() => this.onToggleBookmark())
+
+      if (this.hasUnsavedBookmarks) {
+        this.buildUnsavedIndicatorDot()
+      }
+    }
+    .width(44)
+    .height(44)
+  }
+
   build() {
-    Column() {
+    Column({ space: 6 }) {
+      if (this.showBookmarkShortcut) {
+        this.buildBookmarkShortcutButton()
+      }
+
       Button({ type: ButtonType.Circle }) {
         SymbolGlyph($r('sys.symbol.more'))
           .fontSize(20)
