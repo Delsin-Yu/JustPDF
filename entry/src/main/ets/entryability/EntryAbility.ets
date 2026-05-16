@@ -1,13 +1,29 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, ConfigurationConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { systemShare } from '@kit.ShareKit';
 import { addRecentFile } from '../components/RecentFilesHelper';
+import {
+  describeLaunchReason,
+  extractContinuationPayload,
+  getContinuationReadingStateForMigrate,
+  logContinuationError,
+  logContinuationLine,
+  logContinuationWarn,
+  logWantParameterKeys,
+  extractContinuationExtraLocalPaths
+} from '../continuation/PdfContinuation';
+import {
+  createPendingContinuationRouterArgs
+} from '../continuation/PdfContinuationRestore';
+import { ensureDistributedDataSyncPermission } from '../continuation/PdfContinuationPermission';
+import { pdfContinuationDistributed } from '../continuation/PdfContinuationDistributed';
 
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
+const TAG = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
@@ -17,11 +33,22 @@ export default class EntryAbility extends UIAbility {
   private avoidAreaChangeHandler: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
   /** 冷启动时系统分享传入的 Want，在 loadInitialContent 中解析 */
   private pendingSystemShareWant: Want | undefined = undefined;
+  /** 冷启动接续：在 onCreate 暂存，于 loadInitialContent 处理 */
+  private pendingContinuationWant: Want | undefined = undefined;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    logContinuationLine(`onCreate ${describeLaunchReason(launchParam)}, reasonMessage=${launchParam.launchReasonMessage ?? ''}`);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     } catch (error) {
+    }
+
+    if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
+      logWantParameterKeys(want, 'onCreate.CONTINUATION');
+      pdfContinuationDistributed.startRestore(this.context, want);
+      this.pendingContinuationWant = want;
+      logContinuationLine('onCreate 已暂存 pendingContinuationWant，等待 onWindowStageRestore');
+      return;
     }
 
     if (this.isSystemShareLaunch(launchParam)) {
@@ -31,12 +58,24 @@ export default class EntryAbility extends UIAbility {
 
     let uri = want.uri;
     if (uri == null || uri == undefined) {
+      logContinuationLine('onCreate 无 want.uri');
       return;
     }
     AppStorage.setOrCreate('launchUri', uri);
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    logContinuationLine(
+      `onNewWant ${describeLaunchReason(launchParam)}, hasRouter=${this.currentRouter !== undefined}`
+    );
+    if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
+      logWantParameterKeys(want, 'onNewWant.CONTINUATION');
+      pdfContinuationDistributed.startRestore(this.context, want);
+      this.pendingContinuationWant = want;
+      logContinuationLine('onNewWant 已暂存 pendingContinuationWant，等待 onWindowStageRestore/loadInitialContent');
+      return;
+    }
+
     if (this.isSystemShareLaunch(launchParam)) {
       this.handleSystemShareWant(want);
       return;
@@ -53,22 +92,84 @@ export default class EntryAbility extends UIAbility {
     this.tryDirectLaunch();
   }
 
+  async onContinue(wantParam: Record<string, Object>): Promise<AbilityConstant.OnContinueResult> {
+    logContinuationLine('onContinue 被系统调用（源端）');
+    const targetVersion = wantParam['version'];
+    const targetDevice = wantParam['targetDevice'];
+    if (targetVersion !== undefined) {
+      logContinuationLine(`onContinue 对端 version=${String(targetVersion)}`);
+    }
+    if (targetDevice !== undefined) {
+      logContinuationLine(`onContinue 对端 targetDevice=${String(targetDevice)}`);
+    }
+
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false;
+    logContinuationLine('onContinue SUPPORT_CONTINUE_PAGE_STACK_KEY=false');
+
+    const readingState = getContinuationReadingStateForMigrate();
+    if (readingState === null) {
+      logContinuationWarn('onContinue 返回 REJECT：无阅读快照（未打开 PDF 或已返回首页）');
+      return AbilityConstant.OnContinueResult.REJECT;
+    }
+
+    const sandboxPath = readingState.sandboxPath;
+    const fileName = readingState.fileName.length > 0 ? readingState.fileName : 'document.pdf';
+    const pageIndex = readingState.pageIndex;
+
+    const syncGranted = await ensureDistributedDataSyncPermission(this.context, true);
+    if (!syncGranted) {
+      logContinuationError('onContinue 返回 REJECT：未授予 DISTRIBUTED_DATASYNC');
+      return AbilityConstant.OnContinueResult.REJECT;
+    }
+
+    const saved = await pdfContinuationDistributed.savePdfForContinuation(
+      this.context,
+      wantParam,
+      sandboxPath,
+      fileName,
+      pageIndex
+    );
+    if (!saved) {
+      logContinuationError('onContinue 返回 REJECT：分布式对象/文件资产 save 失败');
+      return AbilityConstant.OnContinueResult.REJECT;
+    }
+
+    logContinuationLine(
+      `onContinue 返回 AGREE: pageIndex=${pageIndex}, fileName=${fileName}, ` +
+      `dataSessionId=${String(wantParam['justpdf_dataSessionId'] ?? '')}`
+    );
+    return AbilityConstant.OnContinueResult.AGREE;
+  }
+
   onDestroy(): void {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    // Main applicationWindow is created, set main page for this ability
+    logContinuationLine('onWindowStageCreate（普通启动）');
+    this.bootstrapWindowStage(windowStage, 'create');
+  }
+
+  onWindowStageRestore(windowStage: window.WindowStage): void {
+    logContinuationLine('onWindowStageRestore（接续/迁移启动）');
+    this.bootstrapWindowStage(windowStage, 'restore');
+  }
+
+  private bootstrapWindowStage(windowStage: window.WindowStage, stageKind: string): void {
+    logContinuationLine(
+      `bootstrapWindowStage kind=${stageKind}, pendingContinuation=${this.pendingContinuationWant !== undefined}`
+    );
     try {
       this.preferences = preferences.getPreferencesSync(this.context, { name: 'stagePersistence' });
       this.window = windowStage.getMainWindowSync();
     } catch (error) {
+      logContinuationError(`bootstrapWindowStage 失败: ${error}`);
       return;
     }
     AppStorage.setOrCreate('window', this.window);
     AppStorage.setOrCreate('preferences', this.preferences);
     AppStorage.setOrCreate('avoidAreaTopPx', 0);
     AppStorage.setOrCreate('avoidAreaBottomPx', 0);
-    this.loadInitialContent(windowStage);
+    void this.loadInitialContent(windowStage);
   }
 
   private isSystemShareLaunch(launchParam: AbilityConstant.LaunchParam): boolean {
@@ -91,7 +192,7 @@ export default class EntryAbility extends UIAbility {
         }
       }
     } catch (error) {
-      hilog.error(0, 'EntryAbility', `解析系统分享数据失败: ${error}`);
+      hilog.error(0, TAG, `解析系统分享数据失败: ${error}`);
     }
     return null;
   }
@@ -99,7 +200,7 @@ export default class EntryAbility extends UIAbility {
   private handleSystemShareWant(want: Want): void {
     this.extractPdfUriFromShareWant(want).then((uri: string | null) => {
       if (!uri) {
-        hilog.warn(0, 'EntryAbility', '系统分享未包含可打开的 PDF');
+        hilog.warn(0, TAG, '系统分享未包含可打开的 PDF');
         return;
       }
       if (this.currentRouter) {
@@ -114,7 +215,21 @@ export default class EntryAbility extends UIAbility {
   private async loadInitialContent(windowStage: window.WindowStage): Promise<void> {
     let pageUrl: string = 'pages/Index';
     let launchUri: string | undefined = AppStorage.get<string>('launchUri');
-    if (this.pendingSystemShareWant) {
+    logContinuationLine(`loadInitialContent 开始, pendingContinuation=${this.pendingContinuationWant !== undefined}`);
+
+    if (this.pendingContinuationWant) {
+      const continuationWant = this.pendingContinuationWant;
+      this.pendingContinuationWant = undefined;
+      const payload = extractContinuationPayload(continuationWant);
+      if (payload !== null) {
+        const extraPaths = extractContinuationExtraLocalPaths(continuationWant);
+        AppStorage.setOrCreate('initialPdfViewArgs', createPendingContinuationRouterArgs(payload, extraPaths));
+        pageUrl = 'pages/PDFView';
+        logContinuationLine('loadInitialContent 接续 -> pages/PDFView（文件在 PDFView 内等待落地）');
+      } else {
+        logContinuationError('loadInitialContent 接续载荷无效，留在 Index');
+      }
+    } else if (this.pendingSystemShareWant) {
       const shareWant = this.pendingSystemShareWant;
       this.pendingSystemShareWant = undefined;
       const shareUri = await this.extractPdfUriFromShareWant(shareWant);
@@ -122,10 +237,10 @@ export default class EntryAbility extends UIAbility {
         launchUri = shareUri;
       }
     }
-    if (launchUri) {
+
+    if (pageUrl === 'pages/Index' && launchUri) {
       try {
         const params = await this.buildLaunchParams(launchUri);
-        // 保存到最近打开文件列表
         if (this.preferences != null) {
           addRecentFile(this.preferences, {
             fileName: params['fileName'],
@@ -137,24 +252,27 @@ export default class EntryAbility extends UIAbility {
         pageUrl = 'pages/PDFView';
         AppStorage.setOrCreate('launchUri', '');
       } catch (error) {
-        hilog.error(0, 'PDFView', `Cold launch preparation failed: ${error}`);
+        hilog.error(0, TAG, `Cold launch preparation failed: ${error}`);
       }
     }
+
+    logContinuationLine(`loadInitialContent loadContent url=${pageUrl}`);
     windowStage.loadContent(pageUrl, null, (err) => {
       if (err.code) {
-        hilog.error(0, 'PDFView', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
+        logContinuationError(`loadContent 失败: ${JSON.stringify(err)}`);
         return;
       }
+      logContinuationLine(`loadContent 成功 url=${pageUrl}`);
 
       if (!this.window) {
-        hilog.error(0, 'PDFView', 'Window is undefined.');
+        hilog.error(0, TAG, 'Window is undefined.');
         return;
       }
 
       try {
         this.currentRouter = this.window.getUIContext().getRouter();
       } catch (error) {
-        hilog.error(0, 'PDFView', 'Failed to get router. Cause: %{public}s', error);
+        hilog.error(0, TAG, 'Failed to get router. Cause: %{public}s', error);
       }
       try {
         this.window.on('windowRectChange', options => this.windowStateChanged(options));
@@ -165,10 +283,6 @@ export default class EntryAbility extends UIAbility {
     });
   }
 
-  /**
-   * 窗口全屏布局：内容延伸至状态栏与导航指示区，避让高度通过 AppStorage 下发页面 padding。
-   * 参见本地文档：guides/.../arkts-develop-apply-immersive-effects.md
-   */
   private enableLayoutFullScreenAndSyncAvoidAreas(): void {
     const win = this.window;
     if (!win) {
@@ -178,7 +292,7 @@ export default class EntryAbility extends UIAbility {
       this.syncWindowAvoidAreasToAppStorage();
       this.registerAvoidAreaChangeListener();
     }).catch((err: BusinessError) => {
-      hilog.warn(0, 'EntryAbility', `setWindowLayoutFullScreen 未生效: code=${err.code}, ${err.message}`);
+      hilog.warn(0, TAG, `setWindowLayoutFullScreen 未生效: code=${err.code}, ${err.message}`);
       this.syncWindowAvoidAreasToAppStorage();
       this.registerAvoidAreaChangeListener();
     });
@@ -195,7 +309,7 @@ export default class EntryAbility extends UIAbility {
       const navArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
       AppStorage.setOrCreate('avoidAreaBottomPx', navArea.bottomRect.height);
     } catch (error) {
-      hilog.warn(0, 'EntryAbility', `getWindowAvoidArea 失败: ${error}`);
+      hilog.warn(0, TAG, `getWindowAvoidArea 失败: ${error}`);
     }
   }
 
@@ -210,28 +324,44 @@ export default class EntryAbility extends UIAbility {
     try {
       win.on('avoidAreaChange', this.avoidAreaChangeHandler);
     } catch (error) {
-      hilog.error(0, 'EntryAbility', `注册 avoidAreaChange 失败: ${error}`);
+      hilog.error(0, TAG, `注册 avoidAreaChange 失败: ${error}`);
       this.avoidAreaChangeHandler = undefined;
     }
   }
 
-  private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {
+  private async buildLaunchParamsFromLocalPath(
+    localPath: string,
+    systemPath: string,
+    fileNameHint: string
+  ): Promise<Record<string, string>> {
     const dir = this.context.tempDir;
-    const sourceFile = await fs.open(launchUri, fs.OpenMode.READ_ONLY);
-    const fileName = sourceFile.name;
-    const file = dir + '/' + fileName;
-    const tempFile = dir + '/saveTemp_' + fileName;
+    const sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
+    const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
+    const file = `${dir}/${fileName}`;
+    const tempFile = `${dir}/saveTemp_${fileName}`;
     try {
       await fs.copyFile(sourceFile.fd, file);
     } finally {
       await fs.close(sourceFile);
     }
     return {
-      'systemPath': launchUri,
+      'systemPath': systemPath,
       'sandboxPath': file,
       'saveTempPath': tempFile,
       'fileName': fileName
     };
+  }
+
+  private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {
+    let localPath = launchUri;
+    try {
+      const resolved = new fileUri.FileUri(launchUri).path;
+      if (resolved.length > 0) {
+        localPath = resolved;
+      }
+    } catch (_error) {
+    }
+    return this.buildLaunchParamsFromLocalPath(localPath, launchUri, '');
   }
 
   private async tryDirectLaunch(): Promise<void> {
@@ -239,11 +369,9 @@ export default class EntryAbility extends UIAbility {
     if (!launchUri || !this.currentRouter) {
       return;
     }
-    // Clear launchUri so Index won't also try to load it
     AppStorage.setOrCreate('launchUri', '');
     try {
       const args = await this.buildLaunchParams(launchUri);
-      // 保存到最近打开文件列表
       if (this.preferences != null) {
         addRecentFile(this.preferences, {
           fileName: args['fileName'],
@@ -253,7 +381,7 @@ export default class EntryAbility extends UIAbility {
       }
       this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
     } catch (error) {
-      hilog.error(0, 'PDFView', `Direct launch failed: ${error}`);
+      hilog.error(0, TAG, `Direct launch failed: ${error}`);
       AppStorage.setOrCreate('launchUri', launchUri);
     }
   }
@@ -293,7 +421,7 @@ export default class EntryAbility extends UIAbility {
       }
 
     } catch (error) {
-      hilog.error(0, 'PDFView', 'Failed to restore window state. Cause: %{public}s', error);
+      hilog.error(0, TAG, 'Failed to restore window state. Cause: %{public}s', error);
     }
   }
 
@@ -314,7 +442,7 @@ export default class EntryAbility extends UIAbility {
       }
       this.preferences.flushSync();
     } catch (error) {
-      hilog.error(0, 'PDFView', 'Failed to save window state. Cause: %{public}s', error);
+      hilog.error(0, TAG, 'Failed to save window state. Cause: %{public}s', error);
     }
   }
 
@@ -329,10 +457,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
-    // Ability has brought to foreground
   }
 
   onBackground(): void {
-    // Ability has back to background
   }
 }
