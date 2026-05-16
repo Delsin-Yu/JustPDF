@@ -9,6 +9,22 @@ import { KeyCode } from '@kit.InputKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { AbilityConstant, common } from '@kit.AbilityKit';
+import {
+  clearContinuationReadingState,
+  logAppStorageContinuationState,
+  logContinuationError,
+  logContinuationLine,
+  logContinuationWarn,
+  parseInitialPageIndexFromRouter,
+  PdfContinuationPayload,
+  updateContinuationReadingState
+} from '../continuation/PdfContinuation';
+import { ensureDistributedDataSyncPermission } from '../continuation/PdfContinuationPermission';
+import {
+  isContinuationPendingRouterArgs,
+  parseExtraLocalPathsFromRouter,
+  resolveContinuationPdfParams
+} from '../continuation/PdfContinuationRestore';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
@@ -584,6 +600,13 @@ struct PDFView {
   @Local passwordGateInput: string = '';
   @Local passwordGateErrorHint: string = '';
   private documentInitStarted: boolean = false;
+  /** 跨设备接续恢复时的起始页（0-based） */
+  private continuationInitialPageIndex: number = 0;
+  /** 目标端：沙箱 PDF 尚未落地，需在 initializeDocument 中轮询 distributedFilesDir */
+  private continuationPending: boolean = false;
+  private continuationExtraLocalPaths: string[] = [];
+  /** 避免翻页时重复刷接续 sync 日志 */
+  private lastContinuationLoggedPageIndex: number = -1;
   private passwordPromptResolver: ((password: string | null) => void) | undefined = undefined;
   transparencyTimeoutId: number | undefined = undefined;
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
@@ -799,6 +822,8 @@ struct PDFView {
   }
 
   backToMainMenu(): void {
+    this.disableContinuationForMigration();
+    clearContinuationReadingState();
     // 关闭节拍器、调音器、批注画板三个浮层并把关闭状态推到 OverlayManager，
     // 防止离开 PDFView 后这些浮层在窗口级 OverlayManager 中残留显示，
     // 也保证下一次再进入 PDFView 时浮层处于初始（隐藏）状态。
@@ -1577,6 +1602,22 @@ struct PDFView {
     this.sandBoxPath = args['sandboxPath'];
     this.saveTempPath = args['saveTempPath'];
     this.fileName = args['fileName'];
+    this.continuationInitialPageIndex = parseInitialPageIndexFromRouter(args);
+    this.continuationPending = isContinuationPendingRouterArgs(args);
+    this.continuationExtraLocalPaths = parseExtraLocalPathsFromRouter(args);
+    logContinuationLine(
+      `PDFView.aboutToAppear fileName=${this.fileName}, sandboxLen=${this.sandBoxPath.length}, ` +
+      `continuationPending=${this.continuationPending}, ` +
+      `continuationInitialPageIndex=${this.continuationInitialPageIndex}`
+    );
+    if (this.sandBoxPath.length > 0) {
+      updateContinuationReadingState(
+        this.sandBoxPath,
+        this.systemPath,
+        this.fileName,
+        this.continuationInitialPageIndex
+      );
+    }
 
     // Lightweight setup that won't block the UI
     try {
@@ -1667,13 +1708,110 @@ struct PDFView {
       this.documentInitStarted = true;
       this.initializeDocument();
     }
+    this.enableContinuationForMigration();
     this.immersiveListening();
+  }
+
+  private enableContinuationForMigration(): void {
+    logContinuationLine('PDFView.onPageShow -> setMissionContinueState(ACTIVE)');
+    logAppStorageContinuationState('PDFView.onPageShow.进入');
+    try {
+      const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      void ensureDistributedDataSyncPermission(abilityContext, true);
+      abilityContext.setMissionContinueState(AbilityConstant.ContinueState.ACTIVE, (result) => {
+        if (result.code !== 0) {
+          logContinuationWarn(`setMissionContinueState(ACTIVE) 失败 code=${result.code}, msg=${result.message ?? ''}`);
+        } else {
+          logContinuationLine('setMissionContinueState(ACTIVE) 成功');
+        }
+      });
+    } catch (error) {
+      logContinuationError(`setMissionContinueState(ACTIVE) 异常: ${error}`);
+    }
+  }
+
+  private disableContinuationForMigration(): void {
+    logContinuationLine('PDFView.aboutToDisappear -> setMissionContinueState(INACTIVE)');
+    try {
+      const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      abilityContext.setMissionContinueState(AbilityConstant.ContinueState.INACTIVE, (result) => {
+        if (result.code !== 0) {
+          logContinuationWarn(`setMissionContinueState(INACTIVE) 失败 code=${result.code}`);
+        } else {
+          logContinuationLine('setMissionContinueState(INACTIVE) 成功');
+        }
+      });
+    } catch (error) {
+      logContinuationError(`setMissionContinueState(INACTIVE) 异常: ${error}`);
+    }
+  }
+
+  private syncContinuationReadingState(): void {
+    if (this.isDocumentLoading) {
+      logContinuationWarn('syncContinuationReadingState 跳过：文档仍在加载');
+      return;
+    }
+    if (this.sandBoxPath.length === 0) {
+      logContinuationWarn('syncContinuationReadingState 跳过：sandBoxPath 为空');
+      return;
+    }
+    const pageIndex = this.viewerViewModel.currentPageIndex;
+    updateContinuationReadingState(
+      this.sandBoxPath,
+      this.systemPath,
+      this.fileName,
+      pageIndex
+    );
+    if (pageIndex !== this.lastContinuationLoggedPageIndex) {
+      this.lastContinuationLoggedPageIndex = pageIndex;
+      logContinuationLine(`syncContinuationReadingState pageIndex=${pageIndex}, fileName=${this.fileName}`);
+      logAppStorageContinuationState('PDFView.sync后');
+    }
   }
 
   private async initializeDocument(): Promise<void> {
     this.loadError = '';
     this.sessionPdfPassword = '';
     const loadVersion = ++this.documentLoadVersion;
+
+    if (this.continuationPending) {
+      this.continuationPending = false;
+      const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const syncGranted = await ensureDistributedDataSyncPermission(abilityContext, true);
+      if (!syncGranted) {
+        if (this.documentLoadVersion === loadVersion) {
+          this.loadError = '需要「分布式数据同步」权限才能完成跨设备接续';
+          this.isDocumentLoading = false;
+        }
+        return;
+      }
+      const payload: PdfContinuationPayload = {
+        fileRef: this.systemPath,
+        pageIndex: this.continuationInitialPageIndex,
+        fileName: this.fileName
+      };
+      logContinuationLine('initializeDocument 接续目标端，等待分布式 PDF 落地');
+      const resolved = await resolveContinuationPdfParams(
+        abilityContext,
+        payload,
+        this.continuationExtraLocalPaths
+      );
+      if (this.documentLoadVersion !== loadVersion) {
+        return;
+      }
+      if (resolved === null) {
+        this.loadError =
+          '接续文件尚未到达本机。请确认双端同一华为账号、已开启 Wi‑Fi/蓝牙与系统「接续」，并已授予分布式同步权限。';
+        this.isDocumentLoading = false;
+        return;
+      }
+      this.systemPath = resolved['systemPath'];
+      this.sandBoxPath = resolved['sandboxPath'];
+      this.saveTempPath = resolved['saveTempPath'];
+      this.fileName = resolved['fileName'];
+      logContinuationLine(`initializeDocument 接续文件已落地 sandbox=${this.sandBoxPath}`);
+    }
+
     const loaded = await this.loadDocumentWithPasswordPrompt(loadVersion);
     if (!loaded) {
       return;
@@ -1687,7 +1825,17 @@ struct PDFView {
     }
 
     await this.createPlaceholderPixelMap();
-    await this.gotoPage(0);
+    let startPage = this.continuationInitialPageIndex;
+    if (startPage >= this.viewerViewModel.totalPageCount) {
+      const clamped = this.viewerViewModel.getLastNavigableIndex();
+      logContinuationWarn(
+        `initializeDocument 起始页 ${startPage} 超出总页数 ${this.viewerViewModel.totalPageCount}，改为 ${clamped}`
+      );
+      startPage = clamped;
+    }
+    logContinuationLine(`initializeDocument gotoPage startPage=${startPage}, totalPages=${this.viewerViewModel.totalPageCount}`);
+    await this.gotoPage(startPage);
+    this.syncContinuationReadingState();
     this.bookmarkController.refresh();
     this.isDocumentLoading = false;
     this.triggerPageFlipShadeIntro();
@@ -1864,6 +2012,7 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
+    // 不在此处 clearContinuationReadingState：系统发起接续时可能先销毁页面再调 onContinue
     this.sessionPdfPassword = '';
     this.resolvePasswordGate(null);
     this.documentInitStarted = false;
@@ -3230,6 +3379,7 @@ struct PDFView {
 
     this.viewerViewModel.commitPageTarget(clampedTarget);
     this.mainSlotPagesBeingLoaded = [];
+    this.syncContinuationReadingState();
     // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
     this.redrawStrokes();
 
