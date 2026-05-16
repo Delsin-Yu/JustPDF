@@ -9,6 +9,7 @@ import { KeyCode } from '@kit.InputKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { AbilityConstant, common } from '@kit.AbilityKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
@@ -759,6 +760,13 @@ struct PDFView {
    */
   private mainSlotPagesBeingLoaded: number[] = [];
   private documentLoadVersion: number = 0;
+  /** 隔空传送 / 碰一碰分享监听是否已注册 */
+  private harmonyShareListening: boolean = false;
+  /** PC/2in1 碰一碰发送需带 windowId */
+  private harmonyShareKnockUsesWindowId: boolean = false;
+  private harmonyShareWindowId: number = -1;
+  /** PC/2in1 沙箱接收碰一碰文件 */
+  private harmonyShareReceiveRegistered: boolean = false;
   tutorialDialogController: CustomDialogController = new CustomDialogController({
     builder: TutorialDialogBuilder(),
     width: '60%',
@@ -1610,7 +1618,6 @@ struct PDFView {
     }
 
     this.ensurePanelOverlays();
-    this.immersiveListening();
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
     context.eventHub.on('memoryPressure', this.onMemoryPressure);
@@ -1660,6 +1667,7 @@ struct PDFView {
       this.documentInitStarted = true;
       this.initializeDocument();
     }
+    this.immersiveListening();
   }
 
   private async initializeDocument(): Promise<void> {
@@ -1957,8 +1965,9 @@ struct PDFView {
   };
 
   makeSharedData(): systemShare.SharedData {
+    const pdfUtd: string = utd.getUniformDataTypeByFilenameExtension('.pdf');
     const shareData: systemShare.SharedData = new systemShare.SharedData({
-      utd: utd.UniformDataType.PDF,
+      utd: pdfUtd,
       uri: fileUri.getUriFromPath(this.sandBoxPath),
       title: this.fileName,
       description: `共 ${this.viewerViewModel.totalPageCount} 页`
@@ -1967,7 +1976,116 @@ struct PDFView {
   }
 
   immersiveCallback = (sharableTarget: harmonyShare.SharableTarget) => {
-    sharableTarget.share(this.makeSharedData());
+    if (!this.sandBoxPath || this.isDocumentLoading) {
+      hilog.warn(0, 'PDFView', '文档未就绪，忽略隔空传送/碰一碰分享');
+      return;
+    }
+    try {
+      sharableTarget.share(this.makeSharedData());
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `分享当前 PDF 失败: ${err.code} ${err.message}`);
+    }
+  }
+
+  private resolveHarmonyShareWindowId(): number {
+    try {
+      const windowId = this.mainWindow.getWindowProperties().id;
+      this.harmonyShareWindowId = windowId;
+      return windowId;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `获取分享窗口 ID 失败: ${error}`);
+      return -1;
+    }
+  }
+
+  private knockShareNeedsWindowId(): boolean {
+    return deviceInfo.deviceType === '2in1';
+  }
+
+  private registerKnockFileReceive(windowId: number): void {
+    if (!this.knockShareNeedsWindowId() || this.harmonyShareReceiveRegistered || windowId < 0) {
+      return;
+    }
+    const recvCapability: harmonyShare.RecvCapabilityRegistry = {
+      windowId: windowId,
+      capabilities: [
+        { utd: utd.UniformDataType.PDF, maxSupportedCount: 1 },
+        { utd: utd.UniformDataType.FILE, maxSupportedCount: 1 }
+      ]
+    };
+    try {
+      harmonyShare.on('dataReceive', recvCapability, (receiveTarget: harmonyShare.ReceivableTarget) => {
+        const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+        const receiveDirUri = fileUri.getUriFromPath(hostContext.filesDir);
+        receiveTarget.receive(receiveDirUri, {
+          onDataReceived: (shareData: systemShare.SharedData) => {
+            this.openKnockReceivedPdf(shareData);
+          },
+          onResult: (resultCode: harmonyShare.ShareResultCode) => {
+            if (resultCode !== harmonyShare.ShareResultCode.SHARE_SUCCESS) {
+              hilog.error(0, 'PDFView', `碰一碰接收失败: ${resultCode}`);
+            }
+          }
+        });
+      });
+      this.harmonyShareReceiveRegistered = true;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `注册碰一碰沙箱接收失败: ${error}`);
+    }
+  }
+
+  private openKnockReceivedPdf(shareData: systemShare.SharedData): void {
+    const records = shareData.getRecords();
+    if (records.length === 0 || !records[0].uri) {
+      return;
+    }
+    const record = records[0];
+    const sharedUri: string = record.uri as string;
+    let sandboxPath: string = sharedUri;
+    try {
+      const resolvedPath: string = new fileUri.FileUri(sharedUri).path;
+      if (resolvedPath.length > 0) {
+        sandboxPath = resolvedPath;
+      }
+    } catch (_error) {
+    }
+    if (!sandboxPath.toLowerCase().endsWith('.pdf')) {
+      hilog.warn(0, 'PDFView', `碰一碰接收忽略非 PDF: ${sandboxPath}`);
+      return;
+    }
+    const baseName = sandboxPath.split('/').pop() ?? 'received.pdf';
+    const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const saveTempPath = `${hostContext.tempDir}/saveTemp_${baseName}`;
+    this.getUIContext().getRouter().replaceUrl({
+      url: 'pages/PDFView',
+      params: {
+        'systemPath': sharedUri,
+        'sandboxPath': sandboxPath,
+        'saveTempPath': saveTempPath,
+        'fileName': record.title ?? baseName
+      }
+    }).catch((error: Error) => {
+      hilog.error(0, 'PDFView', `打开碰一碰接收的 PDF 失败: ${error.message}`);
+    });
+  }
+
+  private unregisterKnockFileReceive(): void {
+    if (!this.harmonyShareReceiveRegistered || this.harmonyShareWindowId < 0) {
+      return;
+    }
+    try {
+      harmonyShare.off('dataReceive', {
+        windowId: this.harmonyShareWindowId,
+        capabilities: [
+          { utd: utd.UniformDataType.PDF, maxSupportedCount: 1 },
+          { utd: utd.UniformDataType.FILE, maxSupportedCount: 1 }
+        ]
+      });
+    } catch (error) {
+      hilog.error(0, 'PDFView', `取消碰一碰沙箱接收失败: ${error}`);
+    }
+    this.harmonyShareReceiveRegistered = false;
   }
 
   /** 从主窗口同步状态栏与导航指示条避让高度（px）；用于节拍器迷你浮标，根布局不再整体 padding */
@@ -1987,14 +2105,54 @@ struct PDFView {
     }
   }
 
-  immersiveListening() {
-    harmonyShare.on('knockShare', this.immersiveCallback);
-    harmonyShare.on('gesturesShare', this.immersiveCallback);
+  immersiveListening(): void {
+    if (!canIUse('SystemCapability.Collaboration.HarmonyShare') || this.harmonyShareListening) {
+      return;
+    }
+    const windowId = this.resolveHarmonyShareWindowId();
+    if (windowId < 0) {
+      return;
+    }
+    const sendCapability: harmonyShare.SendCapabilityRegistry = { windowId: windowId };
+    try {
+      harmonyShare.on('gesturesShare', sendCapability, this.immersiveCallback);
+      this.harmonyShareKnockUsesWindowId = this.knockShareNeedsWindowId();
+      if (this.harmonyShareKnockUsesWindowId) {
+        harmonyShare.on('knockShare', sendCapability, this.immersiveCallback);
+        this.registerKnockFileReceive(windowId);
+      } else {
+        harmonyShare.on('knockShare', this.immersiveCallback);
+      }
+      this.harmonyShareListening = true;
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `注册隔空传送/碰一碰监听失败: ${err.code} ${err.message}`);
+    }
   }
 
-  immersiveDisablingListening() {
-    harmonyShare.off('knockShare', this.immersiveCallback);
-    harmonyShare.off('gesturesShare', this.immersiveCallback);
+  immersiveDisablingListening(): void {
+    if (!canIUse('SystemCapability.Collaboration.HarmonyShare') || !this.harmonyShareListening) {
+      return;
+    }
+    try {
+      if (this.harmonyShareWindowId >= 0) {
+        const sendCapability: harmonyShare.SendCapabilityRegistry = { windowId: this.harmonyShareWindowId };
+        harmonyShare.off('gesturesShare', sendCapability, this.immersiveCallback);
+        if (this.harmonyShareKnockUsesWindowId) {
+          harmonyShare.off('knockShare', sendCapability, this.immersiveCallback);
+        } else {
+          harmonyShare.off('knockShare', this.immersiveCallback);
+        }
+      } else {
+        harmonyShare.off('gesturesShare', this.immersiveCallback);
+        harmonyShare.off('knockShare', this.immersiveCallback);
+      }
+      this.unregisterKnockFileReceive();
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `取消隔空传送/碰一碰监听失败: ${err.code} ${err.message}`);
+    }
+    this.harmonyShareListening = false;
   }
 
   checkHotkey(keyCode: KeyCode, isCtrlPressed: boolean, isShiftPressed: boolean): (() => void) | null {
