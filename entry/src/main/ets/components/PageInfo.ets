@@ -185,6 +185,11 @@ export class PageInfo implements ReadonlyPageInfo {
     return this._pdfPage;
   }
 
+  /** 文档从磁盘重载后清除缓存的 PdfPage 句柄。 */
+  public resetPdfPageHandle(): void {
+    this._pdfPage = undefined;
+  }
+
   constructor(
     localPageIndex: number,
     pdfDocument: pdfService.PdfDocument,
@@ -1160,6 +1165,12 @@ export class PageStore implements IDataSource {
   public clearImportedPdfPolylineTracking(): void {
     for (const pageInfo of this.pages) {
       pageInfo.clearImportedPdfPolylineTracking();
+    }
+  }
+
+  public resetAllPdfPageHandles(): void {
+    for (const pageInfo of this.pages) {
+      pageInfo.resetPdfPageHandle();
     }
   }
 

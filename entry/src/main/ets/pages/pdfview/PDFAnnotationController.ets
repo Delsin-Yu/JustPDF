@@ -243,6 +243,15 @@ export class PDFAnnotationController {
     this.importedPolylinePrepared = false;
   }
 
+  /** 丢弃内存中的未保存笔画（不写入 PDF 文件）。 */
+  discardUnsavedStrokes(): void {
+    this.dependencies.pageDataSource.clearAllStrokes();
+    this.dependencies.pageDataSource.clearImportedPdfPolylineTracking();
+    this.clearHistory();
+    this.hasUnsavedStrokes = false;
+    this.importedPolylinePrepared = false;
+  }
+
   async prepareImportedPolylineAnnotations(): Promise<void> {
     if (this.importedPolylinePrepared) {
       return;

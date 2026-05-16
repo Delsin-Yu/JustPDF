@@ -1,4 +1,12 @@
 import { ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, MakeSlider, StyleIconButton, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
+import { hasUnsavedDocumentChanges, promptUnsavedChangesAction, UnsavedChangesChoice } from '../components/UnsavedChangesPrompt';
+import {
+  EVENT_APP_TERMINATE_REQUESTED,
+  EVENT_DOCUMENT_OPEN_REQUESTED,
+  setPdfViewerActive,
+  syncPdfViewerHasUnsavedChanges,
+  takePendingDocumentOpenParams
+} from '../navigation/PendingDocumentOpen';
 import { pdfLoadNeedsPassword, reloadPdfDocument } from '../components/PdfDocumentLoader';
 import { ComponentContent, LengthMetricsUnit, OverlayManager, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
@@ -26,6 +34,7 @@ import {
   resolveContinuationPdfParams
 } from '../continuation/PdfContinuationRestore';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
+import { taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
@@ -956,6 +965,150 @@ struct PDFView {
     }
   }
 
+  private hasUnsavedDocumentChanges(): boolean {
+    return hasUnsavedDocumentChanges(
+      this.annotationController.hasUnsavedStrokes,
+      this.bookmarkController.isDirty
+    );
+  }
+
+  private syncPdfViewerUnsavedState(): void {
+    syncPdfViewerHasUnsavedChanges(
+      this.annotationController.hasUnsavedStrokes,
+      this.bookmarkController.isDirty
+    );
+  }
+
+  private async saveDocumentForGuard(): Promise<boolean> {
+    if (this.isDocumentSaving || this.isAnnotateModePreparing) {
+      return false;
+    }
+    try {
+      const saved: boolean = await this.annotationController.executeSave();
+      if (saved) {
+        this.bookmarkController.markDocumentSaved();
+        this.syncPanelOverlays();
+      }
+      return saved;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `保存文档出错: ${(error as Error).message}`);
+      return false;
+    } finally {
+      this.isDocumentSaving = false;
+      this.documentSaveMessage = '';
+      this.syncPdfViewerUnsavedState();
+    }
+  }
+
+  private async discardUnsavedChanges(): Promise<void> {
+    this.annotationController.discardUnsavedStrokes();
+    this.view1DrawCtx.reset();
+    this.view2DrawCtx.reset();
+    this.view3DrawCtx.reset();
+    this.redrawStrokes();
+
+    if (this.bookmarkController.isDirty) {
+      const loadVersion = ++this.documentLoadVersion;
+      const result = reloadPdfDocument(this.document, this.sandBoxPath, this.sessionPdfPassword);
+      if (result !== pdfService.ParseResult.PARSE_SUCCESS) {
+        hilog.error(0, 'PDFView', `丢弃更改时重载 PDF 失败: ${toResultCode(result)}`);
+        return;
+      }
+      if (this.documentLoadVersion !== loadVersion) {
+        return;
+      }
+      const totalPages = this.pageDataSource.totalCount();
+      for (let i = 0; i < totalPages; i++) {
+        this.pageDataSource.getData(i).evictViewerCache();
+        this.pageDataSource.getData(i).invalidateCaches();
+      }
+      this.pageDataSource.resetAllPdfPageHandles();
+      this.pageDataSource.clearImportedPdfPolylineTracking();
+      this.annotationController.resetImportedPolylinePrepareState();
+      this.pageDataSource.setPagePath(this.sandBoxPath);
+      this.bookmarkController.refresh();
+      this.bookmarkController.markDocumentSaved();
+      await this.refreshDisplayedPagesAfterDiscard();
+    }
+
+    this.syncPdfViewerUnsavedState();
+    this.syncPanelOverlays();
+  }
+
+  private async refreshDisplayedPagesAfterDiscard(): Promise<void> {
+    const displayed = this.viewerViewModel.displayedPageIndices;
+    for (const pageIndex of displayed) {
+      this.pageDataSource.invalidateCaches(pageIndex);
+    }
+    for (const pageIndex of displayed) {
+      void this.pageDataSource.ensureCached(pageIndex, this.currentRenderScale, taskpool.Priority.HIGH);
+    }
+    await this.refreshDisplayedPages();
+  }
+
+  private async runWithUnsavedGuard(proceed: () => void | Promise<void>): Promise<void> {
+    if (this.isDocumentSaving || this.isAnnotateModePreparing) {
+      return;
+    }
+    this.syncPdfViewerUnsavedState();
+    if (!this.hasUnsavedDocumentChanges()) {
+      await proceed();
+      return;
+    }
+
+    const choice = await promptUnsavedChangesAction(this.getUIContext());
+    if (choice === UnsavedChangesChoice.Cancel) {
+      return;
+    }
+    if (choice === UnsavedChangesChoice.Discard) {
+      await this.discardUnsavedChanges();
+      if (this.hasUnsavedDocumentChanges()) {
+        return;
+      }
+      await proceed();
+      return;
+    }
+
+    const saved = await this.saveDocumentForGuard();
+    if (saved) {
+      await proceed();
+    }
+  }
+
+  private async replaceUrlToOpenDocument(params: Record<string, string>): Promise<void> {
+    await this.getUIContext().getRouter().replaceUrl({
+      url: 'pages/PDFView',
+      params: params
+    });
+  }
+
+  private requestBackToMainMenu(): void {
+    void this.runWithUnsavedGuard(() => {
+      this.backToMainMenu();
+    });
+  }
+
+  private requestOpenDocument(params: Record<string, string>): void {
+    void this.runWithUnsavedGuard(async () => {
+      await this.replaceUrlToOpenDocument(params);
+    });
+  }
+
+  private onDocumentOpenRequested = (): void => {
+    const params = takePendingDocumentOpenParams();
+    if (params === undefined || params['sandboxPath'] === undefined || params['sandboxPath'].length === 0) {
+      return;
+    }
+    this.requestOpenDocument(params);
+  };
+
+  private onAppTerminateRequested = (): void => {
+    const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    void this.runWithUnsavedGuard(() => {
+      abilityContext.terminateSelf();
+    });
+  };
+
   backToMainMenu(): void {
     this.disableContinuationForMigration();
     clearContinuationReadingState();
@@ -1493,6 +1646,7 @@ struct PDFView {
   }
 
   private syncPanelOverlays(): void {
+    this.syncPdfViewerUnsavedState();
     if (!this.overlayManager || !this.metronomeOverlayContent || !this.tunerOverlayContent) {
       return;
     }
@@ -1807,9 +1961,14 @@ struct PDFView {
     }
 
     this.ensurePanelOverlays();
+    setPdfViewerActive(true);
+    this.syncPdfViewerUnsavedState();
+
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.on('onBackGround', this.onBackGround);
     context.eventHub.on('memoryPressure', this.onMemoryPressure);
+    context.eventHub.on(EVENT_DOCUMENT_OPEN_REQUESTED, this.onDocumentOpenRequested);
+    context.eventHub.on(EVENT_APP_TERMINATE_REQUESTED, this.onAppTerminateRequested);
 
     // 翻页遮罩：切到屏侧翻页时先显示渐变遮罩再渐出
     this.viewerViewModel.onPageFlipModeChanged = (mode: PDFPageFlipMode) => {
@@ -2165,7 +2324,7 @@ struct PDFView {
    * 拦截系统返回键，回到主页而非退出应用
    */
   onBackPress(): boolean {
-    this.backToMainMenu();
+    this.requestBackToMainMenu();
     return true;
   }
 
@@ -2179,9 +2338,14 @@ struct PDFView {
     this.metronomeController.cleanup();
     this.tunerController.cleanup();
     this.immersiveDisablingListening();
+    setPdfViewerActive(false);
+    syncPdfViewerHasUnsavedChanges(false, false);
+
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.off('onBackGround', this.onBackGround);
     context.eventHub.off('memoryPressure', this.onMemoryPressure);
+    context.eventHub.off(EVENT_DOCUMENT_OPEN_REQUESTED, this.onDocumentOpenRequested);
+    context.eventHub.off(EVENT_APP_TERMINATE_REQUESTED, this.onAppTerminateRequested);
 
     // 取消注册窗口状态监听
     if (this.windowStatusCallback) {
@@ -2365,17 +2529,13 @@ struct PDFView {
     const baseName = sandboxPath.split('/').pop() ?? 'received.pdf';
     const hostContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const saveTempPath = `${hostContext.tempDir}/saveTemp_${baseName}`;
-    this.getUIContext().getRouter().replaceUrl({
-      url: 'pages/PDFView',
-      params: {
-        'systemPath': sharedUri,
-        'sandboxPath': sandboxPath,
-        'saveTempPath': saveTempPath,
-        'fileName': record.title ?? baseName
-      }
-    }).catch((error: Error) => {
-      hilog.error(0, 'PDFView', `打开碰一碰接收的 PDF 失败: ${error.message}`);
-    });
+    const params: Record<string, string> = {
+      'systemPath': sharedUri,
+      'sandboxPath': sandboxPath,
+      'saveTempPath': saveTempPath,
+      'fileName': record.title ?? baseName
+    };
+    this.requestOpenDocument(params);
   }
 
   private unregisterKnockFileReceive(): void {
@@ -4897,7 +5057,7 @@ struct PDFView {
               .width(140)
               .height(40)
               .margin({ top: 4 })
-              .onClick(() => this.backToMainMenu())
+              .onClick(() => this.requestBackToMainMenu())
           }
           .width('80%')
           .constraintSize({ maxWidth: 400, minWidth: 280 })

@@ -21,6 +21,12 @@ import {
 } from '../continuation/PdfContinuationRestore';
 import { ensureDistributedDataSyncPermission } from '../continuation/PdfContinuationPermission';
 import { pdfContinuationDistributed } from '../continuation/PdfContinuationDistributed';
+import {
+  EVENT_APP_TERMINATE_REQUESTED,
+  EVENT_DOCUMENT_OPEN_REQUESTED,
+  isPdfViewerActiveWithUnsaved,
+  stashPendingDocumentOpenParams
+} from '../navigation/PendingDocumentOpen';
 
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
 const TAG = 'EntryAbility';
@@ -142,6 +148,22 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+  }
+
+  /**
+   * 2in1/平板窗口关闭前询问是否保存；返回 true 取消本次关闭。
+   * 手机从多任务划掉通常不会触发此回调。
+   */
+  async onPrepareToTerminateAsync(): Promise<boolean> {
+    if (!isPdfViewerActiveWithUnsaved()) {
+      return false;
+    }
+    try {
+      this.context.eventHub.emit(EVENT_APP_TERMINATE_REQUESTED);
+    } catch (error) {
+      hilog.error(0, TAG, `onPrepareToTerminateAsync emit 失败: ${error}`);
+    }
+    return true;
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -378,6 +400,11 @@ export default class EntryAbility extends UIAbility {
           systemPath: args['systemPath'],
           openedAt: new Date().getTime()
         });
+      }
+      if (isPdfViewerActiveWithUnsaved()) {
+        stashPendingDocumentOpenParams(args);
+        this.context.eventHub.emit(EVENT_DOCUMENT_OPEN_REQUESTED);
+        return;
       }
       this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
     } catch (error) {
