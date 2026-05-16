@@ -1,6 +1,8 @@
 // 无实时模糊：圆角面板使用纯色底，避免 backdrop 模糊在圆角处发灰/漏边。
 export const SharedPanelBackgroundColor: string = 'rgba(23, 27, 36, 0.90)';
 export const SharedPanelControlHighlightColor: string = 'rgba(255, 255, 255, 0.2)';
+/** 书签/文档未保存提示圆点 */
+export const UnsavedChangesIndicatorColor: string = 'rgba(255, 132, 0, 0.95)';
 
 /** 与节拍器「设置速度」弹窗、浮层面板一致的模态卡片样式 */
 export const ModalCardBackgroundColor: string = 'rgba(12, 15, 21, 0.96)';
