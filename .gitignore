@@ -15,3 +15,4 @@ entry/patch.json
 build*.ps1
 deploy.ps1
 connect-wifi.ps1
+.vscode/tasks.json
