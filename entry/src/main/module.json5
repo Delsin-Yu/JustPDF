@@ -40,6 +40,18 @@
                 "linkFeature": "FileOpen"
               }
             ]
+          },
+          {
+            "actions": [
+              "ohos.want.action.sendData"
+            ],
+            "uris": [
+              {
+                "scheme": "file",
+                "utd": "com.adobe.pdf",
+                "maxFileSupported": 1
+              }
+            ]
           }
         ]
       }

@@ -2,9 +2,12 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
-import { preferences } from '@kit.ArkData';
+import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { systemShare } from '@kit.ShareKit';
 import { addRecentFile } from '../components/RecentFilesHelper';
+
+const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
 
 export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
@@ -12,11 +15,18 @@ export default class EntryAbility extends UIAbility {
   private window: window.Window | undefined;
   /** 与 window.on('avoidAreaChange') 传入 off 的引用需一致 */
   private avoidAreaChangeHandler: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
+  /** 冷启动时系统分享传入的 Want，在 loadInitialContent 中解析 */
+  private pendingSystemShareWant: Want | undefined = undefined;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     } catch (error) {
+    }
+
+    if (this.isSystemShareLaunch(launchParam)) {
+      this.pendingSystemShareWant = want;
+      return;
     }
 
     let uri = want.uri;
@@ -26,7 +36,12 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('launchUri', uri);
   }
 
-  onNewWant(want: Want): void {
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (this.isSystemShareLaunch(launchParam)) {
+      this.handleSystemShareWant(want);
+      return;
+    }
+
     let uri = want.uri;
     if (uri == null || uri == undefined) {
       return;
@@ -56,9 +71,57 @@ export default class EntryAbility extends UIAbility {
     this.loadInitialContent(windowStage);
   }
 
+  private isSystemShareLaunch(launchParam: AbilityConstant.LaunchParam): boolean {
+    return launchParam.launchReasonMessage === SYSTEM_SHARE_LAUNCH_REASON;
+  }
+
+  private async extractPdfUriFromShareWant(want: Want): Promise<string | null> {
+    try {
+      const data: systemShare.SharedData = await systemShare.getSharedData(want);
+      const records = data.getRecords();
+      const pdfUtd: string = utd.UniformDataType.PDF;
+      for (let i = 0; i < records.length; i++) {
+        const record = records[i];
+        if (!record.uri || record.uri.length === 0) {
+          continue;
+        }
+        if (record.utd === pdfUtd || record.utd === 'com.adobe.pdf' ||
+          (record.uri.toLowerCase().endsWith('.pdf'))) {
+          return record.uri;
+        }
+      }
+    } catch (error) {
+      hilog.error(0, 'EntryAbility', `解析系统分享数据失败: ${error}`);
+    }
+    return null;
+  }
+
+  private handleSystemShareWant(want: Want): void {
+    this.extractPdfUriFromShareWant(want).then((uri: string | null) => {
+      if (!uri) {
+        hilog.warn(0, 'EntryAbility', '系统分享未包含可打开的 PDF');
+        return;
+      }
+      if (this.currentRouter) {
+        AppStorage.setOrCreate('launchUri', uri);
+        this.tryDirectLaunch();
+        return;
+      }
+      AppStorage.setOrCreate('launchUri', uri);
+    });
+  }
+
   private async loadInitialContent(windowStage: window.WindowStage): Promise<void> {
     let pageUrl: string = 'pages/Index';
-    const launchUri = AppStorage.get<string>('launchUri');
+    let launchUri: string | undefined = AppStorage.get<string>('launchUri');
+    if (this.pendingSystemShareWant) {
+      const shareWant = this.pendingSystemShareWant;
+      this.pendingSystemShareWant = undefined;
+      const shareUri = await this.extractPdfUriFromShareWant(shareWant);
+      if (shareUri) {
+        launchUri = shareUri;
+      }
+    }
     if (launchUri) {
       try {
         const params = await this.buildLaunchParams(launchUri);
