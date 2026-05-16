@@ -74,10 +74,10 @@ export interface PageCache {
 }
 
 @Concurrent
-function cachePage(documentPath: string, documentIndex: number, renderScale: number = 2): PageCache {
+function cachePage(documentPath: string, documentIndex: number, renderScale: number, openPassword: string): PageCache {
 
   const document = new pdfService.PdfDocument();
-  const result = document.loadDocument(documentPath);
+  const result = document.loadDocument(documentPath, openPassword);
   if (result != pdfService.ParseResult.PARSE_SUCCESS) {
     throw new Error(`加载文档失败: ${result}`);
   }
@@ -139,6 +139,7 @@ export class PageInfo implements ReadonlyPageInfo {
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, PendingCacheTask> = new Map();
   private pagePath: string;
+  private openPassword: string;
   private importedPdfPolylineSources: ImportedPdfPolylineStrokeSource[] = [];
   public pageThumbnail: image.PixelMap | undefined = undefined;
   private pageThumbnailTask: PendingThumbnailTask | undefined = undefined;
@@ -152,10 +153,16 @@ export class PageInfo implements ReadonlyPageInfo {
     return this._pdfPage;
   }
 
-  constructor(localPageIndex: number, pdfDocument: pdfService.PdfDocument, pagePath: string) {
+  constructor(
+    localPageIndex: number,
+    pdfDocument: pdfService.PdfDocument,
+    pagePath: string,
+    openPassword: string = ''
+  ) {
     this.localPageIndex = localPageIndex;
     this.pdfDocument = pdfDocument;
     this.pagePath = pagePath;
+    this.openPassword = openPassword;
   }
 
   public retainThumbnail(preferredSize: Vector2): void {
@@ -169,7 +176,7 @@ export class PageInfo implements ReadonlyPageInfo {
     const scaleX = preferredSize.x / pageSize.x;
     const scaleY = preferredSize.y / pageSize.y;
     const scale = Math.min(scaleX, scaleY);
-    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale);
+    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale, this.openPassword);
     const promise = taskpool.execute(task, taskpool.Priority.LOW)
       .then(result => {
         const pageCache = result as PageCache;
@@ -217,7 +224,7 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 
   private startNewCacheTask(renderScale: number, priority: taskpool.Priority): Promise<PageCache> {
-    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale);
+    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale, this.openPassword);
     const promise = taskpool.execute(task, priority)
       .then(result => {
         const pageCache = result as PageCache;

@@ -1,4 +1,5 @@
 import { ContainerCfg, ContainerPadding, ContainerSpacing, FullRect, MakeSlider, StyleIconButton, TopLeft, TopRight, toResultCode, toVisibility } from '../components/UIComponents';
+import { pdfLoadNeedsPassword, reloadPdfDocument } from '../components/PdfDocumentLoader';
 import { ComponentContent, LengthMetricsUnit, OverlayManager, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -32,6 +33,24 @@ import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
 import { PDFAnnotateMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './pdfview/AnnotateLongPressIndicator';
 import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth, PDFAnnotationPalette } from './pdfview/PDFAnnotationPalette';
+import {
+  ModalBodyTextColor,
+  ModalButtonPrimaryColor,
+  ModalButtonSecondaryColor,
+  ModalCardBackgroundColor,
+  ModalCardBorderColor,
+  ModalCardShadow,
+  ModalDimOverlayColor,
+  ModalErrorTextColor,
+  ModalInputBackgroundColor,
+  ModalInputCaretColor,
+  ModalInputPlaceholderColor,
+  ModalMutedTextColor,
+  ModalTitleTextColor,
+  ViewerPageBackdropColor,
+  ViewerPageLoadingIndicatorColor,
+  ViewerPageLoadingTextColor
+} from './pdfview/PDFPanelVisualConstants';
 import { AnnotationColor } from './pdfview/PDFAnnotationColors';
 
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
@@ -415,6 +434,8 @@ struct PDFView {
   fileName = '';
   mainWindow: window.Window = (AppStorage.get('window') as window.Window);
   document = new pdfService.PdfDocument();
+  /** 当前会话打开加密 PDF 的密码；不写 preferences，离开阅读页即丢弃。 */
+  private sessionPdfPassword: string = '';
   pageDataSource: PageStore = new PageStore();
   preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   @Local viewerViewModel: PDFViewerViewModel = new PDFViewerViewModel();
@@ -430,6 +451,11 @@ struct PDFView {
   @Local view3ViewSize: Vector2 = Vec2(0, 0);
   @Local isDocumentLoading: boolean = true;
   @Local loadError: string = '';
+  @Local showPasswordGate: boolean = false;
+  @Local passwordGateInput: string = '';
+  @Local passwordGateErrorHint: string = '';
+  private documentInitStarted: boolean = false;
+  private passwordPromptResolver: ((password: string | null) => void) | undefined = undefined;
   transparencyTimeoutId: number | undefined = undefined;
   windowStatusCallback: ((statusType: window.WindowStatusType) => void) | undefined = undefined;
   freeWindowModeCallback: ((isInFreeWindowMode: boolean) => void) | undefined = undefined;
@@ -1330,8 +1356,7 @@ struct PDFView {
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
 
-    // Defer heavy document loading so UI can render the loading indicator first
-    this.initializeDocument();
+    // 文档加载在 onPageShow 启动，避免 aboutToAppear 中弹窗导致 CustomDialog 空指针崩溃
   }
 
   onPageShow(): void {
@@ -1346,24 +1371,26 @@ struct PDFView {
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口大小出错: ${error}.`);
     }
+    if (!this.documentInitStarted) {
+      this.documentInitStarted = true;
+      this.initializeDocument();
+    }
   }
 
   private async initializeDocument(): Promise<void> {
     this.loadError = '';
+    this.sessionPdfPassword = '';
     const loadVersion = ++this.documentLoadVersion;
-    const result = this.document.loadDocument(this.sandBoxPath);
-    if (result != pdfService.ParseResult.PARSE_SUCCESS) {
-      let resultText = toResultCode(result);
-      hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`);
-      if (this.documentLoadVersion == loadVersion) {
-        this.loadError = `无法加载 PDF 文件: ${resultText}`;
-        this.isDocumentLoading = false;
-      }
+    const loaded = await this.loadDocumentWithPasswordPrompt(loadVersion);
+    if (!loaded) {
+      return;
+    }
+    if (this.documentLoadVersion != loadVersion) {
       return;
     }
     this.viewerViewModel.setTotalPageCount(this.document.getPageCount());
     for (let i = 0; i < this.viewerViewModel.totalPageCount; i++) {
-      this.pageDataSource.push(new PageInfo(i, this.document, this.sandBoxPath));
+      this.pageDataSource.push(new PageInfo(i, this.document, this.sandBoxPath, this.sessionPdfPassword));
     }
 
     await this.createPlaceholderPixelMap();
@@ -1371,6 +1398,167 @@ struct PDFView {
     this.isDocumentLoading = false;
     this.triggerPageFlipShadeIntro();
     this.startTransparencyTimeout();
+  }
+
+  /**
+   * 尝试加载 PDF；若加密则循环弹出密码框直至成功或用户取消。
+   * 密码仅保存在 sessionPdfPassword，不写入 preferences。
+   */
+  private async loadDocumentWithPasswordPrompt(loadVersion: number): Promise<boolean> {
+    let password = '';
+    let passwordErrorHint = '';
+
+    while (true) {
+      const result = password.length === 0
+        ? this.document.loadDocument(this.sandBoxPath, '')
+        : reloadPdfDocument(this.document, this.sandBoxPath, password);
+
+      if (result === pdfService.ParseResult.PARSE_SUCCESS) {
+        this.sessionPdfPassword = password;
+        return true;
+      }
+
+      if (!pdfLoadNeedsPassword(result, this.sandBoxPath)) {
+        const resultText = toResultCode(result);
+        hilog.error(0, 'PDFView', `加载 PDF 文件出错: ${resultText}`);
+        if (this.documentLoadVersion === loadVersion) {
+          this.loadError = `无法加载 PDF 文件: ${resultText}`;
+          this.isDocumentLoading = false;
+        }
+        return false;
+      }
+
+      if (result === pdfService.ParseResult.PARSE_ERROR_PASSWORD) {
+        try {
+          this.document.releaseDocument();
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+
+      if (this.documentLoadVersion !== loadVersion) {
+        return false;
+      }
+
+      const entered = await this.waitForPasswordGateInput(passwordErrorHint);
+
+      if (entered === null) {
+        if (this.documentLoadVersion === loadVersion) {
+          this.isDocumentLoading = false;
+          this.backToMainMenu();
+        }
+        return false;
+      }
+
+      password = entered;
+      passwordErrorHint = '密码错误，请重试';
+    }
+  }
+
+  /** 在阅读页内嵌密码门（不用 CustomDialog，避免页面未完成构建时 open 崩溃）。 */
+  private waitForPasswordGateInput(errorHint: string): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      this.passwordGateInput = '';
+      this.passwordGateErrorHint = errorHint;
+      this.showPasswordGate = true;
+      this.passwordPromptResolver = resolve;
+    });
+  }
+
+  private resolvePasswordGate(password: string | null): void {
+    this.showPasswordGate = false;
+    const resolver = this.passwordPromptResolver;
+    this.passwordPromptResolver = undefined;
+    resolver?.(password);
+  }
+
+  private confirmPasswordGate(): void {
+    this.resolvePasswordGate(this.passwordGateInput);
+  }
+
+  private cancelPasswordGate(): void {
+    this.resolvePasswordGate(null);
+  }
+
+  @Builder
+  PasswordGateOverlay() {
+    Column() {
+      Column({ space: 16 }) {
+        Text('输入 PDF 密码')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(ModalTitleTextColor)
+          .width('100%')
+          .textAlign(TextAlign.Center)
+        Text(this.fileName)
+          .fontSize(14)
+          .fontColor(ModalMutedTextColor)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .textAlign(TextAlign.Center)
+        if (this.passwordGateErrorHint.length > 0) {
+          Text(this.passwordGateErrorHint)
+            .fontSize(13)
+            .fontColor(ModalErrorTextColor)
+            .width('100%')
+            .textAlign(TextAlign.Center)
+        }
+        TextInput({ text: this.passwordGateInput, placeholder: '密码' })
+          .type(InputType.Password)
+          .enterKeyType(EnterKeyType.Done)
+          .defaultFocus(true)
+          .showPasswordIcon(true)
+          .width('100%')
+          .height(48)
+          .fontSize(16)
+          .fontColor(ModalTitleTextColor)
+          .placeholderColor(ModalInputPlaceholderColor)
+          .backgroundColor(ModalInputBackgroundColor)
+          .caretColor(ModalInputCaretColor)
+          .borderRadius(14)
+          .padding({ left: 14, right: 14 })
+          .onChange((value: string) => {
+            this.passwordGateInput = value;
+          })
+          .onSubmit((_enterKey: EnterKeyType, _event: SubmitEvent) => {
+            this.confirmPasswordGate();
+          })
+        Row({ space: 12 }) {
+          Button('取消')
+            .type(ButtonType.Capsule)
+            .layoutWeight(1)
+            .height(40)
+            .fontSize(14)
+            .fontColor(ModalTitleTextColor)
+            .backgroundColor(ModalButtonSecondaryColor)
+            .onClick(() => this.cancelPasswordGate())
+          Button('确定')
+            .type(ButtonType.Capsule)
+            .layoutWeight(1)
+            .height(40)
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(ModalTitleTextColor)
+            .backgroundColor(ModalButtonPrimaryColor)
+            .onClick(() => this.confirmPasswordGate())
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .constraintSize({ maxWidth: 400, minWidth: 280 })
+      .padding(28)
+      .borderRadius(18)
+      .backgroundColor(ModalCardBackgroundColor)
+      .border({ width: 1, color: ModalCardBorderColor })
+      .shadow(ModalCardShadow)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 24, right: 24 })
+    .backgroundColor(ModalDimOverlayColor)
   }
 
   /**
@@ -1382,6 +1570,9 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
+    this.sessionPdfPassword = '';
+    this.resolvePasswordGate(null);
+    this.documentInitStarted = false;
     this.disposePanelOverlays();
     this.metronomeController.cleanup();
     this.tunerController.cleanup();
@@ -3703,19 +3894,28 @@ struct PDFView {
       }
 
       if (this.isDocumentLoading) {
-        Column() {
-          LoadingProgress()
-            .width(64)
-            .height(64)
-          Text(`正在加载 ${this.fileName}`)
-            .fontSize(16)
-            .fontColor(Color.Gray)
-            .margin({ top: 12 })
+        Stack({ alignContent: Alignment.Center }) {
+          Column() {
+            LoadingProgress()
+              .width(64)
+              .height(64)
+              .color(ViewerPageLoadingIndicatorColor)
+            Text(`正在加载 ${this.fileName}`)
+              .fontSize(16)
+              .fontColor(ViewerPageLoadingTextColor)
+              .margin({ top: 12 })
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+
+          if (this.showPasswordGate) {
+            this.PasswordGateOverlay()
+          }
         }
         .width('100%')
         .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('sys.color.white'))
+        .backgroundColor(ViewerPageBackdropColor)
       }
 
       if (this.loadError != '') {
@@ -3723,33 +3923,41 @@ struct PDFView {
           Column({ space: 20 }) {
             SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
               .fontSize(48)
-              .fontColor([Color.Red])
+              .fontColor([ModalErrorTextColor])
             Text('加载失败')
               .fontSize(24)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#333333')
+              .fontColor(ModalTitleTextColor)
             Text(this.loadError)
               .fontSize(14)
-              .fontColor('#999999')
+              .fontColor(ModalBodyTextColor)
               .textAlign(TextAlign.Center)
-              .constraintSize({ maxWidth: 260 })
+              .width('100%')
             Button('返回')
               .type(ButtonType.Capsule)
               .fontSize(16)
               .fontWeight(FontWeight.Bold)
-              .width(120)
+              .fontColor(ModalTitleTextColor)
+              .backgroundColor(ModalButtonPrimaryColor)
+              .width(140)
+              .height(40)
               .margin({ top: 4 })
               .onClick(() => this.backToMainMenu())
           }
+          .width('80%')
+          .constraintSize({ maxWidth: 400, minWidth: 280 })
           .padding(32)
-          .borderRadius(16)
-          .backgroundColor('#F5F5F5')
-          .shadow({ radius: 8, color: 'rgba(0, 0, 0, 0.1)', offsetY: 2 })
+          .borderRadius(18)
+          .backgroundColor(ModalCardBackgroundColor)
+          .border({ width: 1, color: ModalCardBorderColor })
+          .shadow(ModalCardShadow)
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('sys.color.white'))
+        .alignItems(HorizontalAlign.Center)
+        .padding({ left: 24, right: 24 })
+        .backgroundColor(ViewerPageBackdropColor)
       }
 
       AnnotateLongPressIndicator({
@@ -3763,7 +3971,7 @@ struct PDFView {
     }
     .hitTestBehavior(HitTestMode.Transparent)
     .size({ width: '100%', height: '100%' })
-    .backgroundColor($r('sys.color.white'))
+    .backgroundColor(ViewerPageBackdropColor)
     .focusable(true)
     .defaultFocus(true)
     .focusOnTouch(true)

@@ -121,7 +121,7 @@ export function toResultCode(parseResult: pdfService.ParseResult): string {
     case pdfService.ParseResult.PARSE_ERROR_FORMAT:
       return '格式错误';
     case pdfService.ParseResult.PARSE_ERROR_PASSWORD:
-      return '暂不支持加密的 PDF 文件';
+      return '需要密码或密码错误';
     case pdfService.ParseResult.PARSE_ERROR_HANDLER:
       return '处理程序错误';
     case pdfService.ParseResult.PARSE_ERROR_CERT:
