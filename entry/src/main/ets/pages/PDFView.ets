@@ -31,7 +31,7 @@ import { TutorialDialogBuilder } from '../components/TutorialDialog';
 import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
-import { PDFAnnotationController } from './pdfview/PDFAnnotationController';
+import { AnnotatePreparePhaseOptions, PDFAnnotationController } from './pdfview/PDFAnnotationController';
 import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
 import { PDFTunerController } from './pdfview/PDFTunerController';
 import { PDFPageSlot } from './pdfview/PDFPageSlot';
@@ -595,6 +595,17 @@ struct PDFView {
   @Local view2ViewSize: Vector2 = Vec2(0, 0);
   @Local view3ViewSize: Vector2 = Vec2(0, 0);
   @Local isDocumentLoading: boolean = true;
+  /** 导出/写入 PDF 进行中（右上角指示，不遮挡整页） */
+  @Local isDocumentSaving: boolean = false;
+  @Local documentSaveMessage: string = '';
+  /** 进入批注模式：扫描/导入进行中（右上角指示） */
+  @Local isAnnotateModePreparing: boolean = false;
+  /** 仅主线程导入/写入阶段为 true，扫描阶段用户仍可平移/绘制 */
+  @Local isAnnotatePrepareBlockingEdits: boolean = false;
+  @Local annotatePrepareMessage: string = '';
+  /** 当前有效的批注准备会话 id；与 annotatePrepareSessionToken 不一致则中止扫描 */
+  private annotatePrepareActiveToken: number = 0;
+  private annotatePrepareSessionToken: number = 0;
   @Local loadError: string = '';
   @Local showPasswordGate: boolean = false;
   @Local passwordGateInput: string = '';
@@ -705,7 +716,14 @@ struct PDFView {
       this.syncPanelOverlays();
     },
     onRefreshDisplayedPages: () => this.refreshDisplayedPages(),
-    getPreferences: () => this.preferences
+    getPreferences: () => this.preferences,
+    getOpenPassword: () => this.sessionPdfPassword,
+    onAnnotatePreparePhase: (message: string, options?: AnnotatePreparePhaseOptions) => {
+      this.isAnnotateModePreparing = true;
+      this.isAnnotatePrepareBlockingEdits = options?.blocksEditing === true;
+      this.annotatePrepareMessage = message;
+    },
+    isAnnotatePrepareSessionActive: () => this.isAnnotatePrepareSessionActive()
   }, CanvasOverSampling);
   @Local metronomeController: PDFMetronomeController = new PDFMetronomeController({
     getUIContext: () => this.getUIContext(),
@@ -818,7 +836,44 @@ struct PDFView {
         }
         this.syncPanelOverlays();
       })
-      .catch((error: Error) => hilog.error(0, 'PDFView', `保存文档出错: ${error.message}`));
+      .catch((error: Error) => hilog.error(0, 'PDFView', `保存文档出错: ${error.message}`))
+      .finally(() => {
+        this.isDocumentSaving = false;
+        this.documentSaveMessage = '';
+      });
+  }
+
+  private isDocumentReadOnly(): boolean {
+    return this.isDocumentSaving || this.isAnnotatePrepareBlockingEdits;
+  }
+
+  private isAnnotatePrepareSessionActive(): boolean {
+    return this.annotatePrepareActiveToken > 0
+      && this.annotatePrepareActiveToken === this.annotatePrepareSessionToken;
+  }
+
+  private beginAnnotatePrepareSession(): number {
+    const sessionToken = ++this.annotatePrepareSessionToken;
+    this.annotatePrepareActiveToken = sessionToken;
+    return sessionToken;
+  }
+
+  private endAnnotatePrepareSession(sessionToken: number): void {
+    if (sessionToken !== this.annotatePrepareActiveToken) {
+      return;
+    }
+    this.annotatePrepareActiveToken = 0;
+    this.isAnnotateModePreparing = false;
+    this.isAnnotatePrepareBlockingEdits = false;
+    this.annotatePrepareMessage = '';
+  }
+
+  private cancelAnnotatePrepareSession(): void {
+    this.annotatePrepareSessionToken++;
+    this.annotatePrepareActiveToken = 0;
+    this.isAnnotateModePreparing = false;
+    this.isAnnotatePrepareBlockingEdits = false;
+    this.annotatePrepareMessage = '';
   }
 
   backToMainMenu(): void {
@@ -827,6 +882,7 @@ struct PDFView {
     // 关闭节拍器、调音器、批注画板三个浮层并把关闭状态推到 OverlayManager，
     // 防止离开 PDFView 后这些浮层在窗口级 OverlayManager 中残留显示，
     // 也保证下一次再进入 PDFView 时浮层处于初始（隐藏）状态。
+    this.cancelAnnotatePrepareSession();
     this.metronomeController.closeWindow();
     this.setTunerPanelVisible(false);
     this.viewerViewModel.closeAnnotatePalette();
@@ -2013,6 +2069,7 @@ struct PDFView {
 
   aboutToDisappear(): void {
     // 不在此处 clearContinuationReadingState：系统发起接续时可能先销毁页面再调 onContinue
+    this.cancelAnnotatePrepareSession();
     this.sessionPdfPassword = '';
     this.resolvePasswordGate(null);
     this.documentInitStarted = false;
@@ -3970,12 +4027,30 @@ struct PDFView {
   }
 
   enterAnnotateMode(explicitTool?: PDFAnnotateMode): void {
+    if (this.isDocumentSaving) {
+      return;
+    }
+    if (this.isAnnotateModePreparing) {
+      return;
+    }
     this.viewerViewModel.openAnnotatePalette(explicitTool);
     this.initPalettePosition();
     this.syncPanelOverlays();
-    this.annotationController.prepareImportedPolylineAnnotations()
+
+    if (this.annotationController.isImportedPolylinePrepared()) {
+      return;
+    }
+
+    const sessionToken = this.beginAnnotatePrepareSession();
+    this.isAnnotateModePreparing = true;
+    this.annotatePrepareMessage = '正在准备批注模式…';
+    void this.annotationController.prepareImportedPolylineAnnotations()
       .then(() => this.syncPanelOverlays())
-      .catch((error: Error) => hilog.error(0, 'PDFView', `导入已有折线批注出错: ${error.message}`));
+      .catch((error: Error) => hilog.error(0, 'PDFView', `导入已有折线批注出错: ${error.message}`))
+      .finally(() => {
+        this.endAnnotatePrepareSession(sessionToken);
+        this.syncPanelOverlays();
+      });
   }
 
   initPalettePosition(): void {

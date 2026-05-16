@@ -39,6 +39,7 @@ interface FloatingPaletteOffset {
 
 @ComponentV2
 export struct PDFAnnotationPalette {
+  @Param readOnly: boolean = false;
   @Param annotateMode: PDFAnnotateMode = 'draw';
   @Param undoCount: number = 0;
   @Param redoCount: number = 0;
@@ -85,7 +86,12 @@ export struct PDFAnnotationPalette {
     .border(color.id === this.drawColor.id
       ? { width: 1, color: 'rgba(255, 255, 255, 0.85)' }
       : { width: 1, color: 'rgba(255, 255, 255, 0.12)' })
+    .enabled(!this.readOnly)
+    .opacity(this.readOnly ? 0.4 : 1)
     .onClick(() => {
+      if (this.readOnly) {
+        return;
+      }
       this.onSelectDrawColor(color);
       this.showColorPopup = false;
     })
@@ -108,7 +114,12 @@ export struct PDFAnnotationPalette {
     .border(this.drawColor.id === CustomAnnotationColorId
       ? { width: 1, color: 'rgba(255, 255, 255, 0.85)' }
       : { width: 1, color: 'rgba(255, 255, 255, 0.20)', style: BorderStyle.Dashed })
+    .enabled(!this.readOnly)
+    .opacity(this.readOnly ? 0.4 : 1)
     .onClick(() => {
+      if (this.readOnly) {
+        return;
+      }
       // 切换到自定义模式：当前选中颜色变为自定义颜色存储里的值。
       this.onSelectDrawColor(this.customDrawColor);
       this.colorPopupMode = 'custom';
@@ -159,6 +170,9 @@ export struct PDFAnnotationPalette {
   }
 
   private handleDrawButtonClick(): void {
+    if (this.readOnly) {
+      return;
+    }
     if (this.annotateMode === 'draw') {
       // 同模式下点击：切换弹层显示，并恢复到预设视图。
       const willShow: boolean = !this.showColorPopup;
@@ -239,6 +253,8 @@ export struct PDFAnnotationPalette {
           }
           .width(BtnSize).height(BtnSize).borderRadius(10)
           .backgroundColor(this.annotateMode === 'draw' ? SharedPanelControlHighlightColor : Color.Transparent)
+          .enabled(!this.readOnly)
+          .opacity(this.readOnly ? 0.4 : 1)
           .onClick(() => this.handleDrawButtonClick())
           .bindPopup(this.showColorPopup, {
             builder: this.buildColorPopup,
@@ -259,7 +275,12 @@ export struct PDFAnnotationPalette {
           }
           .width(BtnSize).height(BtnSize).borderRadius(10)
           .backgroundColor(this.annotateMode === 'erase' ? SharedPanelControlHighlightColor : Color.Transparent)
+          .enabled(!this.readOnly)
+          .opacity(this.readOnly ? 0.4 : 1)
           .onClick(() => {
+            if (this.readOnly) {
+              return;
+            }
             this.showColorPopup = false;
             this.onSetMode('erase');
           })
@@ -293,7 +314,8 @@ export struct PDFAnnotationPalette {
           }
           .width(BtnSize).height(BtnSize).borderRadius(10)
           .backgroundColor(Color.Transparent)
-          .enabled(this.undoCount > 0).opacity(this.undoCount > 0 ? 1.0 : 0.35)
+          .enabled(!this.readOnly && this.undoCount > 0)
+          .opacity(!this.readOnly && this.undoCount > 0 ? 1.0 : 0.35)
           .onClick(() => this.onUndo())
 
           Button({ type: ButtonType.Normal }) {
@@ -313,7 +335,8 @@ export struct PDFAnnotationPalette {
           }
           .width(BtnSize).height(BtnSize).borderRadius(10)
           .backgroundColor(Color.Transparent)
-          .enabled(this.redoCount > 0).opacity(this.redoCount > 0 ? 1.0 : 0.35)
+          .enabled(!this.readOnly && this.redoCount > 0)
+          .opacity(!this.readOnly && this.redoCount > 0 ? 1.0 : 0.35)
           .onClick(() => this.onRedo())
 
           Stack({ alignContent: Alignment.TopEnd }) {

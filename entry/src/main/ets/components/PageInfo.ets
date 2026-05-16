@@ -73,6 +73,38 @@ export interface PageCache {
   displaySize: Vector2;
 }
 
+/** 在 TaskPool 工作线程中探测区间内含折线批注的页（避免主线程对每页调用 getPage）。 */
+@Concurrent
+function probePdfPolylineAnnotationPages(
+  documentPath: string,
+  startPageIndex: number,
+  endPageIndex: number,
+  openPassword: string
+): number[] {
+  const document = new pdfService.PdfDocument();
+  const loadResult = document.loadDocument(documentPath, openPassword);
+  if (loadResult !== pdfService.ParseResult.PARSE_SUCCESS) {
+    throw new Error(`加载文档失败: ${loadResult}`);
+  }
+
+  const affectedPageIndices: number[] = [];
+  try {
+    for (let pageIndex = startPageIndex; pageIndex < endPageIndex; pageIndex++) {
+      const page = document.getPage(pageIndex);
+      const annotations = page.getAnnotations();
+      for (let i = 0; i < annotations.length; i++) {
+        if (annotations[i].type === pdfService.AnnotationType.POLYLINE) {
+          affectedPageIndices.push(pageIndex);
+          break;
+        }
+      }
+    }
+  } finally {
+    document.releaseDocument();
+  }
+  return affectedPageIndices;
+}
+
 @Concurrent
 function cachePage(documentPath: string, documentIndex: number, renderScale: number, openPassword: string): PageCache {
 
@@ -1055,9 +1087,57 @@ export class PageStore implements IDataSource {
     }
   }
 
+  /**
+   * 在 TaskPool 中分批探测含折线批注的页码；主线程仅 await，不执行 getPage。
+   */
+  public async probePolylineAnnotationPageIndices(
+    documentPath: string,
+    openPassword: string,
+    onBatchComplete?: (processedEnd: number, total: number) => void
+  ): Promise<number[]> {
+    const total = this.pages.length;
+    if (total === 0 || documentPath.length === 0) {
+      return [];
+    }
+
+    const PROBE_BATCH_SIZE = 64;
+    const found: number[] = [];
+    for (let start = 0; start < total; start += PROBE_BATCH_SIZE) {
+      const end = Math.min(start + PROBE_BATCH_SIZE, total);
+      const task = new taskpool.Task(
+        probePdfPolylineAnnotationPages,
+        documentPath,
+        start,
+        end,
+        openPassword
+      );
+      const batchFound = await taskpool.execute(task, taskpool.Priority.MEDIUM) as number[];
+      for (let i = 0; i < batchFound.length; i++) {
+        found.push(batchFound[i]);
+      }
+      onBatchComplete?.(end, total);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+    return found;
+  }
+
   public importPdfPolylineAnnotations(uiContext: UIContext, canvasOverSampling: number): number[] {
+    return this.importPdfPolylineAnnotationsRange(uiContext, canvasOverSampling, 0, this.pages.length);
+  }
+
+  /** 按页区间导入 PDF 折线批注，供异步分批扫描大文档时调用。 */
+  public importPdfPolylineAnnotationsRange(
+    uiContext: UIContext,
+    canvasOverSampling: number,
+    startPageIndex: number,
+    endPageIndex: number
+  ): number[] {
     const affectedPageIndices: number[] = [];
-    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
+    const start = Math.max(0, startPageIndex);
+    const end = Math.min(this.pages.length, endPageIndex);
+    for (let pageIndex = start; pageIndex < end; pageIndex++) {
       const importedCount = this.pages[pageIndex].importPdfPolylineAnnotations(uiContext, canvasOverSampling);
       if (importedCount > 0) {
         affectedPageIndices.push(pageIndex);

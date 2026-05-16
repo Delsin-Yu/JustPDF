@@ -120,6 +120,7 @@ export struct PDFBookmarkPanelContent {
   @Param entries: PDFBookmarkListItem[] = [];
   @Param selectedId: string = '';
   @Param hasUnsavedBookmarks: boolean = false;
+  @Param readOnly: boolean = false;
   @Param useDocked: boolean = false;
   @Param dockedTopOffsetVp: number = 0;
   @Param hostScale: number = FloatingBookmarkDefaultScale;
@@ -270,6 +271,8 @@ export struct PDFBookmarkPanelContent {
         .height(BtnSize)
         .borderRadius(10)
         .backgroundColor('rgba(77, 166, 255, 0.35)')
+        .enabled(!this.readOnly)
+        .opacity(this.readOnly ? 0.4 : 1)
         .onClick(() => this.onAddAtCurrentPage())
 
         Button({ type: ButtonType.Normal }) {
@@ -277,8 +280,8 @@ export struct PDFBookmarkPanelContent {
         }
         .width(BtnSize).height(BtnSize).borderRadius(10)
         .backgroundColor(Color.Transparent)
-        .enabled(this.selectedId.length > 0)
-        .opacity(this.selectedId.length > 0 ? 1.0 : 0.35)
+        .enabled(!this.readOnly && this.selectedId.length > 0)
+        .opacity(!this.readOnly && this.selectedId.length > 0 ? 1.0 : 0.35)
         .onClick(() => this.onRenameSelected())
 
         Button({ type: ButtonType.Normal }) {
@@ -286,8 +289,8 @@ export struct PDFBookmarkPanelContent {
         }
         .width(BtnSize).height(BtnSize).borderRadius(10)
         .backgroundColor(Color.Transparent)
-        .enabled(this.selectedId.length > 0)
-        .opacity(this.selectedId.length > 0 ? 1.0 : 0.35)
+        .enabled(!this.readOnly && this.selectedId.length > 0)
+        .opacity(!this.readOnly && this.selectedId.length > 0 ? 1.0 : 0.35)
         .onClick(() => this.onDeleteSelected())
 
         Stack({ alignContent: Alignment.TopEnd }) {

@@ -27,12 +27,27 @@ const AnnotationPrefRecentCustomPdfsKey: string = 'annotationRecentCustomPdfColo
 const DefaultAnnotationCanvasOverSampling: number = 3;
 const DefaultAnnotationSubject: string = '由 Just PDF 创建的注释';
 
+/**
+ * 测试用：每个保存阶段额外停留时长（毫秒）。5 个阶段合计约 ≥2.5s，便于观察右上角指示器。
+ * 正式发布前请改为 0。
+ */
+const SAVE_DEBUG_PHASE_DELAY_MS: number = 500;
+/** 主线程上逐页导入（仅对探测到的页执行，通常很少）。 */
+const ANNOTATE_IMPORT_PAGE_BATCH_SIZE: number = 1;
+const ANNOTATE_REFRESH_PAGE_BATCH_SIZE: number = 2;
+
+export interface AnnotatePreparePhaseOptions {
+  /** 为 true 时禁止绘制/改书签（仅用于主线程写入阶段） */
+  blocksEditing?: boolean;
+}
+
 interface PDFAnnotationControllerDependencies {
   pageDataSource: PageStore;
   viewerViewModel: PDFViewerViewModel;
   document: pdfService.PdfDocument;
   getSystemPath: () => string;
   getSandBoxPath: () => string;
+  getOpenPassword: () => string;
   getSaveTempPath: () => string;
   getFileName: () => string;
   getUIContext: () => UIContext;
@@ -40,6 +55,18 @@ interface PDFAnnotationControllerDependencies {
   onRedrawRequested: () => void;
   onRefreshDisplayedPages: () => Promise<void>;
   getPreferences: () => preferences.Preferences | undefined;
+  /** 保存各阶段文案（用于 PDFView 右上角指示器，不阻塞 UI） */
+  onSavePhase?: (message: string) => void;
+  /** 进入批注模式准备各阶段文案（右上角指示器） */
+  onAnnotatePreparePhase?: (message: string, options?: AnnotatePreparePhaseOptions) => void;
+  /** 为 false 时中止进行中的批注模式准备（例如用户离开页面） */
+  isAnnotatePrepareSessionActive?: () => boolean;
+}
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 export interface AnnotationTransientResetResult {
@@ -207,17 +234,89 @@ export class PDFAnnotationController {
     this.persistDrawColorPreferences();
   }
 
+  isImportedPolylinePrepared(): boolean {
+    return this.importedPolylinePrepared;
+  }
+
   async prepareImportedPolylineAnnotations(): Promise<void> {
     if (this.importedPolylinePrepared) {
       return;
     }
 
-    const affectedPageIndices = this.dependencies.pageDataSource.importPdfPolylineAnnotations(
-      this.dependencies.getUIContext(),
-      this.canvasOverSampling
+    const documentPath = this.dependencies.getSandBoxPath();
+    const openPassword = this.dependencies.getOpenPassword();
+    const totalPageCount = this.dependencies.pageDataSource.totalPageCount();
+    let lastReportedPercent = -1;
+
+    await this.reportAnnotatePreparePhase('正在扫描批注…', false);
+    const candidatePageIndices = await this.dependencies.pageDataSource.probePolylineAnnotationPageIndices(
+      documentPath,
+      openPassword,
+      (processedEnd: number, total: number) => {
+        if (!this.isAnnotatePrepareSessionActive()) {
+          return;
+        }
+        const percent = total > 0 ? Math.floor((processedEnd * 100) / total) : 100;
+        if (percent !== lastReportedPercent && (percent % 5 === 0 || processedEnd >= total)) {
+          lastReportedPercent = percent;
+          void this.reportAnnotatePreparePhase(`正在扫描批注… ${processedEnd}/${total}`, false);
+        }
+      }
     );
+
+    if (!this.isAnnotatePrepareSessionActive()) {
+      return;
+    }
+
+    const uiContext = this.dependencies.getUIContext();
+    const affectedPageIndices: number[] = [];
+
+    if (candidatePageIndices.length > 0) {
+      await this.reportAnnotatePreparePhase('正在导入批注…', true);
+      for (let i = 0; i < candidatePageIndices.length; i += ANNOTATE_IMPORT_PAGE_BATCH_SIZE) {
+        if (!this.isAnnotatePrepareSessionActive()) {
+          this.dependencies.pageDataSource.restoreImportedPdfPolylineAnnotations();
+          this.dependencies.onRedrawRequested();
+          return;
+        }
+        const batchEnd = Math.min(i + ANNOTATE_IMPORT_PAGE_BATCH_SIZE, candidatePageIndices.length);
+        for (let j = i; j < batchEnd; j++) {
+          const pageIndex = candidatePageIndices[j];
+          const batchAffected = this.dependencies.pageDataSource.importPdfPolylineAnnotationsRange(
+            uiContext,
+            this.canvasOverSampling,
+            pageIndex,
+            pageIndex + 1
+          );
+          for (const affectedIndex of batchAffected) {
+            affectedPageIndices.push(affectedIndex);
+          }
+        }
+        await this.reportAnnotatePreparePhase(
+          `正在导入批注… ${batchEnd}/${candidatePageIndices.length}`,
+          true
+        );
+      }
+    }
+
+    if (!this.isAnnotatePrepareSessionActive()) {
+      if (affectedPageIndices.length > 0) {
+        this.dependencies.pageDataSource.restoreImportedPdfPolylineAnnotations();
+        this.dependencies.onRedrawRequested();
+      }
+      return;
+    }
+
     this.importedPolylinePrepared = true;
     if (affectedPageIndices.length === 0) {
+      return;
+    }
+
+    await this.reportAnnotatePreparePhase('正在写入预览…', true);
+    if (!this.isAnnotatePrepareSessionActive()) {
+      this.dependencies.pageDataSource.restoreImportedPdfPolylineAnnotations();
+      this.importedPolylinePrepared = false;
+      this.dependencies.onRedrawRequested();
       return;
     }
 
@@ -228,9 +327,23 @@ export class PDFAnnotationController {
       return;
     }
 
+    await this.reportAnnotatePreparePhase('正在刷新页面…', true);
     await this.refreshEditedPages(affectedPageIndices);
+    if (!this.isAnnotatePrepareSessionActive()) {
+      return;
+    }
     this.updateUnsavedStrokesFlag();
     this.dependencies.onRedrawRequested();
+  }
+
+  private isAnnotatePrepareSessionActive(): boolean {
+    const checker = this.dependencies.isAnnotatePrepareSessionActive;
+    return checker === undefined || checker();
+  }
+
+  private async reportAnnotatePreparePhase(message: string, blocksEditing: boolean): Promise<void> {
+    this.dependencies.onAnnotatePreparePhase?.(message, { blocksEditing: blocksEditing });
+    await yieldToUi();
   }
 
   applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
@@ -413,22 +526,37 @@ export class PDFAnnotationController {
     this.dependencies.onRedrawRequested();
   }
 
+  private async reportSavePhase(message: string): Promise<void> {
+    this.dependencies.onSavePhase?.(message);
+    await yieldToUi();
+    if (SAVE_DEBUG_PHASE_DELAY_MS > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, SAVE_DEBUG_PHASE_DELAY_MS);
+      });
+    }
+  }
+
   async executeSave(): Promise<boolean> {
     const saveUri = await this.pickSaveUri();
     if (!saveUri || saveUri.length === 0) {
       return false;
     }
 
+    await this.reportSavePhase('正在准备批注…');
     const affectedPage = this.collectAffectedAnnotations();
+
+    await this.reportSavePhase('正在写入 PDF…');
     if (!(await this.saveDocumentToTemp(affectedPage))) {
       return false;
     }
 
+    await this.reportSavePhase('正在导出到所选位置…');
     if (!(await this.copyTempToSaveUri(saveUri, affectedPage))) {
       await this.writeEditRenderDocument();
       return false;
     }
 
+    await this.reportSavePhase('正在完成保存…');
     if (!(await this.commitTempToSandbox(affectedPage))) {
       return false;
     }
@@ -439,6 +567,8 @@ export class PDFAnnotationController {
     this.clearHistory();
     this.hasUnsavedStrokes = false;
     this.importedPolylinePrepared = false;
+
+    await this.reportSavePhase('正在刷新页面…');
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
     return true;
   }
@@ -587,8 +717,10 @@ export class PDFAnnotationController {
 
   private async saveDocumentToTemp(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
     await this.cleanupTempSaveFile();
+    await yieldToUi();
 
     const success = this.dependencies.document.saveDocument(this.dependencies.getSaveTempPath());
+    await yieldToUi();
     if (!success) {
       hilog.error(0, 'PDFView', '保存 PDF 文件到临时路径时出错');
       this.removeAddedAnnotations(affectedPage);
@@ -706,9 +838,16 @@ export class PDFAnnotationController {
       return;
     }
 
-    for (const pageIndex of affectedPageIndices) {
+    for (let i = 0; i < affectedPageIndices.length; i++) {
+      if (!this.isAnnotatePrepareSessionActive()) {
+        return;
+      }
+      const pageIndex = affectedPageIndices[i];
       this.dependencies.pageDataSource.invalidateCaches(pageIndex);
       this.dependencies.pageDataSource.ensureCached(pageIndex, ViewerMinRenderScale, taskpool.Priority.HIGH);
+      if ((i + 1) % ANNOTATE_REFRESH_PAGE_BATCH_SIZE === 0) {
+        await yieldToUi();
+      }
     }
 
     const currentPageAffected = this.dependencies.viewerViewModel.displayedPageIndices.some((pageIndex: number) =>
