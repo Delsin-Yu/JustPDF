@@ -31,7 +31,7 @@ const DefaultAnnotationSubject: string = '由 Just PDF 创建的注释';
  * 测试用：每个保存阶段额外停留时长（毫秒）。5 个阶段合计约 ≥2.5s，便于观察右上角指示器。
  * 正式发布前请改为 0。
  */
-const SAVE_DEBUG_PHASE_DELAY_MS: number = 500;
+const SAVE_DEBUG_PHASE_DELAY_MS: number = 0;
 /** 主线程上逐页导入（仅对探测到的页执行，通常很少）。 */
 const ANNOTATE_IMPORT_PAGE_BATCH_SIZE: number = 1;
 const ANNOTATE_REFRESH_PAGE_BATCH_SIZE: number = 2;
@@ -238,6 +238,11 @@ export class PDFAnnotationController {
     return this.importedPolylinePrepared;
   }
 
+  /** 新文档加载或离开 PDFView 时调用，避免沿用上一次的「已准备」状态。 */
+  resetImportedPolylinePrepareState(): void {
+    this.importedPolylinePrepared = false;
+  }
+
   async prepareImportedPolylineAnnotations(): Promise<void> {
     if (this.importedPolylinePrepared) {
       return;
@@ -307,8 +312,8 @@ export class PDFAnnotationController {
       return;
     }
 
-    this.importedPolylinePrepared = true;
     if (affectedPageIndices.length === 0) {
+      this.importedPolylinePrepared = true;
       return;
     }
 
@@ -330,8 +335,11 @@ export class PDFAnnotationController {
     await this.reportAnnotatePreparePhase('正在刷新页面…', true);
     await this.refreshEditedPages(affectedPageIndices);
     if (!this.isAnnotatePrepareSessionActive()) {
+      this.dependencies.pageDataSource.restoreImportedPdfPolylineAnnotations();
+      this.dependencies.onRedrawRequested();
       return;
     }
+    this.importedPolylinePrepared = true;
     this.updateUnsavedStrokesFlag();
     this.dependencies.onRedrawRequested();
   }

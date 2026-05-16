@@ -873,6 +873,7 @@ struct PDFView {
     this.isAnnotateModePreparing = false;
     this.isAnnotatePrepareBlockingEdits = false;
     this.annotatePrepareMessage = '';
+    this.annotationController.resetImportedPolylinePrepareState();
   }
 
   /** 保存进行中：结束批注交互并关闭批注面板，避免与写入冲突。 */
@@ -1928,6 +1929,7 @@ struct PDFView {
   private async initializeDocument(): Promise<void> {
     this.loadError = '';
     this.sessionPdfPassword = '';
+    this.cancelAnnotatePrepareSession();
     const loadVersion = ++this.documentLoadVersion;
 
     if (this.continuationPending) {
