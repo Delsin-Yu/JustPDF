@@ -1,0 +1,34 @@
+import { hasUnsavedDocumentChanges } from '../components/UnsavedChangesPrompt';
+
+export const PDF_VIEWER_ACTIVE_KEY: string = 'pdfViewerActive';
+export const PDF_VIEWER_HAS_UNSAVED_KEY: string = 'pdfViewerHasUnsavedChanges';
+export const PENDING_DOCUMENT_OPEN_PARAMS_KEY: string = 'pendingDocumentOpenParams';
+
+export const EVENT_DOCUMENT_OPEN_REQUESTED: string = 'documentOpenRequested';
+export const EVENT_APP_TERMINATE_REQUESTED: string = 'appTerminateRequested';
+
+export function setPdfViewerActive(active: boolean): void {
+  AppStorage.setOrCreate(PDF_VIEWER_ACTIVE_KEY, active);
+}
+
+export function syncPdfViewerHasUnsavedChanges(hasUnsavedStrokes: boolean, bookmarksDirty: boolean): void {
+  AppStorage.setOrCreate(PDF_VIEWER_HAS_UNSAVED_KEY, hasUnsavedDocumentChanges(hasUnsavedStrokes, bookmarksDirty));
+}
+
+export function isPdfViewerActiveWithUnsaved(): boolean {
+  return AppStorage.get<boolean>(PDF_VIEWER_ACTIVE_KEY) === true
+    && AppStorage.get<boolean>(PDF_VIEWER_HAS_UNSAVED_KEY) === true;
+}
+
+export function stashPendingDocumentOpenParams(params: Record<string, string>): void {
+  AppStorage.setOrCreate(PENDING_DOCUMENT_OPEN_PARAMS_KEY, params);
+}
+
+export function takePendingDocumentOpenParams(): Record<string, string> | undefined {
+  if (!AppStorage.has(PENDING_DOCUMENT_OPEN_PARAMS_KEY)) {
+    return undefined;
+  }
+  const params = AppStorage.get<Record<string, string>>(PENDING_DOCUMENT_OPEN_PARAMS_KEY);
+  AppStorage.delete(PENDING_DOCUMENT_OPEN_PARAMS_KEY);
+  return params;
+}
