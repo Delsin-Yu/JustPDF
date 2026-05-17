@@ -15,4 +15,6 @@ entry/patch.json
 build*.ps1
 deploy.ps1
 connect-wifi.ps1
+.connect-wifi-history.txt
 .vscode/tasks.json
+hdc-target.ps1
