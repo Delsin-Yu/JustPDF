@@ -3,6 +3,7 @@ import { hasUnsavedDocumentChanges, promptUnsavedChangesAction, UnsavedChangesCh
 import {
   EVENT_APP_TERMINATE_REQUESTED,
   EVENT_DOCUMENT_OPEN_REQUESTED,
+  isValidPendingDocumentOpenParams,
   setPdfViewerActive,
   syncPdfViewerHasUnsavedChanges,
   takePendingDocumentOpenParams
@@ -1096,7 +1097,7 @@ struct PDFView {
 
   private onDocumentOpenRequested = (): void => {
     const params = takePendingDocumentOpenParams();
-    if (params === undefined || params['sandboxPath'] === undefined || params['sandboxPath'].length === 0) {
+    if (params === undefined || !isValidPendingDocumentOpenParams(params)) {
       return;
     }
     this.requestOpenDocument(params);
