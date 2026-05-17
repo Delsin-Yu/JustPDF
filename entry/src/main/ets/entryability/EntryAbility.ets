@@ -23,9 +23,9 @@ import { ensureDistributedDataSyncPermission } from '../continuation/PdfContinua
 import { pdfContinuationDistributed } from '../continuation/PdfContinuationDistributed';
 import {
   EVENT_APP_TERMINATE_REQUESTED,
-  EVENT_DOCUMENT_OPEN_REQUESTED,
   isPdfViewerActiveWithUnsaved,
-  stashPendingDocumentOpenParams
+  PDF_VIEWER_ACTIVE_KEY,
+  requestReplacePdfDocument
 } from '../navigation/PendingDocumentOpen';
 
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
@@ -41,6 +41,8 @@ export default class EntryAbility extends UIAbility {
   private pendingSystemShareWant: Want | undefined = undefined;
   /** 冷启动接续：在 onCreate 暂存，于 loadInitialContent 处理 */
   private pendingContinuationWant: Want | undefined = undefined;
+  /** onNewWant(CONTINUATION) 后若未走 onWindowStageRestore，延迟温启动接续 */
+  private continuationLaunchFallbackTimer: number | undefined = undefined;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     logContinuationLine(`onCreate ${describeLaunchReason(launchParam)}, reasonMessage=${launchParam.launchReasonMessage ?? ''}`);
@@ -78,7 +80,9 @@ export default class EntryAbility extends UIAbility {
       logWantParameterKeys(want, 'onNewWant.CONTINUATION');
       pdfContinuationDistributed.startRestore(this.context, want);
       this.pendingContinuationWant = want;
-      logContinuationLine('onNewWant 已暂存 pendingContinuationWant，等待 onWindowStageRestore/loadInitialContent');
+      // 勿在此处 replaceUrl：随后常会触发 onWindowStageRestore，由 loadInitialContent 加载 PDFView
+      logContinuationLine('onNewWant 接续已暂存，等待 onWindowStageRestore 或延迟温启动');
+      this.scheduleContinuationLaunchFallback();
       return;
     }
 
@@ -91,11 +95,11 @@ export default class EntryAbility extends UIAbility {
     if (uri == null || uri == undefined) {
       return;
     }
-    if (!this.currentRouter) {
-      return;
-    }
     AppStorage.setOrCreate('launchUri', uri);
-    this.tryDirectLaunch();
+    if (this.resolveActiveRouter() === undefined) {
+      logContinuationLine('onNewWant 已写入 launchUri，等待 Router 就绪后打开');
+    }
+    void this.tryDirectLaunch();
   }
 
   async onContinue(wantParam: Record<string, Object>): Promise<AbilityConstant.OnContinueResult> {
@@ -191,7 +195,29 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('preferences', this.preferences);
     AppStorage.setOrCreate('avoidAreaTopPx', 0);
     AppStorage.setOrCreate('avoidAreaBottomPx', 0);
-    void this.loadInitialContent(windowStage);
+    void this.loadInitialContent(windowStage, stageKind);
+  }
+
+  private clearContinuationLaunchFallback(): void {
+    if (this.continuationLaunchFallbackTimer !== undefined) {
+      clearTimeout(this.continuationLaunchFallbackTimer);
+      this.continuationLaunchFallbackTimer = undefined;
+    }
+  }
+
+  /** 仅当未发生 onWindowStageRestore 时，在应用已前台的情况下温启动接续 */
+  private scheduleContinuationLaunchFallback(): void {
+    this.clearContinuationLaunchFallback();
+    this.continuationLaunchFallbackTimer = setTimeout(() => {
+      this.continuationLaunchFallbackTimer = undefined;
+      if (this.pendingContinuationWant === undefined) {
+        return;
+      }
+      logContinuationLine('接续延迟温启动（未收到 onWindowStageRestore）');
+      if (this.attemptPendingContinuationLaunch()) {
+        logContinuationLine('接续延迟温启动完成');
+      }
+    }, 250);
   }
 
   private isSystemShareLaunch(launchParam: AbilityConstant.LaunchParam): boolean {
@@ -234,22 +260,103 @@ export default class EntryAbility extends UIAbility {
     });
   }
 
-  private async loadInitialContent(windowStage: window.WindowStage): Promise<void> {
+  private resolveActiveRouter(): Router | undefined {
+    if (this.currentRouter !== undefined) {
+      return this.currentRouter;
+    }
+    if (!this.window) {
+      return undefined;
+    }
+    try {
+      return this.window.getUIContext().getRouter();
+    } catch (error) {
+      hilog.warn(0, TAG, `resolveActiveRouter 失败: ${error}`);
+      return undefined;
+    }
+  }
+
+  private buildContinuationRouterArgs(want: Want): Record<string, string> | undefined {
+    const payload = extractContinuationPayload(want);
+    if (payload === null) {
+      return undefined;
+    }
+    const extraPaths = extractContinuationExtraLocalPaths(want);
+    return createPendingContinuationRouterArgs(payload, extraPaths);
+  }
+
+  /**
+   * 跨设备接续：Router 就绪时通过 guarded replaceUrl 打开；否则保留 pendingContinuationWant。
+   */
+  private attemptPendingContinuationLaunch(): boolean {
+    if (this.pendingContinuationWant === undefined) {
+      return false;
+    }
+    const args = this.buildContinuationRouterArgs(this.pendingContinuationWant);
+    if (args === undefined) {
+      logContinuationError('attemptPendingContinuationLaunch 接续载荷无效');
+      this.pendingContinuationWant = undefined;
+      return false;
+    }
+    const router = this.resolveActiveRouter();
+    if (router === undefined) {
+      return false;
+    }
+    this.pendingContinuationWant = undefined;
+    const handled = requestReplacePdfDocument(this.context, router, args);
+    if (handled) {
+      logContinuationLine('attemptPendingContinuationLaunch 已请求打开接续 PDF');
+    }
+    return handled;
+  }
+
+  private async loadInitialContent(windowStage: window.WindowStage, stageKind: string): Promise<void> {
+    this.clearContinuationLaunchFallback();
+
     let pageUrl: string = 'pages/Index';
     let launchUri: string | undefined = AppStorage.get<string>('launchUri');
-    logContinuationLine(`loadInitialContent 开始, pendingContinuation=${this.pendingContinuationWant !== undefined}`);
+    logContinuationLine(
+      `loadInitialContent 开始 kind=${stageKind}, pendingContinuation=${this.pendingContinuationWant !== undefined}`
+    );
 
-    if (this.pendingContinuationWant) {
+    if (this.pendingContinuationWant !== undefined) {
       const continuationWant = this.pendingContinuationWant;
-      this.pendingContinuationWant = undefined;
-      const payload = extractContinuationPayload(continuationWant);
-      if (payload !== null) {
-        const extraPaths = extractContinuationExtraLocalPaths(continuationWant);
-        AppStorage.setOrCreate('initialPdfViewArgs', createPendingContinuationRouterArgs(payload, extraPaths));
-        pageUrl = 'pages/PDFView';
-        logContinuationLine('loadInitialContent 接续 -> pages/PDFView（文件在 PDFView 内等待落地）');
-      } else {
+      const continuationArgs = this.buildContinuationRouterArgs(continuationWant);
+      if (continuationArgs === undefined) {
+        this.pendingContinuationWant = undefined;
         logContinuationError('loadInitialContent 接续载荷无效，留在 Index');
+      } else {
+        const router = this.resolveActiveRouter();
+        const viewerActive = AppStorage.get<boolean>(PDF_VIEWER_ACTIVE_KEY) === true;
+        this.pendingContinuationWant = undefined;
+
+        // 迁移恢复 + 阅读页未保存：不 loadContent(Index)，保留当前页并弹窗
+        if (stageKind === 'restore' && viewerActive && router !== undefined && isPdfViewerActiveWithUnsaved()) {
+          requestReplacePdfDocument(this.context, router, continuationArgs);
+          logContinuationLine('loadInitialContent 接续 restore+未保存：defer，跳过 loadContent');
+          try {
+            this.currentRouter = router;
+          } catch (_error) {
+          }
+          return;
+        }
+
+        // 温接续（非 restore）：阅读页已在前台，guarded replaceUrl，勿再 loadContent 盖掉
+        if (stageKind !== 'restore' && viewerActive && router !== undefined) {
+          requestReplacePdfDocument(this.context, router, continuationArgs);
+          logContinuationLine(
+            `loadInitialContent 温接续已派发（未保存=${isPdfViewerActiveWithUnsaved()}），跳过 loadContent`
+          );
+          try {
+            this.currentRouter = router;
+          } catch (_error) {
+          }
+          return;
+        }
+
+        // 冷启动 / onWindowStageRestore：必须由 loadContent 进入 PDFView
+        AppStorage.setOrCreate('initialPdfViewArgs', continuationArgs);
+        pageUrl = 'pages/PDFView';
+        logContinuationLine('loadInitialContent 接续 -> pages/PDFView（PDFView 内等待分布式落地）');
       }
     } else if (this.pendingSystemShareWant) {
       const shareWant = this.pendingSystemShareWant;
@@ -302,6 +409,7 @@ export default class EntryAbility extends UIAbility {
       }
       this.restoreWindowState();
       this.enableLayoutFullScreenAndSyncAvoidAreas();
+      void this.tryDirectLaunch();
     });
   }
 
@@ -386,10 +494,15 @@ export default class EntryAbility extends UIAbility {
     return this.buildLaunchParamsFromLocalPath(localPath, launchUri, '');
   }
 
-  private async tryDirectLaunch(): Promise<void> {
+  /**
+   * 处理 onNewWant / 系统分享等写入的 launchUri。
+   * @returns 是否已发起打开（含 defer 到 PDFView）；false 表示 Router 未就绪，launchUri 仍保留
+   */
+  private async tryDirectLaunch(): Promise<boolean> {
     const launchUri = AppStorage.get<string>('launchUri');
-    if (!launchUri || !this.currentRouter) {
-      return;
+    const router = this.resolveActiveRouter();
+    if (!launchUri || router === undefined) {
+      return false;
     }
     AppStorage.setOrCreate('launchUri', '');
     try {
@@ -401,15 +514,12 @@ export default class EntryAbility extends UIAbility {
           openedAt: new Date().getTime()
         });
       }
-      if (isPdfViewerActiveWithUnsaved()) {
-        stashPendingDocumentOpenParams(args);
-        this.context.eventHub.emit(EVENT_DOCUMENT_OPEN_REQUESTED);
-        return;
-      }
-      this.currentRouter.replaceUrl({ url: 'pages/PDFView', params: args });
+      requestReplacePdfDocument(this.context, router, args);
+      return true;
     } catch (error) {
       hilog.error(0, TAG, `Direct launch failed: ${error}`);
       AppStorage.setOrCreate('launchUri', launchUri);
+      return false;
     }
   }
 
