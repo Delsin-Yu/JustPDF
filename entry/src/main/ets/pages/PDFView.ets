@@ -35,6 +35,7 @@ import {
   resolveContinuationPdfParams
 } from '../continuation/PdfContinuationRestore';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
+import { stylusInteraction } from '@kit.Penkit';
 import { taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
@@ -833,6 +834,11 @@ struct PDFView {
   private harmonyShareWindowId: number = -1;
   /** PC/2in1 沙箱接收碰一碰文件 */
   private harmonyShareReceiveRegistered: boolean = false;
+  /** 手写笔笔身双击监听是否已注册 */
+  private stylusDoubleTapListening: boolean = false;
+  private readonly stylusDoubleTapCallback = (_event: stylusInteraction.DoubleTapEvent): void => {
+    this.handleStylusDoubleTap();
+  };
   tutorialDialogController: CustomDialogController = new CustomDialogController({
     builder: TutorialDialogBuilder(),
     width: '60%',
@@ -2006,6 +2012,8 @@ struct PDFView {
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], true, false, () => this.gotoPage(0)));
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_DOWN, KeyCode.KEYCODE_DPAD_RIGHT, KeyCode.KEYCODE_SPACE], true, false, () => this.gotoPage(this.viewerViewModel.getLastNavigableIndex())));
 
+    this.registerStylusDoubleTapListening();
+
     // 文档加载在 onPageShow 启动，避免 aboutToAppear 中弹窗导致 CustomDialog 空指针崩溃
   }
 
@@ -2339,6 +2347,7 @@ struct PDFView {
     this.metronomeController.cleanup();
     this.tunerController.cleanup();
     this.immersiveDisablingListening();
+    this.unregisterStylusDoubleTapListening();
     setPdfViewerActive(false);
     syncPdfViewerHasUnsavedChanges(false, false);
 
@@ -4620,6 +4629,61 @@ struct PDFView {
     } else {
       this.viewerViewModel.setAnnotateMode(mode);
     }
+    this.syncPanelOverlays();
+  }
+
+  private registerStylusDoubleTapListening(): void {
+    if (!canIUse('SystemCapability.Stylus.StylusService') || this.stylusDoubleTapListening) {
+      return;
+    }
+    try {
+      stylusInteraction.on('doubleTap', this.stylusDoubleTapCallback);
+      this.stylusDoubleTapListening = true;
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `注册手写笔双击监听失败: ${err.code} ${err.message}`);
+    }
+  }
+
+  private unregisterStylusDoubleTapListening(): void {
+    if (!canIUse('SystemCapability.Stylus.StylusService') || !this.stylusDoubleTapListening) {
+      return;
+    }
+    try {
+      stylusInteraction.off('doubleTap', this.stylusDoubleTapCallback);
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `注销手写笔双击监听失败: ${err.code} ${err.message}`);
+    }
+    this.stylusDoubleTapListening = false;
+  }
+
+  private cancelActiveAnnotationGesture(): void {
+    const resetResult = this.annotationController.resetTransientState();
+    if (resetResult.clearedDraw) {
+      this.view1DrawCtx.reset();
+      this.view2DrawCtx.reset();
+      this.view3DrawCtx.reset();
+    }
+    if (resetResult.clearedErase) {
+      this.redrawStrokes();
+    }
+  }
+
+  private handleStylusDoubleTap(): void {
+    if (this.isDocumentReadOnly()) {
+      return;
+    }
+    if (!this.viewerViewModel.isAnnotatePaletteVisible) {
+      return;
+    }
+    const mode = this.viewerViewModel.annotateMode;
+    if (mode !== 'draw' && mode !== 'erase') {
+      return;
+    }
+    this.cancelActiveAnnotationGesture();
+    const nextMode: PDFAnnotateMode = mode === 'draw' ? 'erase' : 'draw';
+    this.viewerViewModel.setAnnotateMode(nextMode);
     this.syncPanelOverlays();
   }
 

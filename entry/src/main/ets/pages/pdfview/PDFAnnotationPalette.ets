@@ -68,6 +68,13 @@ export struct PDFAnnotationPalette {
   @Local showColorPopup: boolean = false;
   @Local colorPopupMode: ColorPopupMode = 'preset';
 
+  @Monitor('annotateMode')
+  onAnnotateModeChanged(): void {
+    if (this.annotateMode === 'erase') {
+      this.showColorPopup = false;
+    }
+  }
+
   // ----------- 颜色弹出（预设）-----------
 
   @Builder
