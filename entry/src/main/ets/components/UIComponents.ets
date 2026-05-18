@@ -368,7 +368,7 @@ export struct MakeSlider {
   @Param value: number = 0;
   @Param min: number = 0;
   @Param max: number = 100;
-  @Param onChangeCallback: (value: number) => void = () => {
+  @Param onChangeCallback: (value: number, mode: SliderChangeMode) => void = () => {
   };
 
   build() {
@@ -388,6 +388,6 @@ export struct MakeSlider {
       .alignSelf(ItemAlign.End)
       .trackColor(TrackColor)
       .selectedColor(TrackColor)
-      .onChange((value: number, _mode: SliderChangeMode) => this.onChangeCallback(value))
+      .onChange((value: number, mode: SliderChangeMode) => this.onChangeCallback(value, mode))
   }
 }

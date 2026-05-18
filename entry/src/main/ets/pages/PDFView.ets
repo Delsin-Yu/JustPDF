@@ -45,6 +45,7 @@ import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { AnnotatePreparePhaseOptions, PDFAnnotationController } from './pdfview/PDFAnnotationController';
 import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
 import { PDFTunerController } from './pdfview/PDFTunerController';
+import { PDFLinkJumpHistory } from './pdfview/PDFLinkJumpHistory';
 import { PDFLinkDisplayHitArea, PDFPageSlot } from './pdfview/PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
@@ -659,6 +660,12 @@ struct PDFView {
   /** 当前触摸序列是否始于 PDF 链接热区；用于避免父级长按/侧翻与链接点击交叉触发。 */
   pdfLinkPressCandidateActive: boolean = false;
   private pdfLinkPressCandidateResetToken: number = 0;
+  private linkJumpHistory: PDFLinkJumpHistory = new PDFLinkJumpHistory();
+  @Local linkJumpCanGoBack: boolean = false;
+  @Local linkJumpCanGoForward: boolean = false;
+  @Local showLinkJumpHistory: boolean = false;
+  @Local linkJumpNavRevision: number = 0;
+  private sliderJumpStartPageIndex: number | undefined = undefined;
   private pdfLinkDebugState: Map<string, string> = new Map();
   @Local pdfLinkVisualOpacity: number = 0;
   private pdfLinkFadeTimeoutId: number | undefined = undefined;
@@ -2186,8 +2193,9 @@ struct PDFView {
       );
       startPage = clamped;
     }
+    this.clearLinkJumpHistory();
     logContinuationLine(`initializeDocument gotoPage startPage=${startPage}, totalPages=${this.viewerViewModel.totalPageCount}`);
-    await this.gotoPage(startPage);
+    await this.gotoPage(startPage, false, false);
     this.syncContinuationReadingState();
     this.bookmarkController.refresh();
     this.isDocumentLoading = false;
@@ -2420,6 +2428,7 @@ struct PDFView {
       this.transparencyTimeoutId = undefined;
     }
     this.clearPdfLinkFadeTimeout();
+    this.clearLinkJumpHistory();
 
     // 清除预取防抖定时器
     if (this.prefetchDebounceId) {
@@ -2835,7 +2844,7 @@ struct PDFView {
       this.pageTurnCrossfadeT = 1;
       this.pageTurnCommitAnimating = false;
       this.pageTurnNeighborAppearOpacity = 1;
-      void this.gotoPage(t, true);
+      void this.gotoPage(t, true, false);
       return;
     }
     this.pageTurnCommitAnimating = false;
@@ -3374,7 +3383,7 @@ struct PDFView {
       this.pageTurnNeighborAppearOpacity = 1;
       this.pageTurnCommitAnimating = true;
       this.pageTurnCrossfadeT = 1;
-      void this.gotoPage(targetPage, true);
+      void this.gotoPage(targetPage, true, false);
       return;
     }
     const dur = Math.round(Math.min(520, Math.max(240, 220 + (dist / Math.max(1, viewportWvp)) * 320)));
@@ -3391,7 +3400,7 @@ struct PDFView {
           return;
         }
         // 位移到位后再 goto：主条不再做淡出，由邻条与位移承担过渡，goto 后 reset 偏移。
-        void this.gotoPage(targetPage, true);
+        void this.gotoPage(targetPage, true, false);
       }
     }, () => {
       this.pageTurnOffsetVp = endOff;
@@ -3991,7 +4000,7 @@ struct PDFView {
     this.updateViewerViewSize();
   }
 
-  async gotoPage(targetIndex: number, deferSlideVisualReset: boolean = false): Promise<void> {
+  async gotoPage(targetIndex: number, deferSlideVisualReset: boolean = false, recordJumpHistory: boolean = true): Promise<void> {
     this.pendingSlideGotoTarget = undefined;
     if (targetIndex < 0 || targetIndex >= this.viewerViewModel.totalPageCount) {
       if (deferSlideVisualReset) {
@@ -4002,6 +4011,9 @@ struct PDFView {
     }
 
     const clampedTarget = Math.max(0, Math.min(targetIndex, Math.max(0, this.viewerViewModel.totalPageCount - 1)));
+    if (recordJumpHistory) {
+      this.recordLinkJumpHistory(this.viewerViewModel.currentPageIndex, clampedTarget);
+    }
     const indicesToLoad = this.viewerViewModel.getDisplayedIndicesForTargetPage(clampedTarget);
 
     // 取消上一次导航结束时安排的预取，否则 300ms 后仍以「旧中心」淘汰远页，
@@ -4075,11 +4087,67 @@ struct PDFView {
   }
 
   navigatePrevPage(): void {
-    this.gotoPage(this.viewerViewModel.navigateToPreviousPage());
+    this.gotoPage(this.viewerViewModel.navigateToPreviousPage(), false, false);
   }
 
   navigateNextPage(): void {
-    this.gotoPage(this.viewerViewModel.navigateToNextPage());
+    this.gotoPage(this.viewerViewModel.navigateToNextPage(), false, false);
+  }
+
+  private syncLinkJumpNavState(): void {
+    this.linkJumpCanGoBack = this.linkJumpHistory.canGoBack();
+    this.linkJumpCanGoForward = this.linkJumpHistory.canGoForward();
+    this.showLinkJumpHistory = this.linkJumpCanGoBack || this.linkJumpCanGoForward;
+    this.linkJumpNavRevision++;
+  }
+
+  private clearLinkJumpHistory(): void {
+    this.linkJumpHistory.clear();
+    this.syncLinkJumpNavState();
+  }
+
+  private recordLinkJumpHistory(fromPageIndex: number, toPageIndex: number): void {
+    this.linkJumpHistory.recordJump(fromPageIndex, toPageIndex);
+    this.syncLinkJumpNavState();
+  }
+
+  private handlePageSliderChange(newValue: number, mode: SliderChangeMode): void {
+    if (mode === SliderChangeMode.Begin) {
+      this.sliderJumpStartPageIndex = this.viewerViewModel.currentPageIndex;
+      void this.gotoPage(newValue, false, false);
+      return;
+    }
+    if (mode === SliderChangeMode.Moving) {
+      void this.gotoPage(newValue, false, false);
+      return;
+    }
+    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+      const fromPage = this.sliderJumpStartPageIndex ?? this.viewerViewModel.currentPageIndex;
+      this.sliderJumpStartPageIndex = undefined;
+      void this.gotoPage(newValue, false, false).then(() => {
+        this.recordLinkJumpHistory(fromPage, newValue);
+      });
+      return;
+    }
+    void this.gotoPage(newValue, false, false);
+  }
+
+  private navigatePdfLinkBack(): void {
+    const target = this.linkJumpHistory.popBack(this.viewerViewModel.currentPageIndex);
+    if (target === undefined) {
+      return;
+    }
+    this.syncLinkJumpNavState();
+    void this.gotoPage(target, false, false).then(() => this.syncLinkJumpNavState());
+  }
+
+  private navigatePdfLinkForward(): void {
+    const target = this.linkJumpHistory.popForward(this.viewerViewModel.currentPageIndex);
+    if (target === undefined) {
+      return;
+    }
+    this.syncLinkJumpNavState();
+    void this.gotoPage(target, false, false).then(() => this.syncLinkJumpNavState());
   }
 
   /** 屏侧透明翻页区：若当前手势为平移/捏合/滚轮缩放则消费一次点击而不翻页 */
@@ -5335,7 +5403,7 @@ struct PDFView {
                 value: this.viewerViewModel.currentPageIndex,
                 min: 0,
                 max: this.viewerViewModel.totalPageCount - 1,
-                onChangeCallback: newValue => this.gotoPage(newValue)
+                onChangeCallback: (newValue: number, mode: SliderChangeMode) => this.handlePageSliderChange(newValue, mode)
               }
             ).visibility(toVisibility(this.viewerViewModel.showControls && this.viewerViewModel.showSlider))
             Blank().height(60)
@@ -5404,7 +5472,13 @@ struct PDFView {
                   || this.annotationController.hasUnsavedStrokes,
                 hasUnsavedAnnotations: this.annotationController.hasUnsavedStrokes,
                 onToggleBookmark: () => this.toggleBookmarkPanel(),
-                onSaveAnnotation: () => this.executeSaveDocument()
+                onSaveAnnotation: () => this.executeSaveDocument(),
+                showLinkJumpHistory: this.showLinkJumpHistory,
+                canGoLinkJumpBack: this.linkJumpCanGoBack,
+                canGoLinkJumpForward: this.linkJumpCanGoForward,
+                onLinkJumpBack: () => this.navigatePdfLinkBack(),
+                onLinkJumpForward: () => this.navigatePdfLinkForward(),
+                linkJumpNavRevision: this.linkJumpNavRevision
               })
 
               Blank()

@@ -34,6 +34,12 @@ export struct PDFViewerActionMenu {
   @Param hasUnsavedAnnotations: boolean = false;
   @Param onToggleBookmark: () => void = () => {};
   @Param onSaveAnnotation: () => void = () => {};
+  @Param showLinkJumpHistory: boolean = false;
+  @Param canGoLinkJumpBack: boolean = false;
+  @Param canGoLinkJumpForward: boolean = false;
+  @Param onLinkJumpBack: () => void = () => {};
+  @Param onLinkJumpForward: () => void = () => {};
+  @Param linkJumpNavRevision: number = 0;
 
   private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
   private readonly settingsIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.gearshape')).fontSize('20vp');
@@ -188,6 +194,60 @@ export struct PDFViewerActionMenu {
   }
 
   @Builder
+  private buildLinkJumpCircleButton(icon: Resource, enabled: boolean, onClick: () => void) {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(icon)
+        .fontSize(20)
+        .fontColor([Color.White])
+        .fontWeight(FontWeight.Bold)
+    }
+      .width(44)
+      .height(44)
+      .hitTestBehavior(HitTestMode.Block)
+      .monopolizeEvents(true)
+      .backgroundColor(ButtonColorSemiTransparent)
+      .enabled(enabled)
+      .opacity(enabled ? 1 : 0.38)
+      .onClick(() => {
+        if (enabled) {
+          onClick();
+        }
+      })
+  }
+
+  @Builder
+  private buildLinkJumpHistoryButtons() {
+    if (this.showLinkJumpHistory) {
+      if (this.canGoLinkJumpBack) {
+        this.buildLinkJumpCircleButton(
+          $r('sys.symbol.chevron_backward'),
+          true,
+          () => this.onLinkJumpBack()
+        )
+      } else {
+        this.buildLinkJumpCircleButton(
+          $r('sys.symbol.chevron_backward'),
+          false,
+          () => this.onLinkJumpBack()
+        )
+      }
+      if (this.canGoLinkJumpForward) {
+        this.buildLinkJumpCircleButton(
+          $r('sys.symbol.chevron_forward'),
+          true,
+          () => this.onLinkJumpForward()
+        )
+      } else {
+        this.buildLinkJumpCircleButton(
+          $r('sys.symbol.chevron_forward'),
+          false,
+          () => this.onLinkJumpForward()
+        )
+      }
+    }
+  }
+
+  @Builder
   private buildBookmarkShortcutButton() {
     Stack({ alignContent: Alignment.TopEnd }) {
       Button({ type: ButtonType.Circle }) {
@@ -213,6 +273,13 @@ export struct PDFViewerActionMenu {
 
   build() {
     Column({ space: 6 }) {
+      Text(`${this.linkJumpNavRevision}`)
+        .width(0)
+        .height(0)
+        .opacity(0)
+        .visibility(Visibility.None)
+      this.buildLinkJumpHistoryButtons()
+
       if (this.showBookmarkShortcut) {
         this.buildBookmarkShortcutButton()
       }
