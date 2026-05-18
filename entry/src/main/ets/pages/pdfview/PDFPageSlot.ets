@@ -1,6 +1,20 @@
 import { FullRect, toVisibility } from '../../components/UIComponents';
 import { toSizePx, Vector2 } from '../../components/Numbers';
+import { PdfLinkTarget } from '../../components/PageInfo';
 import { LengthMetricsUnit } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const LINK_HIT_AREA_DEBUG: boolean = true;
+const LINK_TAP_MOVE_THRESHOLD_PX: number = 10;
+
+export interface PDFLinkDisplayHitArea {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  target: PdfLinkTarget;
+}
 
 @ComponentV2
 export struct PDFPageSlot {
@@ -17,6 +31,81 @@ export struct PDFPageSlot {
   @Param drawCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
   @Param onDrawTouch: (event: TouchEvent) => void = () => {};
   @Param onDrawMouse: (event: MouseEvent) => void = () => {};
+  @Param linkHitAreas: PDFLinkDisplayHitArea[] = [];
+  @Param linkOverlayEnabled: boolean = false;
+  @Param onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
+  @Param onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
+  @Param onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
+
+  private activeLinkHitAreaId: string = '';
+  private activeLinkStartX: number = 0;
+  private activeLinkStartY: number = 0;
+  private activeLinkCanceled: boolean = false;
+
+  private shouldRenderLinkOverlay(): boolean {
+    return this.linkOverlayEnabled && !this.drawCanvasVisible && this.linkHitAreas.length > 0;
+  }
+
+  @Builder
+  private buildLinkHitArea(hitArea: PDFLinkDisplayHitArea) {
+    Stack() {
+    }
+      .width(`${hitArea.width}px`)
+      .height(`${hitArea.height}px`)
+      .position({ x: `${hitArea.x}px`, y: `${hitArea.y}px` })
+      .backgroundColor(LINK_HIT_AREA_DEBUG ? 'rgba(0, 128, 255, 0.18)' : Color.Transparent)
+      .border({
+        width: LINK_HIT_AREA_DEBUG ? 1 : 0,
+        color: LINK_HIT_AREA_DEBUG ? 'rgba(0, 128, 255, 0.75)' : Color.Transparent
+      })
+      // Keep link rectangles touchable without preventing the full-page transparent input layer from
+      // receiving the same drag stream for pan/zoom or horizontal-slide handling.
+      .hitTestBehavior(HitTestMode.Transparent)
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.activeLinkHitAreaId = hitArea.id;
+          this.activeLinkStartX = event.touches[0].x;
+          this.activeLinkStartY = event.touches[0].y;
+          this.activeLinkCanceled = false;
+          hilog.info(0, 'PDFView', `PDF 链接热区 Down: id=${hitArea.id}, target=${hitArea.target.kind}, local=(${event.touches[0].x},${event.touches[0].y}), rect=(${hitArea.x},${hitArea.y},${hitArea.width},${hitArea.height})`);
+          this.onLinkPressStart(hitArea);
+          return;
+        }
+
+        if (this.activeLinkHitAreaId !== hitArea.id) {
+          return;
+        }
+
+        if (event.type === TouchType.Move && event.touches.length > 0) {
+          const dx = event.touches[0].x - this.activeLinkStartX;
+          const dy = event.touches[0].y - this.activeLinkStartY;
+          if (!this.activeLinkCanceled && dx * dx + dy * dy > LINK_TAP_MOVE_THRESHOLD_PX * LINK_TAP_MOVE_THRESHOLD_PX) {
+            this.activeLinkCanceled = true;
+            hilog.info(0, 'PDFView', `PDF 链接热区 Move 取消: id=${hitArea.id}, dx=${dx}, dy=${dy}`);
+            this.onLinkPressCancel(hitArea);
+          }
+          return;
+        }
+
+        if (event.type === TouchType.Up) {
+          const shouldActivate = !this.activeLinkCanceled;
+          this.activeLinkHitAreaId = '';
+          this.activeLinkCanceled = false;
+          hilog.info(0, 'PDFView', `PDF 链接热区 Up: id=${hitArea.id}, shouldActivate=${shouldActivate}`);
+          if (shouldActivate) {
+            this.onLinkActivated(hitArea);
+          }
+          return;
+        }
+
+        if (event.type === TouchType.Cancel) {
+          this.activeLinkHitAreaId = '';
+          this.activeLinkCanceled = false;
+          hilog.info(0, 'PDFView', `PDF 链接热区 Cancel: id=${hitArea.id}`);
+          this.onLinkPressCancel(hitArea);
+        }
+      })
+  }
 
   build() {
     RelativeContainer() {
@@ -31,6 +120,11 @@ export struct PDFPageSlot {
         .visibility(toVisibility(this.drawCanvasVisible))
         .onTouch((event: TouchEvent) => this.onDrawTouch(event))
         .onMouse((event: MouseEvent) => this.onDrawMouse(event))
+      if (this.shouldRenderLinkOverlay()) {
+        ForEach(this.linkHitAreas, (hitArea: PDFLinkDisplayHitArea) => {
+          this.buildLinkHitArea(hitArea)
+        }, (hitArea: PDFLinkDisplayHitArea) => hitArea.id)
+      }
       if (this.loading) {
         Column() {
           LoadingProgress()

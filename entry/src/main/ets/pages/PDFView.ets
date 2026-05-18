@@ -39,13 +39,13 @@ import { stylusInteraction } from '@kit.Penkit';
 import { taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../components/TutorialDialog';
-import { PageCache, PageInfo, PageStore } from '../components/PageInfo';
+import { PageCache, PageInfo, PageStore, PdfLinkAnnotation, PdfLinkRectangle } from '../components/PageInfo';
 import { InputAction } from '../components/Input';
 import { SettingsDialogBuilder } from '../components/SettingsDialog';
 import { AnnotatePreparePhaseOptions, PDFAnnotationController } from './pdfview/PDFAnnotationController';
 import { PDFMetronomeController } from './pdfview/PDFMetronomeController';
 import { PDFTunerController } from './pdfview/PDFTunerController';
-import { PDFPageSlot } from './pdfview/PDFPageSlot';
+import { PDFLinkDisplayHitArea, PDFPageSlot } from './pdfview/PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
   getFloatingMetronomeTotalWidth,
@@ -122,6 +122,7 @@ const DefaultTunerOffsetY: number = 112;
 const DefaultPaletteScale: number = 1.0;
 const PaletteMinScale: number = 0.5;
 const PaletteMaxScale: number = 1.5;
+const PdfLinkDebugLogEnabled: boolean = true;
 const DefaultBookmarkScale: number = 1.0;
 const BookmarkMinScale: number = 0.7;
 const BookmarkMaxScale: number = 1.3;
@@ -132,6 +133,13 @@ type OverlayPanelKey = 'metronome' | 'tuner' | 'bookmark';
 interface FloatingPanelOffset {
   x: number;
   y: number;
+}
+
+interface PDFLinkSlotRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface MetronomeOverlayOptions {
@@ -646,6 +654,10 @@ struct PDFView {
   panSessionStartPoint: Vector2 | undefined = undefined;
   /** 在侧栏透明按钮上抬起时，若发生过平移/捏合/滚轮缩放则置为 true，以忽略误触的翻页 */
   suppressSidePageFlipFromGesture: boolean = false;
+  /** 当前触摸序列是否始于 PDF 链接热区；用于避免父级长按/侧翻与链接点击交叉触发。 */
+  pdfLinkPressCandidateActive: boolean = false;
+  private pdfLinkPressCandidateResetToken: number = 0;
+  private pdfLinkDebugState: Map<string, string> = new Map();
   /** 横向滑动翻页：vp 偏移（负值表示露出右侧下一套） */
   @Local pageTurnOffsetVp: number = 0;
   /** 提交收尾时临时锁定预览层位置，使主层归零不牵动预览层。 */
@@ -3395,6 +3407,265 @@ struct PDFView {
     return mul(rawSize, 2);
   }
 
+  private pdfRectToSlotRect(rect: PdfLinkRectangle, rawPageSize: Vector2, viewSize: Vector2): PDFLinkSlotRect | undefined {
+    if (rawPageSize.x <= 0 || rawPageSize.y <= 0 || viewSize.x <= 0 || viewSize.y <= 0) {
+      return undefined;
+    }
+    if (!Number.isFinite(rect.left) || !Number.isFinite(rect.right) ||
+      !Number.isFinite(rect.bottom) || !Number.isFinite(rect.top)) {
+      return undefined;
+    }
+
+    const left = Math.min(rect.left, rect.right);
+    const right = Math.max(rect.left, rect.right);
+    const bottom = Math.min(rect.bottom, rect.top);
+    const top = Math.max(rect.bottom, rect.top);
+    const x = left / rawPageSize.x * viewSize.x;
+    const y = (1 - top / rawPageSize.y) * viewSize.y;
+    const width = (right - left) / rawPageSize.x * viewSize.x;
+    const height = (top - bottom) / rawPageSize.y * viewSize.y;
+
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) ||
+      width <= 0 || height <= 0) {
+      return undefined;
+    }
+    return { x: x, y: y, width: width, height: height };
+  }
+
+  private logPdfLinkDebug(key: string, message: string): void {
+    if (!PdfLinkDebugLogEnabled) {
+      return;
+    }
+    const previous = this.pdfLinkDebugState.get(key);
+    if (previous === message) {
+      return;
+    }
+    this.pdfLinkDebugState.set(key, message);
+    hilog.info(0, 'PDFView', `PDFLinkDebug[${key}] ${message}`);
+  }
+
+  private getLinkOverlayRenderDisabledReason(): string {
+    if (this.viewerViewModel.annotateMode !== 'drag') {
+      return `annotateMode=${this.viewerViewModel.annotateMode}`;
+    }
+    if (this.isDocumentLoading) {
+      return 'documentLoading';
+    }
+    if (this.isDocumentReadOnly()) {
+      return 'documentReadOnly';
+    }
+    if (this.isAnnotateModePreparing) {
+      return 'annotatePreparing';
+    }
+    if (this.isPanelGestureActive) {
+      return 'panelGestureActive';
+    }
+    return '';
+  }
+
+  private getLinkOverlayDisabledReason(): string {
+    const renderReason = this.getLinkOverlayRenderDisabledReason();
+    if (renderReason.length > 0) {
+      return renderReason;
+    }
+    if (this.pageTurnDragActive) {
+      return 'pageTurnDragActive';
+    }
+    if (this.pageTurnCommitAnimating) {
+      return 'pageTurnCommitAnimating';
+    }
+    if (this.slideGotoInFlight) {
+      return 'slideGotoInFlight';
+    }
+    if (this.pendingSlideGotoTarget !== undefined) {
+      return `pendingSlideGotoTarget=${this.pendingSlideGotoTarget}`;
+    }
+    if (Math.abs(this.pageTurnOffsetVp) >= 0.001) {
+      return `pageTurnOffsetVp=${this.pageTurnOffsetVp}`;
+    }
+    if (this.transPrevIndices.length > 0 || this.transNextIndices.length > 0) {
+      return `transitionStrips=prev${this.transPrevIndices.length}/next${this.transNextIndices.length}`;
+    }
+    return '';
+  }
+
+  private getPdfLinkActivationDisabledReason(): string {
+    const overlayReason = this.getLinkOverlayDisabledReason();
+    if (overlayReason.length > 0) {
+      return overlayReason;
+    }
+    if (this.view1Loading || this.view2Loading || this.view3Loading) {
+      return `slotLoading=${this.view1Loading}/${this.view2Loading}/${this.view3Loading}`;
+    }
+    if (this.isDualFingerActive) {
+      return 'dualFingerActive';
+    }
+    return '';
+  }
+
+  private isMainSlotCommittedVisible(viewIndex: number): boolean {
+    if (viewIndex < 0 || viewIndex >= this.viewerViewModel.displayedPageIndices.length) {
+      return false;
+    }
+    if (viewIndex === 1) {
+      return this.viewerViewModel.shouldShowSecondSlot();
+    }
+    if (viewIndex === 2) {
+      return this.viewerViewModel.shouldShowThirdSlot();
+    }
+    return viewIndex === 0;
+  }
+
+  private getMainSlotViewSize(viewIndex: number): Vector2 {
+    if (viewIndex === 0) {
+      return this.view1ViewSize;
+    }
+    if (viewIndex === 1) {
+      return this.view2ViewSize;
+    }
+    if (viewIndex === 2) {
+      return this.view3ViewSize;
+    }
+    return Vec2(0, 0);
+  }
+
+  private getLinkHitAreasForSlot(viewIndex: number): PDFLinkDisplayHitArea[] {
+    if (!this.isMainSlotCommittedVisible(viewIndex)) {
+      return [];
+    }
+
+    const pageIndex = this.viewerViewModel.displayedPageIndices[viewIndex];
+    if (pageIndex === undefined || pageIndex < 0 || pageIndex >= this.pageDataSource.totalPageCount()) {
+      return [];
+    }
+
+    const viewSize = this.getMainSlotViewSize(viewIndex);
+    const rawPageSize = this.pageDataSource.getPageRawSize(pageIndex);
+    const links = this.pageDataSource.getPageLinks(pageIndex);
+    const hitAreas: PDFLinkDisplayHitArea[] = [];
+    for (let i = 0; i < links.length; i++) {
+      const link: PdfLinkAnnotation = links[i];
+      const slotRect = this.pdfRectToSlotRect(link.rect, rawPageSize, viewSize);
+      if (slotRect === undefined) {
+        this.logPdfLinkDebug(`slot-${viewIndex}-link-${i}`, `skip invalid display rect: page=${pageIndex}, raw=(${rawPageSize.x},${rawPageSize.y}), view=(${viewSize.x},${viewSize.y}), pdfRect=(${link.rect.left},${link.rect.bottom},${link.rect.right},${link.rect.top})`);
+        continue;
+      }
+      hitAreas.push({
+        id: `${pageIndex}-${link.uniqueId ?? i}-${slotRect.x}-${slotRect.y}-${slotRect.width}-${slotRect.height}`,
+        x: slotRect.x,
+        y: slotRect.y,
+        width: slotRect.width,
+        height: slotRect.height,
+        target: link.target
+      });
+    }
+    const overlayReason = this.getLinkOverlayRenderDisabledReason();
+    this.logPdfLinkDebug(
+      `slot-${viewIndex}`,
+      `page=${pageIndex}, raw=(${rawPageSize.x},${rawPageSize.y}), view=(${viewSize.x},${viewSize.y}), links=${links.length}, hitAreas=${hitAreas.length}, overlay=${overlayReason.length === 0 ? 'enabled' : `disabled:${overlayReason}`}`
+    );
+    return hitAreas;
+  }
+
+  private isLinkOverlayEnabled(): boolean {
+    return this.getLinkOverlayRenderDisabledReason().length === 0;
+  }
+
+  private isPdfLinkActivationAllowed(): boolean {
+    return this.getPdfLinkActivationDisabledReason().length === 0;
+  }
+
+  private handlePdfLinkPressStart(hitArea: PDFLinkDisplayHitArea): void {
+    const disabledReason = this.getPdfLinkActivationDisabledReason();
+    if (disabledReason.length > 0) {
+      hilog.info(0, 'PDFView', `PDF 链接按下被忽略: id=${hitArea.id}, reason=${disabledReason}`);
+      return;
+    }
+    this.pdfLinkPressCandidateResetToken++;
+    this.pdfLinkPressCandidateActive = true;
+    this.cancelLongPress();
+    this.suppressSidePageFlipFromGesture = true;
+    hilog.info(0, 'PDFView', `PDF 链接按下候选开始: id=${hitArea.id}, target=${hitArea.target.kind}`);
+  }
+
+  private handlePdfLinkPressCancel(hitArea: PDFLinkDisplayHitArea): void {
+    this.pdfLinkPressCandidateResetToken++;
+    this.pdfLinkPressCandidateActive = false;
+    this.cancelLongPress();
+    hilog.info(0, 'PDFView', `PDF 链接按下候选取消: id=${hitArea.id}`);
+  }
+
+  private cancelPdfLinkPressCandidateForDrag(dx: number, dy: number): void {
+    if (!this.pdfLinkPressCandidateActive) {
+      return;
+    }
+    this.pdfLinkPressCandidateResetToken++;
+    this.pdfLinkPressCandidateActive = false;
+    this.cancelLongPress();
+    // Keep side-flip suppressed for this sequence: a drag that began on a link should not flip on release.
+    this.suppressSidePageFlipFromGesture = true;
+    hilog.info(0, 'PDFView', `PDF 链接按下候选因拖动取消: dx=${dx}, dy=${dy}`);
+  }
+
+  private schedulePdfLinkPressCandidateReset(): void {
+    const token = ++this.pdfLinkPressCandidateResetToken;
+    setTimeout(() => {
+      if (this.pdfLinkPressCandidateResetToken === token) {
+        this.pdfLinkPressCandidateActive = false;
+      }
+    }, 0);
+  }
+
+  private canActivatePdfLinkFromCurrentGesture(): boolean {
+    return this.pdfLinkPressCandidateActive && this.isPdfLinkActivationAllowed();
+  }
+
+  private openExternalPdfLinkUri(uri: string): void {
+    const targetUri = uri.trim();
+    const lowerUri = targetUri.toLowerCase();
+    if (!lowerUri.startsWith('http://') && !lowerUri.startsWith('https://')) {
+      hilog.warn(0, 'PDFView', `忽略不支持的 PDF 链接 URI: ${uri}`);
+      return;
+    }
+
+    try {
+      const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      abilityContext.openLink(targetUri)
+        .catch((error: BusinessError) => {
+          hilog.error(0, 'PDFView', `打开 PDF 外部链接失败: ${error.code} ${error.message}`);
+        });
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `打开 PDF 外部链接异常: ${err.code} ${err.message}`);
+    }
+  }
+
+  private activatePdfLink(hitArea: PDFLinkDisplayHitArea): void {
+    if (!this.canActivatePdfLinkFromCurrentGesture()) {
+      hilog.info(0, 'PDFView', `PDF 链接激活被忽略: id=${hitArea.id}, candidate=${this.pdfLinkPressCandidateActive}, reason=${this.getPdfLinkActivationDisabledReason()}`);
+      this.pdfLinkPressCandidateResetToken++;
+      this.pdfLinkPressCandidateActive = false;
+      return;
+    }
+    this.pdfLinkPressCandidateResetToken++;
+    this.pdfLinkPressCandidateActive = false;
+    this.cancelLongPress();
+    this.suppressSidePageFlipFromGesture = true;
+
+    const target = hitArea.target;
+    if (target.kind === 'gotoPage') {
+      hilog.info(0, 'PDFView', `PDF 链接激活: gotoPage=${target.pageIndex}, id=${hitArea.id}`);
+      void this.gotoPage(target.pageIndex);
+      return;
+    }
+    if (target.kind === 'uri') {
+      hilog.info(0, 'PDFView', `PDF 链接激活: uri=${target.uri}, id=${hitArea.id}`);
+      this.openExternalPdfLinkUri(target.uri);
+      return;
+    }
+    hilog.warn(0, 'PDFView', '忽略未知 PDF 链接目标。');
+  }
+
   private assignViewSlotFromTransNext(mainSlot: number, transSlot: number): boolean {
     let pm: PixelMap | undefined;
     let vs: Vector2;
@@ -4041,10 +4312,11 @@ struct PDFView {
         if (this.viewerViewModel.pageFlipMode === 'horizontalSlide') {
           this.interruptHorizontalSlideForNewTouch();
         }
+        const startedOnPdfLink = this.pdfLinkPressCandidateActive;
         this.lastTouchPoint = touchPoint;
         this.panSessionStartPoint = touchPoint;
-        this.suppressSidePageFlipFromGesture = false;
-        if (!this.viewerViewModel.isAnnotatePaletteVisible && !this.isDocumentReadOnly()) {
+        this.suppressSidePageFlipFromGesture = startedOnPdfLink;
+        if (!startedOnPdfLink && !this.viewerViewModel.isAnnotatePaletteVisible && !this.isDocumentReadOnly()) {
           this.startLongPressDetection(touchPoint.x, touchPoint.y);
         }
       } else if (event.type == TouchType.Move) {
@@ -4053,6 +4325,7 @@ struct PDFView {
           const sy = touchPoint.y - this.panSessionStartPoint.y;
           if (sx * sx + sy * sy > PAGE_FLIP_SUPPRESS_MOVE_PX * PAGE_FLIP_SUPPRESS_MOVE_PX) {
             this.suppressSidePageFlipFromGesture = true;
+            this.cancelPdfLinkPressCandidateForDrag(sx, sy);
           }
         }
         if (this.longPressTouchDown && this.lastTouchPoint !== undefined) {
@@ -4061,6 +4334,9 @@ struct PDFView {
           if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_THRESHOLD) {
             this.cancelLongPress();
           }
+        }
+        if (this.pdfLinkPressCandidateActive) {
+          this.cancelLongPress();
         }
         if (this.lastTouchPoint !== undefined) {
           const delta = Vec2(
@@ -4075,13 +4351,14 @@ struct PDFView {
           }
           this.lastTouchPoint = touchPoint;
         }
-      } else if (event.type == TouchType.Up) {
+      } else if (event.type == TouchType.Up || event.type === TouchType.Cancel) {
         this.cancelLongPress();
         if (this.viewerViewModel.pageFlipMode === 'horizontalSlide') {
           this.finalizeHorizontalSlideOnUp();
         }
         this.lastTouchPoint = undefined;
         this.panSessionStartPoint = undefined;
+        this.schedulePdfLinkPressCandidateReset();
       }
     } else if (isDualTouch) {
       this.cancelLongPress();
@@ -4143,6 +4420,7 @@ struct PDFView {
       // 重置所有触摸跟踪
       this.lastTouchPoint = undefined;
       this.panSessionStartPoint = undefined;
+      this.schedulePdfLinkPressCandidateReset();
       this.lastPinchDistance = undefined;
       this.lastPinchCenter = undefined;
       // 如果双指手势之前处于激活状态，记录结束时间
@@ -4727,7 +5005,12 @@ struct PDFView {
             annotateCtx: this.view1Ctx,
             drawCtx: this.view1DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view1DrawCtx, this.view1Ctx, this.viewerViewModel.displayedPageIndices[0] ?? 0, event),
-            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.viewerViewModel.displayedPageIndices[0] ?? 0, event)
+            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.viewerViewModel.displayedPageIndices[0] ?? 0, event),
+            linkHitAreas: this.getLinkHitAreasForSlot(0),
+            linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
+            onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
+            onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)
           })
 
           PDFPageSlot({
@@ -4743,7 +5026,12 @@ struct PDFView {
             annotateCtx: this.view2Ctx,
             drawCtx: this.view2DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view2DrawCtx, this.view2Ctx, this.viewerViewModel.displayedPageIndices[1] ?? 0, event),
-            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.viewerViewModel.displayedPageIndices[1] ?? 0, event)
+            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.viewerViewModel.displayedPageIndices[1] ?? 0, event),
+            linkHitAreas: this.getLinkHitAreasForSlot(1),
+            linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
+            onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
+            onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)
           })
 
           PDFPageSlot({
@@ -4759,7 +5047,12 @@ struct PDFView {
             annotateCtx: this.view3Ctx,
             drawCtx: this.view3DrawCtx,
             onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(this.view3DrawCtx, this.view3Ctx, this.viewerViewModel.displayedPageIndices[2] ?? 0, event),
-            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.viewerViewModel.displayedPageIndices[2] ?? 0, event)
+            onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.viewerViewModel.displayedPageIndices[2] ?? 0, event),
+            linkHitAreas: this.getLinkHitAreasForSlot(2),
+            linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
+            onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
+            onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)
           })
         }
         .alignItems(VerticalAlign.Top)
