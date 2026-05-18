@@ -9,6 +9,7 @@ const ViewerScaleThresholds: number[] = [2.0];
 
 export type PDFPageDisplayMode = 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
 export type PDFPageFlipMode = 'side' | 'button' | 'extern' | 'horizontalSlide';
+export type PDFLinkVisualMode = 'hidden' | 'fadeOnPageEnter' | 'always';
 
 /** 与 clampViewPan 一致的视口与内容边界（单位 vp，与 viewPan 一致） */
 export interface PanClampBounds {
@@ -28,6 +29,7 @@ export type PalettePersistedTool = 'draw' | 'erase';
 
 const PaletteToolModePreferenceKey: string = 'paletteToolMode';
 const HorizontalSlideSensitivityPreferenceKey: string = 'horizontalSlideSensitivity';
+const LinkVisualModePreferenceKey: string = 'linkVisualMode';
 
 @ObservedV2
 export class PDFViewerViewModel {
@@ -49,6 +51,7 @@ export class PDFViewerViewModel {
   @Trace public showSlider: boolean = true;
   /** 水平滑动翻页灵敏度档位 0～10（设置滑块），5 为默认手感 */
   @Trace public horizontalSlideSensitivity: number = 5;
+  @Trace public linkVisualMode: PDFLinkVisualMode = 'fadeOnPageEnter';
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
   @Trace public isAnnotatePaletteVisible: boolean = false;
@@ -76,6 +79,12 @@ export class PDFViewerViewModel {
         this.horizontalSlideSensitivity = Math.max(0, Math.min(10, Math.round(rawSens)));
       } else {
         this.horizontalSlideSensitivity = 5;
+      }
+      const linkVisualRaw: string = preferencesValue.getSync(LinkVisualModePreferenceKey, 'fadeOnPageEnter') as string;
+      if (linkVisualRaw === 'hidden' || linkVisualRaw === 'fadeOnPageEnter' || linkVisualRaw === 'always') {
+        this.linkVisualMode = linkVisualRaw as PDFLinkVisualMode;
+      } else {
+        this.linkVisualMode = 'fadeOnPageEnter';
       }
       this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
       const flipRaw: string = preferencesValue.getSync('pageFlipMode', 'horizontalSlide') as string;
@@ -312,6 +321,14 @@ export class PDFViewerViewModel {
     }
     this.horizontalSlideSensitivity = clamped;
     this.persistPreference(HorizontalSlideSensitivityPreferenceKey, clamped, '保存水平滑动灵敏度出错');
+  }
+
+  setLinkVisualMode(mode: PDFLinkVisualMode): void {
+    if (mode === this.linkVisualMode) {
+      return;
+    }
+    this.linkVisualMode = mode;
+    this.persistPreference(LinkVisualModePreferenceKey, mode, '保存 PDF 链接显示模式出错');
   }
 
   updateViewSize(view1Size: Vector2, view2Size: Vector2, view3Size: Vector2): void {

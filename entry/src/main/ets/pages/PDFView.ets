@@ -58,7 +58,7 @@ import {
 } from './pdfview/PDFTunerPanel';
 import { PDFViewerActionMenu } from './pdfview/PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './pdfview/PDFViewerBottomBar';
-import { PDFAnnotateMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
+import { PDFAnnotateMode, PDFLinkVisualMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './pdfview/PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './pdfview/AnnotateLongPressIndicator';
 import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth, PDFAnnotationPalette } from './pdfview/PDFAnnotationPalette';
 import { PDFBookmarkController, PDFBookmarkListItem } from './pdfview/PDFBookmarkController';
@@ -123,6 +123,8 @@ const DefaultPaletteScale: number = 1.0;
 const PaletteMinScale: number = 0.5;
 const PaletteMaxScale: number = 1.5;
 const PdfLinkDebugLogEnabled: boolean = true;
+const PdfLinkFadeVisibleMs: number = 500;
+const PdfLinkFadeOutMs: number = 1300;
 const DefaultBookmarkScale: number = 1.0;
 const BookmarkMinScale: number = 0.7;
 const BookmarkMaxScale: number = 1.3;
@@ -658,6 +660,8 @@ struct PDFView {
   pdfLinkPressCandidateActive: boolean = false;
   private pdfLinkPressCandidateResetToken: number = 0;
   private pdfLinkDebugState: Map<string, string> = new Map();
+  @Local pdfLinkVisualOpacity: number = 0;
+  private pdfLinkFadeTimeoutId: number | undefined = undefined;
   /** 横向滑动翻页：vp 偏移（负值表示露出右侧下一套） */
   @Local pageTurnOffsetVp: number = 0;
   /** 提交收尾时临时锁定预览层位置，使主层归零不牵动预览层。 */
@@ -860,11 +864,16 @@ struct PDFView {
     builder: SettingsDialogBuilder({
       showSlider: this.viewerViewModel.showSlider,
       horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
+      linkVisualMode: this.viewerViewModel.linkVisualMode,
       onSliderToggled: (show: boolean) => {
         this.viewerViewModel.setShowSlider(show);
       },
       onHorizontalSlideSensitivityChange: (level: number) => {
         this.viewerViewModel.setHorizontalSlideSensitivity(level);
+      },
+      onLinkVisualModeChange: (mode: PDFLinkVisualMode) => {
+        this.viewerViewModel.setLinkVisualMode(mode);
+        this.applyPdfLinkVisualMode(true);
       }
     }),
     width: '40%',
@@ -1149,11 +1158,16 @@ struct PDFView {
       builder: SettingsDialogBuilder({
         showSlider: this.viewerViewModel.showSlider,
         horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
+        linkVisualMode: this.viewerViewModel.linkVisualMode,
         onSliderToggled: (show: boolean) => {
           this.viewerViewModel.setShowSlider(show);
         },
         onHorizontalSlideSensitivityChange: (level: number) => {
           this.viewerViewModel.setHorizontalSlideSensitivity(level);
+        },
+        onLinkVisualModeChange: (mode: PDFLinkVisualMode) => {
+          this.viewerViewModel.setLinkVisualMode(mode);
+          this.applyPdfLinkVisualMode(true);
         }
       }),
       width: '40%'
@@ -1943,6 +1957,7 @@ struct PDFView {
     // Lightweight setup that won't block the UI
     try {
       this.viewerViewModel.loadPreferences(this.preferences);
+      this.applyPdfLinkVisualMode(false);
       this.annotationController.loadDrawPreferences();
       this.rebuildSettingsDialogController();
       this.metronomeController.initialize(this.preferences);
@@ -2404,6 +2419,7 @@ struct PDFView {
       clearTimeout(this.transparencyTimeoutId);
       this.transparencyTimeoutId = undefined;
     }
+    this.clearPdfLinkFadeTimeout();
 
     // 清除预取防抖定时器
     if (this.prefetchDebounceId) {
@@ -3444,6 +3460,53 @@ struct PDFView {
     hilog.info(0, 'PDFView', `PDFLinkDebug[${key}] ${message}`);
   }
 
+  private clearPdfLinkFadeTimeout(): void {
+    if (this.pdfLinkFadeTimeoutId !== undefined) {
+      clearTimeout(this.pdfLinkFadeTimeoutId);
+      this.pdfLinkFadeTimeoutId = undefined;
+    }
+  }
+
+  private applyPdfLinkVisualMode(showForCurrentPage: boolean): void {
+    this.clearPdfLinkFadeTimeout();
+    if (this.viewerViewModel.linkVisualMode === 'hidden') {
+      this.pdfLinkVisualOpacity = 0;
+      return;
+    }
+    if (this.viewerViewModel.linkVisualMode === 'always') {
+      this.pdfLinkVisualOpacity = 1;
+      return;
+    }
+    if (showForCurrentPage) {
+      this.triggerPdfLinkVisualPageEnter();
+    } else {
+      this.pdfLinkVisualOpacity = 0;
+    }
+  }
+
+  private triggerPdfLinkVisualPageEnter(): void {
+    this.clearPdfLinkFadeTimeout();
+    if (this.viewerViewModel.linkVisualMode === 'hidden') {
+      this.pdfLinkVisualOpacity = 0;
+      return;
+    }
+    if (this.viewerViewModel.linkVisualMode === 'always') {
+      this.pdfLinkVisualOpacity = 1;
+      return;
+    }
+
+    this.pdfLinkVisualOpacity = 1;
+    this.pdfLinkFadeTimeoutId = setTimeout(() => {
+      this.pdfLinkFadeTimeoutId = undefined;
+      this.getUIContext().animateTo({
+        duration: PdfLinkFadeOutMs,
+        curve: Curve.EaseOut
+      }, () => {
+        this.pdfLinkVisualOpacity = 0;
+      });
+    }, PdfLinkFadeVisibleMs);
+  }
+
   private getLinkOverlayRenderDisabledReason(): string {
     if (this.viewerViewModel.annotateMode !== 'drag') {
       return `annotateMode=${this.viewerViewModel.annotateMode}`;
@@ -3978,6 +4041,7 @@ struct PDFView {
     }
 
     this.viewerViewModel.commitPageTarget(clampedTarget);
+    this.triggerPdfLinkVisualPageEnter();
     this.mainSlotPagesBeingLoaded = [];
     this.syncContinuationReadingState();
     // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
@@ -5008,6 +5072,7 @@ struct PDFView {
             onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view1DrawCtx, this.view1Ctx, this.viewerViewModel.displayedPageIndices[0] ?? 0, event),
             linkHitAreas: this.getLinkHitAreasForSlot(0),
             linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            linkVisualOpacity: this.pdfLinkVisualOpacity,
             onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
             onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
             onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)
@@ -5029,6 +5094,7 @@ struct PDFView {
             onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view2DrawCtx, this.view2Ctx, this.viewerViewModel.displayedPageIndices[1] ?? 0, event),
             linkHitAreas: this.getLinkHitAreasForSlot(1),
             linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            linkVisualOpacity: this.pdfLinkVisualOpacity,
             onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
             onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
             onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)
@@ -5050,6 +5116,7 @@ struct PDFView {
             onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(this.view3DrawCtx, this.view3Ctx, this.viewerViewModel.displayedPageIndices[2] ?? 0, event),
             linkHitAreas: this.getLinkHitAreasForSlot(2),
             linkOverlayEnabled: this.isLinkOverlayEnabled(),
+            linkVisualOpacity: this.pdfLinkVisualOpacity,
             onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressStart(hitArea),
             onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.handlePdfLinkPressCancel(hitArea),
             onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.activatePdfLink(hitArea)

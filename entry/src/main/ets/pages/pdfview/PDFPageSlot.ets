@@ -4,8 +4,9 @@ import { PdfLinkTarget } from '../../components/PageInfo';
 import { LengthMetricsUnit } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
-const LINK_HIT_AREA_DEBUG: boolean = true;
 const LINK_TAP_MOVE_THRESHOLD_PX: number = 10;
+const LINK_HIT_AREA_PADDING_PX: number = 4;
+const LINK_HIT_AREA_RADIUS_PX: number = 5;
 
 export interface PDFLinkDisplayHitArea {
   id: string;
@@ -33,6 +34,7 @@ export struct PDFPageSlot {
   @Param onDrawMouse: (event: MouseEvent) => void = () => {};
   @Param linkHitAreas: PDFLinkDisplayHitArea[] = [];
   @Param linkOverlayEnabled: boolean = false;
+  @Param linkVisualOpacity: number = 0;
   @Param onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
   @Param onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
   @Param onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
@@ -46,17 +48,33 @@ export struct PDFPageSlot {
     return this.linkOverlayEnabled && !this.drawCanvasVisible && this.linkHitAreas.length > 0;
   }
 
+  private getClampedLinkVisualOpacity(): number {
+    return Math.max(0, Math.min(1, this.linkVisualOpacity));
+  }
+
+  private getLinkVisualFillColor(): ResourceColor {
+    const alpha = this.getClampedLinkVisualOpacity() * 0.18;
+    return alpha > 0.001 ? `rgba(0, 128, 255, ${alpha})` : Color.Transparent;
+  }
+
+  private getLinkVisualBorderColor(): ResourceColor {
+    const alpha = this.getClampedLinkVisualOpacity() * 0.75;
+    return alpha > 0.001 ? `rgba(0, 128, 255, ${alpha})` : Color.Transparent;
+  }
+
   @Builder
   private buildLinkHitArea(hitArea: PDFLinkDisplayHitArea) {
     Stack() {
     }
-      .width(`${hitArea.width}px`)
-      .height(`${hitArea.height}px`)
-      .position({ x: `${hitArea.x}px`, y: `${hitArea.y}px` })
-      .backgroundColor(LINK_HIT_AREA_DEBUG ? 'rgba(0, 128, 255, 0.18)' : Color.Transparent)
+      .width(`${hitArea.width + LINK_HIT_AREA_PADDING_PX * 2}px`)
+      .height(`${hitArea.height + LINK_HIT_AREA_PADDING_PX * 2}px`)
+      .padding(`${LINK_HIT_AREA_PADDING_PX}px`)
+      .position({ x: `${hitArea.x - LINK_HIT_AREA_PADDING_PX}px`, y: `${hitArea.y - LINK_HIT_AREA_PADDING_PX}px` })
+      .backgroundColor(this.getLinkVisualFillColor())
+      .borderRadius(`${LINK_HIT_AREA_RADIUS_PX}px`)
       .border({
-        width: LINK_HIT_AREA_DEBUG ? 1 : 0,
-        color: LINK_HIT_AREA_DEBUG ? 'rgba(0, 128, 255, 0.75)' : Color.Transparent
+        width: this.getClampedLinkVisualOpacity() > 0.001 ? 1 : 0,
+        color: this.getLinkVisualBorderColor()
       })
       // Keep link rectangles touchable without preventing the full-page transparent input layer from
       // receiving the same drag stream for pan/zoom or horizontal-slide handling.
