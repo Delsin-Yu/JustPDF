@@ -79,7 +79,7 @@ export struct TutorialDialogBuilder {
         Span(' — 单页 / 双页 / 双页连续 / 三页 / 三页连续\n')
         Span('• ')
         Span('翻页:…').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 横向滑动 / 屏侧翻页 / 按钮翻页 / 外设翻页\n')
+        Span(' — 水平滑动 / 屏侧翻页 / 按钮翻页 / 外设翻页\n')
         Span('• ')
         Span('跳转').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 重置视口、跳转首页、跳转尾页\n')
@@ -88,7 +88,7 @@ export struct TutorialDialogBuilder {
         Span(' — 将当前批注保存为新 PDF（与批注浮窗内的保存相同）\n\n')
 
         Span('设置弹窗与菜单的区别\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
-        Span('「设置」中提供「进度滑块」开关，以及「横向滑动灵敏度」档位滑块（0～10，步进 1）：同时调节松手翻页所需滑动距离与甩动翻页的容易程度；仅在选择「翻页:横向滑动」时生效。显示模式、翻页方式等仍在「更多」菜单第二组中调整，并会持久保存。\n')
+        Span('「设置」中提供「进度滑块」开关，以及「水平滑动灵敏度」档位滑块（0～10，步进 1）：同时调节松手翻页所需滑动距离与甩动翻页的容易程度；仅在选择「翻页:水平滑动」时生效。显示模式、翻页方式等仍在「更多」菜单第二组中调整，并会持久保存。\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
     }.layoutWeight(1).width('100%')
   }
@@ -107,7 +107,7 @@ export struct TutorialDialogBuilder {
         Span('• 三页连续 — 当前起连续三张（1-3，2-4，…）\n\n')
 
         Span('在菜单「翻页:…」中可选（与菜单列表顺序一致）：\n')
-        Span('• 横向滑动 — 默认方式。在常规浏览下，单指以横向为主在页面上滑动，可看到邻页随手指移动；松手时若位移足够（或与滑动速度综合判断后足够）则翻到该侧邻页，否则回到当前页。竖向为主的滑动仍会平移当前画面。可在左下角「更多」—「设置」中用「横向滑动灵敏度」在 0（更钝、需拖更远 / 甩得更用力）到 10（更敏）之间调节；中间档为默认手感。\n')
+        Span('• 水平滑动 — 默认方式。在常规浏览下，单指以横向为主在页面上滑动，可看到邻页随手指移动；松手时若位移足够（或与滑动速度综合判断后足够）则翻到该侧邻页，否则回到当前页。竖向为主的滑动仍会平移当前画面。可在左下角「更多」—「设置」中用「水平滑动灵敏度」在 0（更钝、需拖更远 / 甩得更用力）到 10（更敏）之间调节；中间档为默认手感。\n')
         Span('• 屏侧翻页 — 点击屏幕左侧约 30% 区域上一页，右侧约 30% 下一页\n')
         Span('• 按钮翻页 — 使用底部「<」「>」翻页\n')
         Span('• 外设翻页 — 在常规浏览下隐藏底部「<」「>」翻页按钮，减少误触；键盘、蓝牙翻谱器等外设在任意翻页模式下均可照常翻页（通常对应方向键或设备说明中的等价按键）\n\n')
@@ -121,8 +121,8 @@ export struct TutorialDialogBuilder {
         Span('• 在绘制或擦除模式下，双指用于缩放与平移，优先于单指绘画或擦除\n\n')
 
         Span('单指拖动\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
-        Span('• 在常规浏览下，若当前为「横向滑动」以外的翻页方式，单指滑动用于平移页面\n')
-        Span('• 在「横向滑动」下，以横向为主的单指滑动用于翻页预览（见上文）；以竖向为主时用于平移\n\n')
+        Span('• 在常规浏览下，若当前为「水平滑动」以外的翻页方式，单指滑动用于平移页面\n')
+        Span('• 在「水平滑动」下，以横向为主的单指滑动用于翻页预览（见上文）；以竖向为主时用于平移\n\n')
 
         Span('鼠标（平板 / 二合一外接鼠标时）\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• 滚轮可在指针位置附近缩放\n')
@@ -142,7 +142,7 @@ export struct TutorialDialogBuilder {
       Text() {
         Span('浏览与批注浮窗\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
-        Span('默认为常规浏览：单指平移画面（在「横向滑动」翻页方式下，横向滑动优先用于翻页预览，见「阅读」页签），双指缩放。\n\n')
+        Span('默认为常规浏览：单指平移画面（在「水平滑动」翻页方式下，水平滑动优先用于翻页预览，见「阅读」页签），双指缩放。\n\n')
         Span('打开批注浮窗的方式：\n')
         Span('• 「更多」菜单第一组中的「批注」\n')
         Span('• 在常规浏览下，单指按住乐谱直至触点旁环形进度走满\n')
@@ -254,7 +254,7 @@ export struct TutorialDialogBuilder {
     Scroll() {
       Text() {
         Span('Q: 为什么「设置」里没有显示模式、翻页方式？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 这些选项在左下角「更多」菜单的第二组：「显示:…」与「翻页:…」。「设置」弹窗另有「进度滑块」开关与「横向滑动灵敏度」（仅影响横向滑动翻页）。\n\n')
+        Span('A: 这些选项在左下角「更多」菜单的第二组：「显示:…」与「翻页:…」。「设置」弹窗另有「进度滑块」开关与「水平滑动灵敏度」（仅影响水平滑动翻页）。\n\n')
 
         Span('Q: 为什么我的笔迹没有保存进文件？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('A: 须在批注浮窗内保存，或使用菜单里的「保存文档」，并在系统中选择保存位置。只画在屏幕上而未执行保存的笔迹不会写入 PDF。\n\n')

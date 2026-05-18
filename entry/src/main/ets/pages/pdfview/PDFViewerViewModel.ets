@@ -47,7 +47,7 @@ export class PDFViewerViewModel {
   @Trace public viewSize: Vector2 = Vec2(0, 0);
   @Trace public showControls: boolean = true;
   @Trace public showSlider: boolean = true;
-  /** 横向滑动翻页灵敏度档位 0～10（设置滑块），5 为默认手感 */
+  /** 水平滑动翻页灵敏度档位 0～10（设置滑块），5 为默认手感 */
   @Trace public horizontalSlideSensitivity: number = 5;
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
@@ -56,7 +56,7 @@ export class PDFViewerViewModel {
   private savedPageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
   /**
-   * 横向滑动已提交、目标页尚未完成 load 时，作为 peek / navigate 的「逻辑当前首页」，
+   * 水平滑动已提交、目标页尚未完成 load 时，作为 peek / navigate 的「逻辑当前首页」，
    * 避免连滑第二次仍从旧 currentPageIndex 计算到同一套。
    */
   private slideNavEffectiveStartIndex: number | undefined = undefined;
@@ -140,7 +140,7 @@ export class PDFViewerViewModel {
       case 'extern':
         return '外设翻页';
       case 'horizontalSlide':
-        return '横向滑动';
+        return '水平滑动';
     }
   }
 
@@ -172,7 +172,7 @@ export class PDFViewerViewModel {
     return Math.max(0, this.totalPageCount - 1);
   }
 
-  /** 横向滑动提交瞬间设置，goto 完成或普通导航时清除 */
+  /** 水平滑动提交瞬间设置，goto 完成或普通导航时清除 */
   setSlideNavEffectiveStartIndex(index: number): void {
     this.slideNavEffectiveStartIndex = index;
   }
@@ -311,7 +311,7 @@ export class PDFViewerViewModel {
       return;
     }
     this.horizontalSlideSensitivity = clamped;
-    this.persistPreference(HorizontalSlideSensitivityPreferenceKey, clamped, '保存横向滑动灵敏度出错');
+    this.persistPreference(HorizontalSlideSensitivityPreferenceKey, clamped, '保存水平滑动灵敏度出错');
   }
 
   updateViewSize(view1Size: Vector2, view2Size: Vector2, view3Size: Vector2): void {
@@ -353,7 +353,7 @@ export class PDFViewerViewModel {
     return Math.max(this.minScale, Math.min(this.maxScale, Math.min(scaleX, scaleY)));
   }
 
-  /** 与 clampViewPan 使用同一套公式，供横向滑动翻页判断左右边界 */
+  /** 与 clampViewPan 使用同一套公式，供水平滑动翻页判断左右边界 */
   getPanClampBounds(uiContext: UIContext): PanClampBounds {
     const viewSizeVp = pxToVp(this.viewSize, uiContext);
     const viewportSizeVp = pxToVp(this.viewportSize, uiContext);
@@ -432,7 +432,7 @@ export class PDFViewerViewModel {
     this.clampViewPan(uiContext);
   }
 
-  /** 使用 vp 增量平移（用于横向滑动翻页时与 pageTurnOffsetVp 单位一致） */
+  /** 使用 vp 增量平移（用于水平滑动翻页时与 pageTurnOffsetVp 单位一致） */
   panByDeltaVp(deltaVp: Vector2, uiContext: UIContext): void {
     this.viewPan = Vec2(this.viewPan.x + deltaVp.x, this.viewPan.y + deltaVp.y);
     this.clampViewPan(uiContext);
@@ -503,7 +503,7 @@ export class PDFViewerViewModel {
   buildPageFlipModeMenu(): MenuElement[] {
     return [
       {
-        value: '横向滑动',
+        value: '水平滑动',
         action: () => this.setPageFlipMode('horizontalSlide'),
         symbolIcon: getCheckIcon(this.pageFlipMode == 'horizontalSlide')
       },
@@ -542,7 +542,7 @@ export class PDFViewerViewModel {
     ];
   }
 
-  /** 横向滑动预览：下一页（跨页）索引；若无下一套则返回空数组 */
+  /** 水平滑动预览：下一页（跨页）索引；若无下一套则返回空数组 */
   peekNextSetIndices(): number[] {
     if (this.totalPageCount <= 0) {
       return [];
@@ -559,7 +559,7 @@ export class PDFViewerViewModel {
     return nextSet;
   }
 
-  /** 横向滑动预览：上一套页面索引；若无上一套则返回空数组 */
+  /** 水平滑动预览：上一套页面索引；若无上一套则返回空数组 */
   peekPrevSetIndices(): number[] {
     if (this.totalPageCount <= 0) {
       return [];

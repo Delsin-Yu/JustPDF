@@ -39,7 +39,7 @@ export struct SettingsDialogBuilder {
 
         Column({ space: 8 }) {
           Row() {
-            Text('横向滑动灵敏度')
+            Text('水平滑动灵敏度')
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(LabelColor)
