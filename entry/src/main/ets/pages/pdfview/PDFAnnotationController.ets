@@ -416,8 +416,16 @@ export class PDFAnnotationController {
   }
 
   finishDraw(pageIndex: number, point: Vector2, drawCtx: CanvasRenderingContext2D, targetCtx: CanvasRenderingContext2D): void {
+    // 短按/点触可能没有 Move，仅有 moveTo；补上 lineTo 才能落笔。
+    if (this.activeDrawPath.points.length === 0) {
+      this.activeDrawPath = NewStroke(this.selectedDrawColor.pdfColor);
+      this.activeDrawPath.path.moveTo(point.x, point.y);
+      this.activeDrawPath.points.push(point);
+    }
+    this.activeDrawPath.path.lineTo(point.x, point.y);
     this.activeDrawPath.points.push(point);
 
+    // 零位移点触：加极小段，配合 round lineCap 显示为圆点。
     let pathLength = 0;
     for (let i = 1; i < this.activeDrawPath.points.length; i++) {
       const p1 = this.activeDrawPath.points[i - 1];
@@ -426,18 +434,21 @@ export class PDFAnnotationController {
       const dy = p2.y - p1.y;
       pathLength += Math.sqrt(dx * dx + dy * dy);
     }
-
-    const minPathLength = 2 * this.canvasOverSampling;
-    if (pathLength >= minPathLength) {
-      this.dependencies.pageDataSource.addStroke(pageIndex, this.activeDrawPath);
-      this.appendUndoHistory({
-        path: this.activeDrawPath,
-        mode: 'add',
-        pageIndex: pageIndex
-      });
-      this.updateUnsavedStrokesFlag();
-      this.loadPageStrokes(targetCtx, pageIndex);
+    if (pathLength < 0.01) {
+      const tip = this.activeDrawPath.points[this.activeDrawPath.points.length - 1];
+      const nudged = Vec2(tip.x + 0.01, tip.y);
+      this.activeDrawPath.path.lineTo(nudged.x, nudged.y);
+      this.activeDrawPath.points.push(nudged);
     }
+
+    this.dependencies.pageDataSource.addStroke(pageIndex, this.activeDrawPath);
+    this.appendUndoHistory({
+      path: this.activeDrawPath,
+      mode: 'add',
+      pageIndex: pageIndex
+    });
+    this.updateUnsavedStrokesFlag();
+    this.loadPageStrokes(targetCtx, pageIndex);
 
     this.activeDrawPath = NewStroke();
     drawCtx.reset();
