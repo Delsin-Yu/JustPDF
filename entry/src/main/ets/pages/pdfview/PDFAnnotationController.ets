@@ -364,9 +364,11 @@ export class PDFAnnotationController {
   }
 
   applyStrokeStyle(ctx: CanvasRenderingContext2D): void {
-    // 笔画颜色由各 Stroke 在渲染时自行设置；这里只统一线宽与端点样式。
+    // 笔画颜色由各 Stroke 在渲染时自行设置；这里只统一线宽与端点/拐点样式。
+    // 默认 lineJoin 为 miter：急转（U/V）会打出尖角，与 round lineCap 不协调。
     ctx.lineWidth = 1 * this.canvasOverSampling;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
   }
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
