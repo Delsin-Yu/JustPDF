@@ -40,6 +40,7 @@ export struct TutorialDialogBuilder {
 
         Span('从系统打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• 在文件管理器、分享面板等场景选用本应用打开 PDF，即可进入阅读界面\n')
+        Span('• 系统返回会回到调用方（应用保活进后台）；该行为仅一次有效。之后可在「更多」菜单中选「首页」\n')
         Span('• 若文档已加密，阅读页会提示 ')
         Span('输入 PDF 密码').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('；密码仅用于本次阅读，不会保存到设置中\n\n')
@@ -57,6 +58,9 @@ export struct TutorialDialogBuilder {
         Span(' 按钮展开菜单，分为两组：\n\n')
 
         Span('第一组\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• ')
+        Span('首页').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' — 返回应用首页（选择文件 / 最近打开）\n')
         Span('• ')
         Span('教程').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 打开本说明\n')

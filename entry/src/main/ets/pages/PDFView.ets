@@ -1121,11 +1121,20 @@ struct PDFView {
 
   private requestLeaveViewer(): void {
     if (shouldExitViewerOnBack()) {
+      hilog.info(0, 'PDFView', 'requestLeaveViewer: Want 返回 -> moveAbilityToBackground');
       void this.runWithUnsavedGuard(() => {
         this.returnToCallerKeepingAlive();
       });
       return;
     }
+    hilog.info(0, 'PDFView', 'requestLeaveViewer: 回应用首页');
+    void this.runWithUnsavedGuard(() => {
+      this.backToMainMenu();
+    });
+  }
+
+  /** 左下角首页按钮：始终回应用首页，不受 Want 返回态影响。 */
+  private requestGoHome(): void {
     void this.runWithUnsavedGuard(() => {
       this.backToMainMenu();
     });
@@ -1173,13 +1182,14 @@ struct PDFView {
    */
   private returnToCallerKeepingAlive(): void {
     this.prepareLeaveViewerUi();
+    // 一次性：本次 Want 返回用完即解除，避免后台再从桌面进入时系统返回仍进后台。
+    setExitViewerOnBack(false);
     const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     abilityContext.moveAbilityToBackground().then(() => {
       hilog.info(0, 'PDFView', 'moveAbilityToBackground 成功，已回到调用方且保持进程');
     }).catch((err: BusinessError) => {
       hilog.warn(0, 'PDFView',
         `moveAbilityToBackground 失败 code=${err.code}, ${err.message}，回退 terminateSelf`);
-      setExitViewerOnBack(false);
       abilityContext.terminateSelf().catch((termErr: BusinessError) => {
         hilog.error(0, 'PDFView', `terminateSelf 失败: code=${termErr.code}, ${termErr.message}`);
       });
@@ -5520,7 +5530,8 @@ struct PDFView {
                 canGoLinkJumpForward: this.linkJumpCanGoForward,
                 onLinkJumpBack: () => this.navigatePdfLinkBack(),
                 onLinkJumpForward: () => this.navigatePdfLinkForward(),
-                linkJumpNavRevision: this.linkJumpNavRevision
+                linkJumpNavRevision: this.linkJumpNavRevision,
+                onGoHome: () => this.requestGoHome()
               })
 
               Blank()

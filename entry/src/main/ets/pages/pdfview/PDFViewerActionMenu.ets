@@ -40,7 +40,9 @@ export struct PDFViewerActionMenu {
   @Param onLinkJumpBack: () => void = () => {};
   @Param onLinkJumpForward: () => void = () => {};
   @Param linkJumpNavRevision: number = 0;
+  @Param onGoHome: () => void = () => {};
 
+  private readonly homeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.house')).fontSize('20vp');
   private readonly tutorialIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.questionmark_circle')).fontSize('20vp');
   private readonly settingsIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.gearshape')).fontSize('20vp');
   private readonly shareIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.share')).fontSize('20vp');
@@ -90,6 +92,12 @@ export struct PDFViewerActionMenu {
   private buildActionMenu() {
     Menu() {
       MenuItemGroup() {
+        MenuItem({
+          content: '首页',
+          symbolStartIcon: this.homeIcon
+        })
+          .onClick(() => this.onGoHome())
+
         MenuItem({
           content: '教程',
           symbolStartIcon: this.tutorialIcon

@@ -31,6 +31,10 @@ import {
 
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
 const TAG = 'EntryAbility';
+const WANT_ACTION_HOME: string = 'ohos.want.action.home';
+const WANT_ACTION_VIEW_DATA: string = 'ohos.want.action.viewData';
+const WANT_ACTION_SEND_DATA: string = 'ohos.want.action.sendData';
+const WANT_ACTION_SEND_MULTIPLE_DATA: string = 'ohos.want.action.sendMultipleData';
 
 export default class EntryAbility extends UIAbility {
   private currentRouter: Router | undefined;
@@ -64,22 +68,30 @@ export default class EntryAbility extends UIAbility {
     if (this.isSystemShareLaunch(launchParam)) {
       setExitViewerOnBack(true);
       this.pendingSystemShareWant = want;
+      hilog.info(0, TAG, 'onCreate 系统分享：武装 Want 返回');
       return;
     }
 
-    let uri = want.uri;
-    if (uri == null || uri == undefined) {
+    const createUri = this.getDocumentOpenUri(want, launchParam);
+    if (createUri === undefined) {
       setExitViewerOnBack(false);
-      logContinuationLine('onCreate 无 want.uri');
+      logContinuationLine('onCreate 非文档打开 Want，解除 Want 返回武装 action=' +
+        (want.action ?? '') + ', uriLen=' + this.wantUriLength(want));
       return;
     }
+
     setExitViewerOnBack(true);
-    AppStorage.setOrCreate('launchUri', uri);
+    AppStorage.setOrCreate('launchUri', createUri);
+    hilog.info(0, TAG, 'onCreate 文档打开：武装 Want 返回 action=' + (want.action ?? '') +
+      ', uriLen=' + createUri.length);
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     logContinuationLine(
-      `onNewWant ${describeLaunchReason(launchParam)}, hasRouter=${this.currentRouter !== undefined}`
+      'onNewWant ' + describeLaunchReason(launchParam) +
+        ', hasRouter=' + (this.currentRouter !== undefined) +
+        ', action=' + (want.action ?? '') +
+        ', uriLen=' + this.wantUriLength(want)
     );
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
       logWantParameterKeys(want, 'onNewWant.CONTINUATION');
@@ -94,16 +106,23 @@ export default class EntryAbility extends UIAbility {
 
     if (this.isSystemShareLaunch(launchParam)) {
       setExitViewerOnBack(true);
+      hilog.info(0, TAG, 'onNewWant 系统分享：武装 Want 返回');
       this.handleSystemShareWant(want);
       return;
     }
 
-    let uri = want.uri;
-    if (uri == null || uri == undefined) {
+    // 桌面图标温启动也会走 onNewWant，且可能携带上次文档的粘性 uri。
+    // 仅在真正的 viewData/sendData 文档打开时武装「返回调用方」；否则显式解除。
+    const openUri = this.getDocumentOpenUri(want, launchParam);
+    if (openUri === undefined) {
+      setExitViewerOnBack(false);
+      hilog.info(0, TAG, 'onNewWant 非文档打开（如桌面图标）：解除 Want 返回武装');
       return;
     }
+
     setExitViewerOnBack(true);
-    AppStorage.setOrCreate('launchUri', uri);
+    AppStorage.setOrCreate('launchUri', openUri);
+    hilog.info(0, TAG, 'onNewWant 文档打开：武装 Want 返回');
     if (this.resolveActiveRouter() === undefined) {
       logContinuationLine('onNewWant 已写入 launchUri，等待 Router 就绪后打开');
     }
@@ -230,6 +249,38 @@ export default class EntryAbility extends UIAbility {
 
   private isSystemShareLaunch(launchParam: AbilityConstant.LaunchParam): boolean {
     return launchParam.launchReasonMessage === SYSTEM_SHARE_LAUNCH_REASON;
+  }
+
+  private wantUriLength(want: Want): number {
+    const uri = want.uri;
+    if (uri === undefined || uri === null) {
+      return 0;
+    }
+    return uri.length;
+  }
+
+  /**
+   * 从「文件管理器/分享打开 PDF」的 Want 取出 uri；桌面图标（home）或粘性 uri 返回 undefined。
+   * 桌面图标温启动常复用上次文档 uri，但 action 为 home，不得武装 Want 返回。
+   */
+  private getDocumentOpenUri(want: Want, launchParam: AbilityConstant.LaunchParam): string | undefined {
+    if (this.isSystemShareLaunch(launchParam)) {
+      return undefined;
+    }
+    const action = want.action ?? '';
+    if (action === WANT_ACTION_HOME || action.length === 0) {
+      return undefined;
+    }
+    if (action !== WANT_ACTION_VIEW_DATA
+      && action !== WANT_ACTION_SEND_DATA
+      && action !== WANT_ACTION_SEND_MULTIPLE_DATA) {
+      return undefined;
+    }
+    const uri = want.uri;
+    if (uri === undefined || uri === null || uri.length === 0) {
+      return undefined;
+    }
+    return uri;
   }
 
   private async extractPdfUriFromShareWant(want: Want): Promise<string | null> {
@@ -605,5 +656,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    // Want「返回调用方」仅武装一次；任意进后台后解除，避免桌面再入后系统返回仍进后台。
+    setExitViewerOnBack(false);
   }
 }
