@@ -448,6 +448,8 @@ export class PDFAnnotationController {
       pageIndex: pageIndex
     });
     this.updateUnsavedStrokesFlag();
+    // 提交前清空持久画布，再整页重绘；否则旧笔画会叠绘，抗锯齿半透明边会越来越实。
+    targetCtx.reset();
     this.loadPageStrokes(targetCtx, pageIndex);
 
     this.activeDrawPath = NewStroke();
