@@ -1,6 +1,8 @@
 ---
 name: commit-batcher
-description: Review a large git worktree, group changes into small coherent batches, create clear English commit messages, and explain the per-batch rationale in reusable commit-detail bullets. Use when the user asks to split commits, batch commits, review workspace changes, or restructure commit history without rewriting existing commits.
+description: 'Review a large git worktree, group changes into small coherent batches, create clear English commit messages, and explain the per-batch rationale in reusable commit-detail bullets. Use when: split commits, batch commits, review workspace changes, commit restructuring, commit rationale, commit detail.'
+argument-hint: 'Review the current git changes, group them into small coherent commits, commit each batch with a clear English message, and return per-batch rationale plus reusable commit-detail bullets.'
+user-invocable: true
 ---
 
 # Commit Batcher
@@ -62,7 +64,7 @@ Support manual assembly types to skip auto-assembly diagnostics
 
 ## Verification Guidance
 
-- Prefer the repository's existing build or test tasks over ad-hoc wrappers.
+- Prefer `.\build.ps1` for syntax and build verification over ad-hoc wrappers.
 - When validating commit message formatting, inspect a raw or medium-detail git log view rather than `--oneline`, and confirm there is a blank line between the subject and the first detail bullet.
 - If a batch changes runtime behavior, run the most relevant targeted verification you can before moving to the next batch.
 
