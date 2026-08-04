@@ -4,7 +4,9 @@ import {
   EVENT_APP_TERMINATE_REQUESTED,
   EVENT_DOCUMENT_OPEN_REQUESTED,
   isValidPendingDocumentOpenParams,
+  setExitViewerOnBack,
   setPdfViewerActive,
+  shouldExitViewerOnBack,
   syncPdfViewerHasUnsavedChanges,
   takePendingDocumentOpenParams
 } from '../navigation/PendingDocumentOpen';
@@ -1117,7 +1119,13 @@ struct PDFView {
     });
   }
 
-  private requestBackToMainMenu(): void {
+  private requestLeaveViewer(): void {
+    if (shouldExitViewerOnBack()) {
+      void this.runWithUnsavedGuard(() => {
+        this.returnToCallerKeepingAlive();
+      });
+      return;
+    }
     void this.runWithUnsavedGuard(() => {
       this.backToMainMenu();
     });
@@ -1134,17 +1142,18 @@ struct PDFView {
     if (params === undefined || !isValidPendingDocumentOpenParams(params)) {
       return;
     }
+    // 系统 Want 再次打开文档：返回应回到调用方（Ability 保活进后台）。
+    setExitViewerOnBack(true);
     this.requestOpenDocument(params);
   };
 
   private onAppTerminateRequested = (): void => {
-    const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void this.runWithUnsavedGuard(() => {
-      abilityContext.terminateSelf();
+      this.terminateViewerAbility();
     });
   };
 
-  backToMainMenu(): void {
+  private prepareLeaveViewerUi(): void {
     this.disableContinuationForMigration();
     clearContinuationReadingState();
     // 关闭节拍器、调音器、批注画板三个浮层并把关闭状态推到 OverlayManager，
@@ -1156,6 +1165,39 @@ struct PDFView {
     this.viewerViewModel.closeAnnotatePalette();
     this.viewerViewModel.closeBookmarkPanel();
     this.syncPanelOverlays();
+  }
+
+  /**
+   * 系统 Want 打开后的返回：优先移到后台回到调用方，不销毁 Ability。
+   * 设备不支持 moveAbilityToBackground（如部分 2in1）时回退 terminateSelf。
+   */
+  private returnToCallerKeepingAlive(): void {
+    this.prepareLeaveViewerUi();
+    const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    abilityContext.moveAbilityToBackground().then(() => {
+      hilog.info(0, 'PDFView', 'moveAbilityToBackground 成功，已回到调用方且保持进程');
+    }).catch((err: BusinessError) => {
+      hilog.warn(0, 'PDFView',
+        `moveAbilityToBackground 失败 code=${err.code}, ${err.message}，回退 terminateSelf`);
+      setExitViewerOnBack(false);
+      abilityContext.terminateSelf().catch((termErr: BusinessError) => {
+        hilog.error(0, 'PDFView', `terminateSelf 失败: code=${termErr.code}, ${termErr.message}`);
+      });
+    });
+  }
+
+  private terminateViewerAbility(): void {
+    this.prepareLeaveViewerUi();
+    setExitViewerOnBack(false);
+    const abilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    abilityContext.terminateSelf().catch((err: BusinessError) => {
+      hilog.error(0, 'PDFView', `terminateSelf 失败: code=${err.code}, ${err.message}`);
+    });
+  }
+
+  backToMainMenu(): void {
+    this.prepareLeaveViewerUi();
+    setExitViewerOnBack(false);
     this.getUIContext().getRouter().replaceUrl({ url: 'pages/Index' }).catch(() => {
     });
   }
@@ -2248,7 +2290,7 @@ struct PDFView {
       if (entered === null) {
         if (this.documentLoadVersion === loadVersion) {
           this.isDocumentLoading = false;
-          this.backToMainMenu();
+          this.requestLeaveViewer();
         }
         return false;
       }
@@ -2365,10 +2407,10 @@ struct PDFView {
   }
 
   /**
-   * 拦截系统返回键，回到主页而非退出应用
+   * 拦截系统返回：应用内打开回首页；系统 Want 打开则移到后台回到调用方（不销毁）。
    */
   onBackPress(): boolean {
-    this.requestBackToMainMenu();
+    this.requestLeaveViewer();
     return true;
   }
 
@@ -5556,7 +5598,7 @@ struct PDFView {
               .width(140)
               .height(40)
               .margin({ top: 4 })
-              .onClick(() => this.requestBackToMainMenu())
+              .onClick(() => this.requestLeaveViewer())
           }
           .width('80%')
           .constraintSize({ maxWidth: 400, minWidth: 280 })

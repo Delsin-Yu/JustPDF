@@ -25,7 +25,8 @@ import {
   EVENT_APP_TERMINATE_REQUESTED,
   isPdfViewerActiveWithUnsaved,
   PDF_VIEWER_ACTIVE_KEY,
-  requestReplacePdfDocument
+  requestReplacePdfDocument,
+  setExitViewerOnBack
 } from '../navigation/PendingDocumentOpen';
 
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
@@ -53,6 +54,7 @@ export default class EntryAbility extends UIAbility {
 
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
       logWantParameterKeys(want, 'onCreate.CONTINUATION');
+      setExitViewerOnBack(false);
       pdfContinuationDistributed.startRestore(this.context, want);
       this.pendingContinuationWant = want;
       logContinuationLine('onCreate 已暂存 pendingContinuationWant，等待 onWindowStageRestore');
@@ -60,15 +62,18 @@ export default class EntryAbility extends UIAbility {
     }
 
     if (this.isSystemShareLaunch(launchParam)) {
+      setExitViewerOnBack(true);
       this.pendingSystemShareWant = want;
       return;
     }
 
     let uri = want.uri;
     if (uri == null || uri == undefined) {
+      setExitViewerOnBack(false);
       logContinuationLine('onCreate 无 want.uri');
       return;
     }
+    setExitViewerOnBack(true);
     AppStorage.setOrCreate('launchUri', uri);
   }
 
@@ -78,6 +83,7 @@ export default class EntryAbility extends UIAbility {
     );
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
       logWantParameterKeys(want, 'onNewWant.CONTINUATION');
+      setExitViewerOnBack(false);
       pdfContinuationDistributed.startRestore(this.context, want);
       this.pendingContinuationWant = want;
       // 勿在此处 replaceUrl：随后常会触发 onWindowStageRestore，由 loadInitialContent 加载 PDFView
@@ -87,6 +93,7 @@ export default class EntryAbility extends UIAbility {
     }
 
     if (this.isSystemShareLaunch(launchParam)) {
+      setExitViewerOnBack(true);
       this.handleSystemShareWant(want);
       return;
     }
@@ -95,6 +102,7 @@ export default class EntryAbility extends UIAbility {
     if (uri == null || uri == undefined) {
       return;
     }
+    setExitViewerOnBack(true);
     AppStorage.setOrCreate('launchUri', uri);
     if (this.resolveActiveRouter() === undefined) {
       logContinuationLine('onNewWant 已写入 launchUri，等待 Router 就绪后打开');

@@ -6,6 +6,8 @@ import { isContinuationPendingRouterArgs } from '../continuation/PdfContinuation
 export const PDF_VIEWER_ACTIVE_KEY: string = 'pdfViewerActive';
 export const PDF_VIEWER_HAS_UNSAVED_KEY: string = 'pdfViewerHasUnsavedChanges';
 export const PENDING_DOCUMENT_OPEN_PARAMS_KEY: string = 'pendingDocumentOpenParams';
+/** 由系统 Want（打开/分享 PDF）进入阅读页时为 true：返回应移到后台回到调用方（不销毁 Ability）。 */
+export const EXIT_VIEWER_ON_BACK_KEY: string = 'exitViewerOnBack';
 
 export const EVENT_DOCUMENT_OPEN_REQUESTED: string = 'documentOpenRequested';
 export const EVENT_APP_TERMINATE_REQUESTED: string = 'appTerminateRequested';
@@ -14,6 +16,14 @@ const PDF_VIEW_PAGE_URL: string = 'pages/PDFView';
 
 export function setPdfViewerActive(active: boolean): void {
   AppStorage.setOrCreate(PDF_VIEWER_ACTIVE_KEY, active);
+}
+
+export function setExitViewerOnBack(exitOnBack: boolean): void {
+  AppStorage.setOrCreate(EXIT_VIEWER_ON_BACK_KEY, exitOnBack);
+}
+
+export function shouldExitViewerOnBack(): boolean {
+  return AppStorage.get<boolean>(EXIT_VIEWER_ON_BACK_KEY) === true;
 }
 
 export function syncPdfViewerHasUnsavedChanges(hasUnsavedStrokes: boolean, bookmarksDirty: boolean): void {

@@ -12,6 +12,7 @@ import {
   RecentFileEntry
 } from '../components/RecentFilesHelper';
 import { activateRecentFileUri } from '../components/RecentFilePermission';
+import { setExitViewerOnBack } from '../navigation/PendingDocumentOpen';
 
 const TAG = 'JustPDFIndex';
 
@@ -68,7 +69,8 @@ struct Index {
     if (launchUri == null || launchUri == '') {
       return;
     }
-    this.loadAndViewFile(launchUri);
+    // 系统 Want 冷/温启动经 Index 转发时，返回应移到后台回到调用方。
+    this.loadAndViewFile(launchUri, true);
   }
 
   aboutToDisappear(): void {
@@ -101,7 +103,8 @@ struct Index {
     }
   }
 
-  async loadAndViewFile(uri: string) {
+  async loadAndViewFile(uri: string, exitOnBack: boolean = false) {
+    setExitViewerOnBack(exitOnBack);
     let uiContext = this.getUIContext();
     let dir = uiContext.getHostContext()!.tempDir;
     let sourceFile: fs.File;
