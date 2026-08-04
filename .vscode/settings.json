@@ -23,5 +23,7 @@
     },
     "js/ts.validate.enabled": false,
     "js/ts.suggest.enabled": false,
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "typescript.validate.enable": false,
+    "typescript.suggest.enabled": false
 }
