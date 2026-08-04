@@ -1,5 +1,9 @@
 import { preferences } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import {
+  persistRecentFileUri,
+  revokeRecentFileUri
+} from './RecentFilePermission';
 
 const TAG = 'RecentFilesHelper';
 
@@ -35,15 +39,30 @@ export function addRecentFile(prefs: preferences.Preferences, entry: RecentFileE
     files = files.filter(f => f.systemPath !== entry.systemPath);
     // 新记录插入到最前面
     files.unshift(entry);
-    // 限制数量
+    // 超出上限时撤销被挤出条目的持久化授权
     if (files.length > MAX_RECENT_FILES) {
+      const dropped: RecentFileEntry[] = files.slice(MAX_RECENT_FILES);
       files = files.slice(0, MAX_RECENT_FILES);
+      for (let i = 0; i < dropped.length; i++) {
+        void revokeRecentFileUri(dropped[i].systemPath);
+      }
     }
     prefs.putSync(RECENT_FILES_KEY, JSON.stringify(files));
     prefs.flushSync();
   } catch (error) {
     hilog.error(0x0000, TAG, `保存最近文件出错: ${error}`);
   }
+}
+
+/**
+ * 在仍有临时授权时持久化 URI，并写入最近打开列表。
+ */
+export async function rememberRecentFile(
+  prefs: preferences.Preferences,
+  entry: RecentFileEntry
+): Promise<void> {
+  await persistRecentFileUri(entry.systemPath);
+  addRecentFile(prefs, entry);
 }
 
 /**
@@ -58,6 +77,17 @@ export function removeRecentFile(prefs: preferences.Preferences, systemPath: str
   } catch (error) {
     hilog.error(0x0000, TAG, `移除最近文件出错: ${error}`);
   }
+}
+
+/**
+ * 撤销持久化授权并从最近列表移除。
+ */
+export async function forgetRecentFile(
+  prefs: preferences.Preferences,
+  systemPath: string
+): Promise<void> {
+  await revokeRecentFileUri(systemPath);
+  removeRecentFile(prefs, systemPath);
 }
 
 /**

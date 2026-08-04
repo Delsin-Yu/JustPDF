@@ -12,6 +12,11 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "metadata": [
+      {
+        "name": "ohos.fileshare.supportPreservePersistentPermission"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
@@ -58,6 +63,16 @@
       }
     ],
     "requestPermissions": [
+      {
+        "name": "ohos.permission.FILE_ACCESS_PERSIST",
+        "reason": "$string:permission_file_access_persist_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
       {
         "name": "ohos.permission.DISTRIBUTED_DATASYNC",
         "reason": "$string:permission_distributed_datasync_reason",

@@ -47,7 +47,7 @@ export struct TutorialDialogBuilder {
         Span('从应用首页打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• 点击「选择文件」，在系统文件选择器中选择 PDF\n')
         Span('• 首页「最近打开」列出曾打开过的文件；点击可再次打开\n')
-        Span('• 若文件已删除或权限过期，列表会标注状态，可重新选择文件\n')
+        Span('• 打开文件时会持久化访问授权；重启后可直接打开最近文件。若文件已删除或授权失效，列表会标注状态，可重新选择\n')
         Span('• 在最近列表中向左滑某条记录，可将其从列表中移除\n\n')
 
         Span('左下角「更多」菜单\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)

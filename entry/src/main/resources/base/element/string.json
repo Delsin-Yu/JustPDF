@@ -13,6 +13,10 @@
       "value": "Just PDF"
     },
     {
+      "name": "permission_file_access_persist_reason",
+      "value": "用于记住最近打开的 PDF，以便下次直接访问而无需重新选择。"
+    },
+    {
       "name": "permission_distributed_datasync_reason",
       "value": "用于跨设备接续时同步 PDF 文件。"
     },

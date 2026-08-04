@@ -5,7 +5,13 @@ import { preferences } from '@kit.ArkData';
 import { window } from '@kit.ArkUI';
 import { pickFilePathAsync, pickFilePathWithDefaultAsync } from '../components/GUIO';
 import { showAlertDialog } from '../components/UIComponents';
-import { getRecentFiles, addRecentFile, removeRecentFile, RecentFileEntry } from '../components/RecentFilesHelper';
+import {
+  getRecentFiles,
+  rememberRecentFile,
+  forgetRecentFile,
+  RecentFileEntry
+} from '../components/RecentFilesHelper';
+import { activateRecentFileUri } from '../components/RecentFilePermission';
 
 const TAG = 'JustPDFIndex';
 
@@ -77,15 +83,15 @@ struct Index {
   private async validateRecentFilesAsync(): Promise<void> {
     for (let i = 0; i < this.recentFiles.length; i++) {
       const entry = this.recentFiles[i];
+      // 重启后需先激活已持久化授权，再探测可读性。
+      await activateRecentFileUri(entry.systemPath);
       try {
         let testFile = await fs.open(entry.systemPath, fs.OpenMode.READ_ONLY);
         await fs.close(testFile);
         this.entryStatus[i] = 'valid';
       } catch (error) {
         const bizErr = error as BusinessError;
-        if (bizErr.code === 13900001) {
-          this.entryStatus[i] = 'noperm';
-        } else if (bizErr.code === 13900002) {
+        if (bizErr.code === 13900002) {
           this.entryStatus[i] = 'deleted';
         } else {
           this.entryStatus[i] = 'noperm';
@@ -134,7 +140,8 @@ struct Index {
       'fileName': fileName
     }
     if (this.preferences != null) {
-      addRecentFile(this.preferences, {
+      // 趁临时授权仍有效时持久化，供下次直接打开。
+      await rememberRecentFile(this.preferences, {
         fileName: fileName,
         systemPath: uri,
         openedAt: new Date().getTime()
@@ -150,6 +157,7 @@ struct Index {
   }
 
   async openRecentFile(entry: RecentFileEntry): Promise<void> {
+    await activateRecentFileUri(entry.systemPath);
     try {
       let testFile = await fs.open(entry.systemPath, fs.OpenMode.READ_ONLY);
       await fs.close(testFile);
@@ -169,7 +177,7 @@ struct Index {
     }
     const entry = this.recentFiles[index];
     if (this.preferences != null) {
-      removeRecentFile(this.preferences, entry.systemPath);
+      void forgetRecentFile(this.preferences, entry.systemPath);
     }
     this.recentFiles.splice(index, 1);
     this.entryStatus.splice(index, 1);

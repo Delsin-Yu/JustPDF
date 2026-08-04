@@ -5,7 +5,7 @@ import { Router, window } from '@kit.ArkUI';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { systemShare } from '@kit.ShareKit';
-import { addRecentFile } from '../components/RecentFilesHelper';
+import { rememberRecentFile } from '../components/RecentFilesHelper';
 import {
   describeLaunchReason,
   extractContinuationPayload,
@@ -371,7 +371,7 @@ export default class EntryAbility extends UIAbility {
       try {
         const params = await this.buildLaunchParams(launchUri);
         if (this.preferences != null) {
-          addRecentFile(this.preferences, {
+          await rememberRecentFile(this.preferences, {
             fileName: params['fileName'],
             systemPath: params['systemPath'],
             openedAt: new Date().getTime()
@@ -508,7 +508,7 @@ export default class EntryAbility extends UIAbility {
     try {
       const args = await this.buildLaunchParams(launchUri);
       if (this.preferences != null) {
-        addRecentFile(this.preferences, {
+        await rememberRecentFile(this.preferences, {
           fileName: args['fileName'],
           systemPath: args['systemPath'],
           openedAt: new Date().getTime()
