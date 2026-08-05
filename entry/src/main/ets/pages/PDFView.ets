@@ -1178,7 +1178,7 @@ struct PDFView {
 
   /**
    * 系统 Want 打开后的返回：优先移到后台回到调用方，不销毁 Ability。
-   * 设备不支持 moveAbilityToBackground（如部分 2in1）时回退 terminateSelf。
+   * 设备不支持 moveAbilityToBackground（如部分 2in1）时回退应用首页。
    */
   private returnToCallerKeepingAlive(): void {
     this.prepareLeaveViewerUi();
@@ -1189,10 +1189,8 @@ struct PDFView {
       hilog.info(0, 'PDFView', 'moveAbilityToBackground 成功，已回到调用方且保持进程');
     }).catch((err: BusinessError) => {
       hilog.warn(0, 'PDFView',
-        `moveAbilityToBackground 失败 code=${err.code}, ${err.message}，回退 terminateSelf`);
-      abilityContext.terminateSelf().catch((termErr: BusinessError) => {
-        hilog.error(0, 'PDFView', `terminateSelf 失败: code=${termErr.code}, ${termErr.message}`);
-      });
+        `moveAbilityToBackground 失败 code=${err.code}, ${err.message}，回退应用首页`);
+      this.backToMainMenu();
     });
   }
 
