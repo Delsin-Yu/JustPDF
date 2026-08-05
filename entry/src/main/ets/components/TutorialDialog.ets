@@ -36,21 +36,6 @@ export struct TutorialDialogBuilder {
       Text() {
         Span('Just PDF 面向音乐演奏与练习：读谱、书签与批注、PDF 内链跳转，并支持外接翻谱设备；同屏提供节拍器与调音器。\n\n')
 
-        Span('打开文件\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
-
-        Span('从系统打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
-        Span('• 在文件管理器、分享面板等场景选用本应用打开 PDF，即可进入阅读界面\n')
-        Span('• 系统返回会回到调用方（应用保活进后台）；该行为仅一次有效。之后可在「更多」菜单中选「首页」\n')
-        Span('• 若文档已加密，阅读页会提示 ')
-        Span('输入 PDF 密码').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('；密码仅用于本次阅读，不会保存到设置中\n\n')
-
-        Span('从应用首页打开\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
-        Span('• 点击「选择文件」，在系统文件选择器中选择 PDF\n')
-        Span('• 首页「最近打开」列出曾打开过的文件；点击可再次打开\n')
-        Span('• 打开文件时会持久化访问授权；重启后可直接打开最近文件。若文件已删除或授权失效，列表会标注状态，可重新选择\n')
-        Span('• 在最近列表中向左滑某条记录，可将其从列表中移除\n\n')
-
         Span('左下角「更多」菜单\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
         Span('点击屏幕左下角圆形 ')
@@ -60,19 +45,19 @@ export struct TutorialDialogBuilder {
         Span('第一组\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• ')
         Span('首页').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 返回应用首页（选择文件 / 最近打开）\n')
+        Span(' — 返回应用首页\n')
         Span('• ')
         Span('教程').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 打开本说明\n')
         Span('• ')
         Span('设置').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 打开设置弹窗（见下文）\n')
+        Span(' — 打开设置（见下文）\n')
         Span('• ')
         Span('全屏 / 窗口').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 在支持自由窗口的设备上切换沉浸式全屏（仅在该类设备上显示）\n')
+        Span(' — 在支持的设备上切换全屏与窗口显示\n')
         Span('• ')
         Span('分享').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 通过系统分享面板分享当前 PDF\n')
+        Span(' — 分享当前 PDF；在支持的设备上也可通过碰一碰 / 隔空传送发送或接收\n')
         Span('• ')
         Span('节拍器').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' / ')
@@ -95,28 +80,28 @@ export struct TutorialDialogBuilder {
         Span(' — 单页 / 双页 / 双页连续 / 三页 / 三页连续\n')
         Span('• ')
         Span('翻页:…').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 水平滑动 / 屏侧翻页 / 按钮翻页 / 外设翻页\n')
+        Span(' — 水平滑动 / 屏侧翻页 / 按钮翻页 / 外设翻页（默认水平滑动）\n')
         Span('• ')
         Span('跳转').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 重置视口、跳转首页、跳转尾页\n')
+        Span(' — 重置视图、跳到首页或尾页\n')
         Span('• ')
         Span('保存文档').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 将批注与书签写入新 PDF；旁侧 ')
+        Span(' — 将批注与书签写入 PDF；旁侧 ')
         Span('●').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' 表示有未保存更改\n\n')
 
-        Span('设置弹窗与菜单的区别\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+        Span('设置\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
         Span('「设置」提供：\n')
         Span('• ')
         Span('进度滑块').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 是否在页面右侧显示快速跳页滑块\n')
         Span('• ')
         Span('PDF 跳转链接显示').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 隐藏 / 进入后淡出 / 始终显示链接热区提示（不影响能否点击）\n')
+        Span(' — 隐藏 / 进入后淡出 / 始终显示链接提示\n')
         Span('• ')
         Span('水平滑动灵敏度').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 0～10 档，仅在选择「翻页:水平滑动」时生效\n\n')
-        Span('显示模式、翻页方式等仍在「更多」第二组中调整，并会持久保存。\n')
+        Span(' — 调整滑动翻页的灵敏程度，仅在「翻页:水平滑动」时生效\n\n')
+        Span('显示模式、翻页方式等仍在「更多」第二组中调整。\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
     }.layoutWeight(1).width('100%')
   }
@@ -134,20 +119,20 @@ export struct TutorialDialogBuilder {
         Span('• 三页 — 按三张一组（1-3，4-6，…）\n')
         Span('• 三页连续 — 当前起连续三张（1-3，2-4，…）\n\n')
 
-        Span('在菜单「翻页:…」中可选：\n')
+        Span('在菜单「翻页:…」中可选（默认为水平滑动）：\n')
         Span('• ')
         Span('水平滑动').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 单指横向滑动可预览邻页，松手或甩动足够时翻页；竖向为主时平移画面。灵敏度见「设置」\n')
         Span('• ')
         Span('屏侧翻页').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 点按屏幕左侧约 30% 上一页、右侧约 30% 下一页；首次切换到此模式时会有边缘渐变提示。若刚完成平移、捏合或滚轮缩放，会忽略误触翻页\n')
+        Span(' — 点按屏幕左侧上一页、右侧下一页；首次切换到此模式时会有边缘提示\n')
         Span('• ')
         Span('按钮翻页').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 使用底部「<」「>」\n')
         Span('• ')
         Span('外设翻页').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span(' — 隐藏底部按钮以减少误触；键盘与蓝牙翻谱器在任意翻页模式下均可翻页\n\n')
-        Span('批注浮窗处于「绘制」或「擦除」时，底部会显示「<」「>」以便翻页；关闭浮窗后行为与菜单所选一致。\n\n')
+        Span(' — 隐藏底部按钮，适合配合键盘或蓝牙翻谱器使用\n\n')
+        Span('打开批注浮窗后，若当前为「水平滑动」或「屏侧翻页」，会暂时改用底部按钮翻页，关闭浮窗后恢复。\n\n')
 
         Span('缩放与平移\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
@@ -164,10 +149,9 @@ export struct TutorialDialogBuilder {
         Span('• 左键拖动：常规浏览下平移；批注工具下随工具变化\n\n')
 
         Span('快速定位\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
-        Span('• 菜单「跳转」— 重置视口、首页或尾页（多页版式下尾页为最后一组可浏览位置）\n')
+        Span('• 菜单「跳转」— 重置视图、跳到首页或尾页\n')
         Span('• 若已开启「进度滑块」，可拖动右侧竖条跳到任意页\n')
-        Span('• 底部显示当前页 / 总页数\n')
-        Span('• 界面控件在操作后会短暂完全显示，随后略微变淡，便于沉浸阅读\n\n')
+        Span('• 底部显示当前页 / 总页数\n\n')
 
         Span('PDF 内链与书签的详细说明见「书签与链接」页签。\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
@@ -182,7 +166,7 @@ export struct TutorialDialogBuilder {
 
         Span('打开方式\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• 「更多」菜单第一组中的「书签」\n')
-        Span('• 文档中已有书签时，菜单按钮上方可能出现圆形书签快捷按钮\n\n')
+        Span('• 文档中已有书签时，「更多」按钮上方可能出现圆形书签快捷按钮\n\n')
 
         Span('面板操作\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
         Span('• 列表中点击书签项可跳到对应页\n')
@@ -197,22 +181,20 @@ export struct TutorialDialogBuilder {
 
         Span('PDF 内跳转链接\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
-        Span('• 乐谱或文档中的页内链接：轻点热区可跳到目标页\n')
-        Span('• 指向网址的链接：通过系统打开对应 URI\n')
-        Span('• 小幅拖动会取消点击，避免与翻页、平移手势冲突\n')
-        Span('• 在「设置」中调整 ')
+        Span('• 乐谱或文档中的页内链接：轻点即可跳到目标页\n')
+        Span('• 网址链接会通过系统打开\n')
+        Span('• 在「设置」中可调整 ')
         Span('PDF 跳转链接显示').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('：隐藏 / 进入后淡出 / 始终显示热区提示\n\n')
+        Span('：隐藏 / 进入后淡出 / 始终显示\n\n')
 
         Span('链接跳转历史\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
-        Span('• 通过页内链接跳转到新页后，「更多」按钮附近会出现圆形 ')
+        Span('• 通过页内链接跳转后，「更多」按钮附近会出现圆形 ')
         Span('‹').fontFamily('monospace').fontColor(kbd)
         Span(' / ')
         Span('›').fontFamily('monospace').fontColor(kbd)
-        Span(' 按钮，用于在后退栈与前进栈间导航\n')
+        Span(' 按钮，用于后退或前进\n')
         Span('• 使用进度滑块跳页也会记入历史，便于回到跳转前位置\n')
-        Span('• 打开新文档时历史会清空\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
     }.layoutWeight(1).width('100%')
   }
@@ -227,17 +209,22 @@ export struct TutorialDialogBuilder {
         Span('打开批注浮窗：\n')
         Span('• 「更多」→「批注」\n')
         Span('• 常规浏览下单指按住页面直至触点旁环形进度走满\n')
-        Span('• 常规浏览下手写笔轻点纸面；部分设备支持笔双击快捷打开\n\n')
+        Span('• 常规浏览下手写笔轻点纸面\n\n')
         Span('浮窗内可切换「绘制」或「擦除」，右上角关闭；左侧手柄可拖动位置，双指可缩放浮窗。\n\n')
 
+        Span('手写笔笔身双击\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
+        Span('• 在支持手写笔服务的设备上：浮窗已打开且处于「绘制」或「擦除」时，笔身双击可在两者间切换\n')
+        Span('• 不会用笔身双击打开浮窗；打开仍用轻点纸面、长按或菜单\n\n')
+
         Span('绘制\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
-        Span('• 单指或鼠标左键在页面上绘制；可选预设色与自定义颜色\n')
-        Span('• 打开文档时可能自动扫描并导入 PDF 中已有的折线批注（期间会短暂禁止绘制）\n')
+        Span('• 单指或鼠标左键在页面上绘制；可选橙色、红色、黄色、绿色、蓝色、紫色、黑色等预设色，也可自定义颜色\n')
+        Span('• 轻点亦可留下可见圆点\n')
+        Span('• 打开文档时可能自动导入 PDF 中已有的笔迹批注\n')
         Span('• 双指仍用于缩放与平移整页\n\n')
 
         Span('擦除\n').fontSize(18).fontWeight(FontWeight.Medium).fontColor(h3)
-        Span('• 沿笔划擦除本会话中的笔迹，擦除过程有高亮提示\n')
-        Span('• 不会擦掉已通过「保存文档」写入文件的既有笔迹\n\n')
+        Span('• 沿笔划擦除尚未保存的笔迹，擦除过程有高亮提示\n')
+        Span('• 已保存进文件的笔迹不会被擦除\n\n')
 
         Span('撤销与重做\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
@@ -253,13 +240,11 @@ export struct TutorialDialogBuilder {
         Span('保存到 PDF\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
         Span('• 批注浮窗内保存，或「更多」→「保存文档」\n')
-        Span('• 在系统界面选择路径与文件名；笔迹以常见 PDF 折线注释形式写入\n')
-        Span('• 保存会一并写入未保存的书签更改\n')
-        Span('• 保存成功后，本次会话内的撤销历史会清空\n\n')
+        Span('• 选择保存位置与文件名后写入；书签更改会一并保存\n')
+        Span('• 保存成功后，此前的撤销记录会清空\n\n')
 
         Span('提示\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('• 本应用不提供文内搜索或选中复制正文；批注为手绘墨迹\n')
-        Span('• 按钮置灰或半透明表示当前不可用\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
     }.layoutWeight(1).width('100%')
   }
@@ -295,7 +280,7 @@ export struct TutorialDialogBuilder {
   tabShortcuts() {
     Scroll() {
       Text() {
-        Span('以下快捷键适用于外接键盘的平板或二合一设备。\n\n')
+        Span('以下快捷键适用于外接键盘的平板或二合一设备。蓝牙翻谱器通常模拟方向键，在任意「翻页:…」模式下均可翻页。\n\n')
 
         Span('翻页与位置\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
@@ -348,14 +333,17 @@ export struct TutorialDialogBuilder {
         Span('Q: 如何删掉画错的线？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('A: 批注浮窗切到「擦除」，或使用撤销；绘制 / 擦除工具下也可三指同按快速撤销。\n\n')
 
+        Span('Q: 手写笔双击没反应？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 先用手写笔轻点打开批注浮窗。笔身双击仅在浮窗已打开且为绘制 / 擦除时切换工具；部分设备无此能力。\n\n')
+
         Span('Q: 全屏按钮找不到？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 仅在支持自由窗口形态的设备上显示「全屏」或「窗口」。\n\n')
+        Span('A: 「全屏」或「窗口」仅在支持的设备上显示。\n\n')
 
         Span('Q: 保存的批注能在别的应用里看吗？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 可以。以常见 PDF 折线注释与书签形式保存，一般阅读器均可查看。\n\n')
+        Span('A: 可以。保存为常见的 PDF 批注与书签，一般阅读器均可查看。\n\n')
 
         Span('Q: 蓝牙翻谱器怎么用？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 通常模拟方向键，与「翻页:…」选项无关。若希望隐藏底部「<」「>」，可选「外设翻页」。\n\n')
+        Span('A: 连接后即可翻页。若希望隐藏底部「<」「>」，可选「外设翻页」。\n\n')
 
         Span('Q: 调音器没有反应？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('A: 在系统设置中开启麦克风权限，并确认环境音量足够。\n\n')
@@ -363,8 +351,11 @@ export struct TutorialDialogBuilder {
         Span('Q: 批注或书签面板挡住谱子？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('A: 拖动手柄移到合适位置，或用双指缩小面板。\n\n')
 
+        Span('Q: 能搜索或复制 PDF 正文吗？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('A: 不支持。本应用面向读谱与手绘批注，不提供文内搜索或选中复制。\n\n')
+
         Span('Q: 支持在设备间接着上次阅读吗？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 在支持 HarmonyOS 应用接续的设备上，可通过系统接续继续打开同一文档；具体以系统与账号能力为准。\n\n')
+        Span('A: 在支持应用接续的设备上可以继续阅读同一文档。也可通过分享或碰一碰 / 隔空传送传递 PDF。\n\n')
 
         Span('感谢使用 Just PDF。').fontStyle(FontStyle.Italic).fontColor('#CCCCCC')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
