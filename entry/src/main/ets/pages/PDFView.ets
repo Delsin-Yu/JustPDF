@@ -885,7 +885,7 @@ struct PDFView {
         this.applyPdfLinkVisualMode(true);
       }
     }),
-    width: '40%',
+    width: '85%',
   });
 
   private isDocumentReadOnly(): boolean {
@@ -1232,7 +1232,7 @@ struct PDFView {
           this.applyPdfLinkVisualMode(true);
         }
       }),
-      width: '40%'
+      width: '85%'
     });
   }
 
