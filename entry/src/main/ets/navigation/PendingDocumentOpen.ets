@@ -78,6 +78,7 @@ export function requestReplacePdfDocument(
   if (router === undefined) {
     return false;
   }
-  router.replaceUrl({ url: PDF_VIEW_PAGE_URL, params: args });
+  router.replaceUrl({ url: PDF_VIEW_PAGE_URL, params: args }).catch(() => {
+  });
   return true;
 }

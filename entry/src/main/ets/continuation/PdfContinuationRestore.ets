@@ -149,21 +149,31 @@ export async function buildLaunchParamsFromLocalPath(
   fileNameHint: string
 ): Promise<Record<string, string>> {
   const dir = context.tempDir;
-  const sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
-  const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
-  const sandboxPath = `${dir}/${fileName}`;
-  const saveTempPath = `${dir}/saveTemp_${fileName}`;
+  let sourceFile: fs.File | undefined = undefined;
   try {
+    sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
+    const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
+    const sandboxPath = `${dir}/${fileName}`;
+    const saveTempPath = `${dir}/saveTemp_${fileName}`;
     await fs.copyFile(sourceFile.fd, sandboxPath);
-  } finally {
     await fs.close(sourceFile);
+    sourceFile = undefined;
+    return {
+      'systemPath': systemPath,
+      'sandboxPath': sandboxPath,
+      'saveTempPath': saveTempPath,
+      'fileName': fileName
+    };
+  } catch (error) {
+    if (sourceFile !== undefined) {
+      try {
+        await fs.close(sourceFile);
+      } catch (closeError) {
+        logContinuationWarn(`关闭文件失败: ${closeError}`);
+      }
+    }
+    throw new Error(`buildLaunchParamsFromLocalPath 失败: ${error}`);
   }
-  return {
-    'systemPath': systemPath,
-    'sandboxPath': sandboxPath,
-    'saveTempPath': saveTempPath,
-    'fileName': fileName
-  };
 }
 
 /**

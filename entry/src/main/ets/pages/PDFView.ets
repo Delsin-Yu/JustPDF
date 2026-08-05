@@ -1113,10 +1113,15 @@ struct PDFView {
   }
 
   private async replaceUrlToOpenDocument(params: Record<string, string>): Promise<void> {
-    await this.getUIContext().getRouter().replaceUrl({
-      url: 'pages/PDFView',
-      params: params
-    });
+    try {
+      await this.getUIContext().getRouter().replaceUrl({
+        url: 'pages/PDFView',
+        params: params
+      });
+    } catch (error) {
+      const err = error as BusinessError;
+      hilog.error(0, 'PDFView', `replaceUrl 打开文档失败: code=${err.code}, ${err.message}`);
+    }
   }
 
   private requestLeaveViewer(): void {

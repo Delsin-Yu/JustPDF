@@ -6,6 +6,10 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'GUIO';
 
+/** authMode 依赖的文件夹选择系统能力（2in1 等设备） */
+const FOLDER_SELECTION_CAPABILITY: string =
+  'SystemCapability.FileManagement.UserFileService.FolderSelection';
+
 /**
  * 打开文件选择器，让用户选择一个文件
  * @param fileSuffixFilters 文件后缀过滤器
@@ -41,7 +45,9 @@ export async function pickFilePathWithDefaultAsync(
   documentSelectOptions.fileSuffixFilters = fileSuffixFilters;
   documentSelectOptions.defaultFilePathUri = defaultUri;
   // 优先尝试授权模式（2in1 设备），用户只需确认即可重新获得权限
-  documentSelectOptions.authMode = true;
+  if (canIUse(FOLDER_SELECTION_CAPABILITY)) {
+    documentSelectOptions.authMode = true;
+  }
   try {
     let uris = await documentViewPicker.select(documentSelectOptions);
     if (uris.length > 0) {
@@ -55,7 +61,6 @@ export async function pickFilePathWithDefaultAsync(
     fallbackOptions.maxSelectNumber = 1;
     fallbackOptions.fileSuffixFilters = fileSuffixFilters;
     fallbackOptions.defaultFilePathUri = defaultUri;
-    fallbackOptions.authMode = false;
     try {
       let uris = await documentViewPicker.select(fallbackOptions);
       if (uris.length > 0) {

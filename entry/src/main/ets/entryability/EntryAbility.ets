@@ -524,21 +524,31 @@ export default class EntryAbility extends UIAbility {
     fileNameHint: string
   ): Promise<Record<string, string>> {
     const dir = this.context.tempDir;
-    const sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
-    const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
-    const file = `${dir}/${fileName}`;
-    const tempFile = `${dir}/saveTemp_${fileName}`;
+    let sourceFile: fs.File | undefined = undefined;
     try {
+      sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
+      const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
+      const file = `${dir}/${fileName}`;
+      const tempFile = `${dir}/saveTemp_${fileName}`;
       await fs.copyFile(sourceFile.fd, file);
-    } finally {
       await fs.close(sourceFile);
+      sourceFile = undefined;
+      return {
+        'systemPath': systemPath,
+        'sandboxPath': file,
+        'saveTempPath': tempFile,
+        'fileName': fileName
+      };
+    } catch (error) {
+      if (sourceFile !== undefined) {
+        try {
+          await fs.close(sourceFile);
+        } catch (closeError) {
+          hilog.error(0, TAG, `关闭文件失败: ${closeError}`);
+        }
+      }
+      throw new Error(`buildLaunchParamsFromLocalPath 失败: ${error}`);
     }
-    return {
-      'systemPath': systemPath,
-      'sandboxPath': file,
-      'saveTempPath': tempFile,
-      'fileName': fileName
-    };
   }
 
   private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {

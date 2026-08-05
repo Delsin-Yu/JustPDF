@@ -36,16 +36,20 @@ class PdfContinuationMigrateSource {
 }
 
 function buildAssetFromDistributedPath(filePath: string, fileName: string): commonType.Asset {
-  const stat = fs.statSync(filePath);
-  const uri = fileUri.getUriFromPath(filePath);
-  return {
-    name: fileName,
-    uri: uri,
-    path: filePath,
-    createTime: stat.ctime.toString(),
-    modifyTime: stat.mtime.toString(),
-    size: stat.size.toString()
-  };
+  try {
+    const stat = fs.statSync(filePath);
+    const uri = fileUri.getUriFromPath(filePath);
+    return {
+      name: fileName,
+      uri: uri,
+      path: filePath,
+      createTime: stat.ctime.toString(),
+      modifyTime: stat.mtime.toString(),
+      size: stat.size.toString()
+    };
+  } catch (error) {
+    throw new Error(`buildAssetFromDistributedPath 失败: ${error}`);
+  }
 }
 
 /**
@@ -133,15 +137,21 @@ export class PdfContinuationDistributedRestore {
     const emptySource = new PdfContinuationMigrateSource(undefined, undefined, undefined);
     this.dataObject = distributedDataObject.create(context, emptySource);
 
-    this.dataObject.on(
-      'status',
-      (sessionId: string, networkId: string, status: 'online' | 'offline' | 'restored') => {
-        logContinuationLine(`分布式对象 status=${status} sessionId=${sessionId} networkId=${networkId}`);
-        if (status === 'restored') {
-          void this.handleRestored(context);
+    try {
+      this.dataObject.on(
+        'status',
+        (sessionId: string, networkId: string, status: 'online' | 'offline' | 'restored') => {
+          logContinuationLine(`分布式对象 status=${status} sessionId=${sessionId} networkId=${networkId}`);
+          if (status === 'restored') {
+            void this.handleRestored(context);
+          }
         }
-      }
-    );
+      );
+    } catch (error) {
+      logContinuationError(`startRestore 注册 status 监听失败: ${error}`);
+      this.completeRestore(null);
+      return;
+    }
 
     let dataSessionId = '';
     const params = want.parameters;

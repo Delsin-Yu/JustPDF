@@ -1292,9 +1292,14 @@ export class PageStore implements IDataSource {
         end,
         openPassword
       );
-      const batchFound = await taskpool.execute(task, taskpool.Priority.MEDIUM) as number[];
-      for (let i = 0; i < batchFound.length; i++) {
-        found.push(batchFound[i]);
+      try {
+        const batchFound = await taskpool.execute(task, taskpool.Priority.MEDIUM) as number[];
+        for (let i = 0; i < batchFound.length; i++) {
+          found.push(batchFound[i]);
+        }
+      } catch (error) {
+        hilog.error(0, 'PDFView', `探测折线批注页失败 [${start}, ${end}): ${error}`);
+        throw new Error(`探测折线批注页失败 [${start}, ${end}): ${error}`);
       }
       onBatchComplete?.(end, total);
       await new Promise<void>((resolve) => {
