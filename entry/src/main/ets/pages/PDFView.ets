@@ -94,7 +94,7 @@ import { AnnotationColor } from './pdfview/PDFAnnotationColors';
 
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
-const LONG_PRESS_DELAY_MS: number = 100;
+const LONG_PRESS_DELAY_MS: number = 350;
 const LONG_PRESS_DURATION_MS: number = 500;
 const LONG_PRESS_MOVE_THRESHOLD: number = 10;
 const LONG_PRESS_TICK_INTERVAL: number = 16;
