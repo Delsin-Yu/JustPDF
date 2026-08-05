@@ -66,7 +66,7 @@ export struct SettingsDialogBuilder {
           }
           .width('100%')
 
-          Text('在页面右侧显示快速跳页滑块，适合长文档中快速定位。')
+          Text('在页面右侧显示跳页滑块，便于在长文档中快速定位。')
             .fontSize(12)
             .fontColor(HintColor)
             .width('100%')
@@ -80,7 +80,7 @@ export struct SettingsDialogBuilder {
             .fontColor(LabelColor)
             .width('100%')
 
-          Text('控制页面内跳转链接热区的可视提示；不影响链接点击。')
+          Text('设置页面内跳转链接的显示方式，不影响链接的点击跳转。')
             .fontSize(12)
             .fontColor(HintColor)
             .width('100%')
@@ -108,7 +108,7 @@ export struct SettingsDialogBuilder {
           }
           .width('100%')
 
-          Text('同时影响松手所需滑动距离与甩动翻页的容易程度；0 最钝，10 最敏，中间为默认手感。')
+          Text('调整水平滑动与甩动翻页的灵敏度。数值越高越灵敏，越低越不易误触，中间为默认手感。')
             .fontSize(12)
             .fontColor(HintColor)
             .width('100%')
