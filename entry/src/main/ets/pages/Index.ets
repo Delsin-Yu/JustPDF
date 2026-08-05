@@ -32,8 +32,12 @@ const CARD_BORDER = 'rgba(255,255,255,0.10)';
 const HISTORY_PANEL_BACKGROUND = 'rgba(2,8,16,0.12)';
 const HISTORY_PANEL_BORDER = 'rgba(255,255,255,0.12)';
 
-/** 主视觉固定占位宽度（左栏），有无历史列表都不移动 */
+/** 宽/方形窗口且有历史列表时，主视觉左栏占窗口宽度的比例 */
 const HERO_COLUMN_WIDTH = '40%';
+/** 左栏低于此宽度（vp）时强制上下布局，避免分栏裁切 */
+const MIN_HERO_COLUMN_VP = 220;
+/** 实时高宽比达到此值时视为窄高（与 HEIGHT_LG 语义对齐，但无断点滞后） */
+const TALL_ASPECT_RATIO = 1.2;
 /** 布局状态切换动画时长（毫秒） */
 const LAYOUT_ANIM_DURATION = 300;
 /** 历史列表出现/消失的过渡效果：淡入淡出并轻微上浮 */
@@ -52,17 +56,19 @@ struct Index {
   @State entryStatus: EntryStatus[] = [];
   @State widthBp: WidthBreakpoint = WidthBreakpoint.WIDTH_SM;
   @State heightBp: HeightBreakpoint = HeightBreakpoint.HEIGHT_LG;
+  /** 窗口内容区宽度（vp），用于标题字号连续缩放，避免断点跳变 */
+  @State windowWidthVp: number = 360;
+  /** 窗口内容区高度（vp），用于实时高宽比判断 */
+  @State windowHeightVp: number = 640;
   /** 与背景渐变同源的标题色调，由 OceanBackground 相位回调驱动 */
   @State heroTint: string = HERO_TINT_BRIGHT;
   /** 页面可见时为 true，隐藏时暂停背景动画 */
   @State backgroundActive: boolean = true;
   private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
   private mainWindow: window.Window | undefined = undefined;
-  private windowSizeCallback: (size: window.Size) => void = (_size: window.Size) => {
-    // 断点变化时布局分支切换，用动画驱动主视觉平滑迁移
-    this.getUIContext().animateTo({ duration: LAYOUT_ANIM_DURATION, curve: Curve.Friction }, () => {
-      this.refreshBreakpoints();
-    });
+  private windowSizeCallback: (size: window.Size) => void = (size: window.Size) => {
+    // 尺寸与断点立即生效，避免 animateTo 插值中间帧出现裁切
+    this.applyWindowSize(size.width, size.height);
   };
 
   aboutToAppear(): void {
@@ -70,6 +76,8 @@ struct Index {
     this.mainWindow = AppStorage.get('window') as window.Window | undefined;
     if (this.mainWindow) {
       try {
+        const rect = this.mainWindow.getWindowProperties().windowRect;
+        this.applyWindowSize(rect.width, rect.height);
         this.mainWindow.on('windowSizeChange', this.windowSizeCallback);
       } catch (_e) {
       }
@@ -131,6 +139,13 @@ struct Index {
       this.heightBp = this.getUIContext().getWindowHeightBreakpoint();
     } catch (_e) {
     }
+  }
+
+  /** 同步窗口宽高（px→vp）并刷新断点 */
+  private applyWindowSize(widthPx: number, heightPx: number): void {
+    this.windowWidthVp = this.getUIContext().px2vp(widthPx);
+    this.windowHeightVp = this.getUIContext().px2vp(heightPx);
+    this.refreshBreakpoints();
   }
 
   private async validateRecentFilesAsync(): Promise<void> {
@@ -246,15 +261,40 @@ struct Index {
     return this.entryStatus[index];
   }
 
+  /**
+   * 窄高窗口：高度断点 lg，或实时高宽比已达阈值（消除断点滞后）。
+   */
+  private isTall(): boolean {
+    if (this.heightBp === HeightBreakpoint.HEIGHT_LG) {
+      return true;
+    }
+    if (this.windowWidthVp <= 0) {
+      return false;
+    }
+    return this.windowHeightVp / this.windowWidthVp >= TALL_ASPECT_RATIO;
+  }
+
+  /** 宽窗口：排版参数，且作为左右分栏的宽度门槛 */
   private isWide(): boolean {
     return this.widthBp === WidthBreakpoint.WIDTH_MD
       || this.widthBp === WidthBreakpoint.WIDTH_LG
       || this.widthBp === WidthBreakpoint.WIDTH_XL;
   }
 
-  /** 矮窗口（横屏手机、短自由窗口）：改用左右分栏布局 */
+  /** 矮窗口（横屏手机、短自由窗口）：压缩标题字号 */
   private isShort(): boolean {
     return this.heightBp === HeightBreakpoint.HEIGHT_SM;
+  }
+
+  /**
+   * 有历史且非窄高时左右分栏；无历史统一用上下布局的空态（30/70）。
+   * 类方形/矮窗也必须足够宽且左栏可达最小宽度，避免拥挤分栏裁切。
+   */
+  private useSideBySide(): boolean {
+    if (this.recentFiles.length === 0 || this.isTall() || !this.isWide()) {
+      return false;
+    }
+    return this.windowWidthVp * 0.4 >= MIN_HERO_COLUMN_VP;
   }
 
   private onBackgroundPhase(phase: number): void {
@@ -268,10 +308,31 @@ struct Index {
     });
   }
 
-  /** 标题主字号：玻璃字需要更大面积以透出背景 */
+  /** 主视觉可用宽度（vp）：分栏时为左栏，上下/空态时为整窗 */
+  private heroAvailableWidthVp(): number {
+    const padding = this.heroHorizontalPadding() * 2;
+    if (this.useSideBySide()) {
+      return this.windowWidthVp * 0.4 - padding;
+    }
+    return this.windowWidthVp - padding;
+  }
+
+  /**
+   * 标题主字号：随窗口宽度连续缩放，不依赖宽度断点，
+   * 保证 “Just PDF” 在极端窄栏下仍完整可见且横向缩放时无突变。
+   */
   private titleFontSize(): number {
-    const base = this.isWide() ? 96 : 76;
-    return this.isShort() ? Math.min(base, 72) : base;
+    // 经验系数：字号 * 4.5 ≈ “Just PDF”+letterSpacing 所需宽度
+    const fitted = Math.floor((this.heroAvailableWidthVp() - 8) / 4.5);
+    const maxSize = this.isShort() ? 56 : 84;
+    const minSize = 36;
+    if (fitted < minSize) {
+      return minSize;
+    }
+    if (fitted > maxSize) {
+      return maxSize;
+    }
+    return fitted;
   }
 
   /** 历史列表顶部内边距 */
@@ -284,14 +345,21 @@ struct Index {
     return this.isWide() ? 24 : 12;
   }
 
-  /** 标题块采用稳定宽度，便于按钮相对标题居中 */
-  private heroContentWidth(): number {
-    return this.isWide() ? 340 : 270;
+  /** 主视觉块左右内边距，为外发光留出空间避免贴边裁切 */
+  private heroHorizontalPadding(): number {
+    return this.useSideBySide() ? 20 : 12;
   }
 
-  /** 主按钮比文字宽，形成清晰、稳定的主要操作区域 */
+  /** 主按钮宽度随标题可用宽度平滑缩放 */
   private pickButtonWidth(): number {
-    return this.isWide() ? 240 : 200;
+    const target = Math.floor(this.heroAvailableWidthVp() * 0.72);
+    if (target < 140) {
+      return 140;
+    }
+    if (target > 240) {
+      return 240;
+    }
+    return target;
   }
 
   /** 眉题使用标题色调的暗化版本（AARRGGBB） */
@@ -368,109 +436,6 @@ struct Index {
     return this.isWide() ? 48 : 24;
   }
 
-  /** 主视觉左侧内边距：比通用边距更宽，让标题块更靠内 */
-  private heroLeftInset(): number {
-    return this.isWide() ? 120 : 56;
-  }
-
-  @Builder
-  buildPickFileButton() {
-    Button() {
-      Text('选择文件')
-        .fontSize(25)
-        .fontWeight(FontWeight.Bold)
-        .letterSpacing(2)
-        .shaderStyle(this.glassButtonTextShader())
-        .opacity(0.98)
-        .textShadow({
-          radius: 10,
-          color: this.buttonGlowTint(),
-          offsetX: 0,
-          offsetY: 0
-        })
-    }
-      .type(ButtonType.Capsule)
-      .backgroundColor(this.glassButtonFill())
-      .linearGradient(this.glassButtonShader())
-      .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN)
-      .border({ width: 1, color: this.glassEdgeTint() })
-      .width(this.pickButtonWidth())
-      .height(56)
-      .shadow({
-        radius: 26,
-        color: this.buttonGlowTint(),
-        offsetX: 0,
-        offsetY: 0
-      })
-      .onClick(async () => {
-        try {
-          let uri = await pickFilePathAsync(['.pdf']);
-          if (uri) {
-            await this.loadAndViewFile(uri);
-          }
-        } catch (err) {
-          let businessErr = err as BusinessError;
-          hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
-          let uiContext = this.getUIContext();
-          await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`, uiContext);
-          this.setLoadingAnimated(false);
-        }
-      })
-  }
-
-  /**
-   * 玻璃标题：半透明着色器 + 柔光，笔画直接透出海洋渐变。
-   */
-  @Builder
-  buildGlassTitle() {
-    Text('Just PDF')
-      .fontSize(this.titleFontSize())
-      .fontWeight(FontWeight.Bold)
-      .lineHeight(this.titleFontSize() * 1.16)
-      .letterSpacing(2)
-      .maxLines(1)
-      .shaderStyle(this.glassTitleShader())
-      .opacity(0.82)
-      .textShadow({
-        radius: 26,
-        color: this.glowTint(),
-        offsetX: 0,
-        offsetY: 0
-      })
-  }
-
-  /** 主视觉：大号玻璃标题 + 同风格玻璃按钮，留出呼吸空间 */
-  @Builder
-  buildHero() {
-    Column() {
-      this.buildGlassTitle()
-
-      if (this.isLoading) {
-        Row({ space: 10 }) {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(TEXT_SECONDARY)
-          Text('正在加载 ' + this.loadingFileName)
-            .fontSize(14)
-            .fontColor(TEXT_SECONDARY)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .margin({ top: 48 })
-      } else {
-        Column() {
-          this.buildPickFileButton()
-        }
-        .margin({ top: 30 })
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-      }
-    }
-    .width(this.heroContentWidth())
-    .alignItems(HorizontalAlign.Center)
-  }
-
   @Builder
   buildSwipeDeleteIndicator(index: number) {
     Row({ space: 6 }) {
@@ -492,18 +457,110 @@ struct Index {
     })
   }
 
+  /** 主视觉：大号玻璃标题 + 加载态 / 玻璃按钮，两种布局分支共用 */
   @Builder
-  buildRecentFilesList() {
-    Column({ space: 12 }) {
-      Text('最近打开')
-        .fontSize(13)
-        .letterSpacing(4)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.eyebrowTint())
+  buildHeroBlock() {
+    Column() {
+      // 玻璃标题：半透明着色器 + 柔光，笔画直接透出海洋渐变。
+      Text('Just PDF')
+        .fontSize(this.titleFontSize())
+        .fontWeight(FontWeight.Bold)
+        .lineHeight(this.titleFontSize() * 1.16)
+        .letterSpacing(2)
+        .maxLines(1)
         .width('100%')
-        .padding({ left: 4 })
+        .textAlign(TextAlign.Center)
+        .shaderStyle(this.glassTitleShader())
+        .opacity(0.82)
+        .textShadow({
+          radius: 26,
+          color: this.glowTint(),
+          offsetX: 0,
+          offsetY: 0
+        })
 
-      List({ space: 6 }) {
+      if (this.isLoading) {
+        Row({ space: 10 }) {
+          LoadingProgress()
+            .width(28)
+            .height(28)
+            .color(TEXT_SECONDARY)
+          Text('正在加载 ' + this.loadingFileName)
+            .fontSize(14)
+            .fontColor(TEXT_SECONDARY)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .margin({ top: 48 })
+      } else {
+        Column() {
+          Button() {
+            Text('选择文件')
+              .fontSize(25)
+              .fontWeight(FontWeight.Bold)
+              .letterSpacing(2)
+              .shaderStyle(this.glassButtonTextShader())
+              .opacity(0.98)
+              .textShadow({
+                radius: 10,
+                color: this.buttonGlowTint(),
+                offsetX: 0,
+                offsetY: 0
+              })
+          }
+            .type(ButtonType.Capsule)
+            .backgroundColor(this.glassButtonFill())
+            .linearGradient(this.glassButtonShader())
+            .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN)
+            .border({ width: 1, color: this.glassEdgeTint() })
+            .width(this.pickButtonWidth())
+            .height(56)
+            .shadow({
+              radius: 26,
+              color: this.buttonGlowTint(),
+              offsetX: 0,
+              offsetY: 0
+            })
+            .onClick(async () => {
+              try {
+                let uri = await pickFilePathAsync(['.pdf']);
+                if (uri) {
+                  await this.loadAndViewFile(uri);
+                }
+              } catch (err) {
+                let businessErr = err as BusinessError;
+                hilog.error(0x0000, TAG, `ERR: ${err.code}, message is ${businessErr.message}`);
+                let uiContext = this.getUIContext();
+                await showAlertDialog('文件选择失败', `无法选择文件：${businessErr.message}`,
+                  uiContext);
+                this.setLoadingAnimated(false);
+              }
+            })
+        }
+        .margin({ top: 30 })
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+      }
+    }
+    .width('100%')
+    .padding({ left: this.heroHorizontalPadding(), right: this.heroHorizontalPadding() })
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  /** 历史列表玻璃面板：填满外层容器，两种布局分支共用 */
+  @Builder
+  buildHistoryPanel() {
+    Column() {
+      Column({ space: 12 }) {
+        Text('最近打开')
+          .fontSize(13)
+          .letterSpacing(4)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.eyebrowTint())
+          .width('100%')
+          .padding({ left: 4 })
+
+        List({ space: 6 }) {
           ForEach(this.recentFiles, (entry: RecentFileEntry, index?: number) => {
             ListItem() {
               Row({ space: 12 }) {
@@ -568,7 +625,10 @@ struct Index {
                 },
                 actionAreaDistance: 56,
                 onAction: () => {
-                  this.getUIContext().animateTo({ duration: LAYOUT_ANIM_DURATION, curve: Curve.Friction }, () => {
+                  this.getUIContext().animateTo({
+                    duration: LAYOUT_ANIM_DURATION,
+                    curve: Curve.Friction
+                  }, () => {
                     this.removeEntry(index ?? 0);
                   });
                 }
@@ -590,9 +650,22 @@ struct Index {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+      }
+      .width('100%')
+      .layoutWeight(1)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height('100%')
+    .padding({
+      left: 28,
+      right: 28,
+      top: this.historyTopInset(),
+      bottom: 20
+    })
+    .backgroundColor(HISTORY_PANEL_BACKGROUND)
+    .border({ width: 1, color: HISTORY_PANEL_BORDER })
+    .borderRadius(28)
+    .clip(true)
   }
 
   build() {
@@ -605,61 +678,78 @@ struct Index {
         }
       })
 
-      // 主视觉固定在左侧约 40% 高度处；历史列表仅占据右侧，不改变标题位置
-      Row() {
-        Column() {
-          Blank()
-            .layoutWeight(30)
-          Column() {
-            this.buildHero()
-          }
-          .alignItems(HorizontalAlign.Start)
-          Blank()
-            .layoutWeight(70)
-        }
-        .width(HERO_COLUMN_WIDTH)
-        .height('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({
-          left: this.heroLeftInset(),
-          right: 20,
-          top: 12,
-          bottom: 12
-        })
-
-        if (this.recentFiles.length > 0) {
-          Column() {
+      Column() {
+        if (this.useSideBySide()) {
+          // 有历史且足够宽的矮/方形窗口：左栏主视觉，右栏历史列表铺满高度
+          Row() {
             Column() {
-              this.buildRecentFilesList()
+              Blank()
+                .layoutWeight(30)
+              this.buildHeroBlock()
+              Blank()
+                .layoutWeight(70)
             }
-            .width('100%')
+            .width(HERO_COLUMN_WIDTH)
+            .height('100%')
+            .alignItems(HorizontalAlign.Center)
+            .padding({ top: 12, bottom: 12 })
+
+            Column() {
+              this.buildHistoryPanel()
+            }
+            .layoutWeight(1)
             .height('100%')
             .padding({
-              left: 28,
-              right: 28,
-              top: this.historyTopInset(),
-              bottom: 20
+              right: this.historyPanelOuterInset(),
+              top: this.historyPanelOuterInset(),
+              bottom: this.historyPanelOuterInset()
             })
-            .backgroundColor(HISTORY_PANEL_BACKGROUND)
-            .border({ width: 1, color: HISTORY_PANEL_BORDER })
-            .borderRadius(28)
-            .clip(true)
+            .transition(HISTORY_TRANSITION)
           }
-          .layoutWeight(1)
+          .width('100%')
           .height('100%')
-          .justifyContent(FlexAlign.Start)
-          .alignItems(HorizontalAlign.Start)
-          .padding({
-            right: this.historyPanelOuterInset(),
-            top: this.historyPanelOuterInset(),
-            bottom: this.historyPanelOuterInset()
-          })
-          .transition(HISTORY_TRANSITION)
+          .layoutWeight(1)
+        } else {
+          // 窄窗或窄高窗：主视觉占顶部 40%，历史列表铺满余下空间
+          Column() {
+            if (this.recentFiles.length > 0) {
+              Column() {
+                this.buildHeroBlock()
+              }
+              .width('100%')
+              .height('40%')
+              .alignItems(HorizontalAlign.Center)
+              .justifyContent(FlexAlign.Center)
+
+              Column() {
+                this.buildHistoryPanel()
+              }
+              .width('100%')
+              .layoutWeight(1)
+              .height('100%')
+              .padding({
+                left: this.historyPanelOuterInset(),
+                right: this.historyPanelOuterInset(),
+                bottom: this.historyPanelOuterInset()
+              })
+              .transition(HISTORY_TRANSITION)
+            } else {
+              Blank()
+                .layoutWeight(30)
+              this.buildHeroBlock()
+              Blank()
+                .layoutWeight(70)
+            }
+          }
+          .width('100%')
+          .height('100%')
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Center)
         }
       }
       .width('100%')
       .height('100%')
-      .alignItems(VerticalAlign.Top)
+      .clip(true)
       .padding({
         top: this.getUIContext().px2vp(this.avoidAreaTopPx),
         bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx)
@@ -667,6 +757,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .clip(true)
   }
 }
 
