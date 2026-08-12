@@ -24,33 +24,80 @@ Treat this rule as workspace-wide policy. When it conflicts with default agent h
 
 ## HarmonyOS documentation
 
-- For HarmonyOS related questions, ALWAYS search the local `HarmonyOS-Developer-Docs/` guides and references before relying on general knowledge.
-- The local `HarmonyOS-Developer-Docs/` is a copy of the online documentation, so it is up to date and complete; performing web search over the online version is strictly prohibited, and is considered a violation of the rules.
-- Useful local roots:
-  - Guides: `HarmonyOS-Developer-Docs/guides/`
-  - API references: `HarmonyOS-Developer-Docs/references/`
-  - Best practices: `HarmonyOS-Developer-Docs/best-practices/`
-  - FAQs: `HarmonyOS-Developer-Docs/faqs/`
-  - Release notes: `HarmonyOS-Developer-Docs/releases/`
+- For HarmonyOS related questions, ALWAYS search the local HarmonyOS developer docs before relying on general knowledge.
+- Docs live at the **sibling** path `d:\Repos\HarmonyOS-Developer-Docs\` (not under this repo root). Use `devecocli docs search/read` or read those files directly.
+- The local copy matches the online documentation; performing web search over the online version is strictly prohibited.
+- Useful local roots (under `d:\Repos\HarmonyOS-Developer-Docs\`):
+  - Guides: `guides/`
+  - API references: `references/`
+  - Best practices: `best-practices/`
+  - FAQs: `faqs/`
+  - Release notes: `releases/`
 - Each `.md` file contains YAML frontmatter with `source_url` pointing to the original online page.
 - Every directory has an `index.md` listing its contents for navigation.
 
 ## Architecture notes
 
+Single Entry HAP + one UIAbility. Logical layers (product → features → common); common never depends upward. Stay on one HAP — do not introduce Feature HAP/HAR unless a later program explicitly requires it.
+
+### Ownership map
+
+| Layer | Path | Owns |
+|-------|------|------|
+| product | `entry/src/main/ets/product/entryability/`, `product/entrybackupability/`, `product/pages/Index.ets` | Ability lifecycle, landing/picker |
+| features/viewer | `features/viewer/PDFView.ets` + page-turn/link/session/slot/VM/chrome pieces | Viewer shell, page-turn, links, slots |
+| features/annotation | `features/annotation/PDFAnnotation*` | Draw/erase/save/import |
+| features/panels | `features/panels/` (bookmark + FloatingPanel*) | Dock/float overlays |
+| features/music | `features/music/` metronome/tuner | Audio tools hosted by viewer |
+| features/continuation | `features/continuation/` | Cross-device migrate/restore |
+| common/document | `common/document/` (`DocumentOpenService`, `PdfDocumentLoader`) | URI→sandbox, PDF load helpers |
+| common/page | `common/page/` (`PageStore`, `PageInfo`, strokes, raster, links) | Page model + cache |
+| common/session | `common/session/AppSession` | Typed AppStorage key access |
+| common/ui | `common/ui/` (dialogs, Numbers, RecentFiles, etc.) | Shared UI helpers |
+| navigation | `navigation/PendingDocumentOpen.ets` | Unsaved-guarded document replace |
+
+Router page URLs (must match `main_pages.json`): `product/pages/Index`, `features/viewer/PDFView`.
+
 ### Entry points and navigation
 
-- `entry/src/main/ets/entryability/EntryAbility.ets`: app lifecycle, window management, handles PDF file URIs from system intents.
-- `entry/src/main/ets/pages/Index.ets`: file picker landing page; routes to PDFView with sandbox file path.
-- `entry/src/main/ets/pages/PDFView.ets`: main PDF viewer; rendering, gestures, annotations.
+- `entry/src/main/ets/product/entryability/EntryAbility.ets`: app lifecycle, window management, handles PDF file URIs from system intents.
+- `entry/src/main/ets/product/pages/Index.ets`: file picker landing page; routes to PDFView with sandbox file path.
+- `entry/src/main/ets/features/viewer/PDFView.ets`: main PDF viewer shell; composes controllers and UI.
 
 ### Data flow
 
-1. Files are copied from system URI to sandbox (`tempDir`) before loading.
-2. `PageInfoDataSource` manages `PageGroup[]` containing `PageInfo[]` with lazy thumbnail/cache loading.
-3. Page rendering uses `@kit.PDFKit` with multi-scale caching.
+1. Files are copied from system URI to sandbox (`tempDir`) before loading via `DocumentOpenService`.
+2. `PageStore` manages pages with lazy thumbnail/cache loading (`IDataSource`).
+3. Page rendering uses `@kit.PDFKit` `pdfService` with multi-scale PixelMap caching (custom path, not system `PdfView`).
 4. Strokes are stored per-page in `PageInfo.strokes[]` and rendered via Canvas overlay.
 
 ### Memory management
 
-- Call `evictViewerCache()` / `evictThumbnail()` when pages scroll out of view.
-- Use `prefetchPagesAround(centerIndex, prefetchRange, evictionRange)` for smart caching.
+- Call `evictAllViewerCaches()` / thumbnail release when pages scroll out of view.
+- Use `prefetchPagesAround(centerIndex, prefetchRange, evictionRange, displayedPageIndices)` for smart caching.
+- Honor `onMemoryLevel` → `PageStore.applyMemoryPressure`.
+
+## Agent-friendly coding rules
+
+1. **Ownership**: change files inside the owning folder; PDFView should only compose controllers and `build()`.
+2. **File budget**: prefer &lt; ~800 lines for page shells; &lt; ~1200 for controllers; split when exceeded.
+3. **No new AppStorage string keys** outside `common/session/AppSession` (or the session module once present).
+4. **Controllers take narrow interfaces** (`StrokeStore`, `DocumentIO`, `PageNavigator`) — not large closure bags over `@Local`.
+5. **Inline** one-line / single-caller thin wrappers; keep real FSMs as named classes.
+6. **Side effects stay in one place per concern** (e.g. page-turn commit only in the page-turn controller).
+7. **Verify** with `.\build.ps1` after structural changes; for API questions use `devecocli docs search/read` or local docs.
+8. Naming: use `PageStore` (not `PageInfoDataSource`).
+
+## Manual regression checklist
+
+Smoke these after each refactor round:
+
+1. Open PDF from Index picker and from recent list.
+2. Open PDF via system Want / share into the app (cold and warm while viewer active).
+3. Password-protected PDF: correct password loads; cancel leaves cleanly.
+4. Horizontal slide page-turn (commit + cancel) in 1/2/3-column modes.
+5. Pan/zoom; stylus annotate draw/erase; undo/redo; save; leave with unsaved prompt.
+6. Bookmark panel + floating metronome/tuner/annotation palette dock/float/scale.
+7. Cross-device continuation migrate/restore (if hardware available).
+8. Memory pressure path does not crash (scroll far + background).
+9. Share / export from viewer still works.
