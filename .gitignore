@@ -14,3 +14,8 @@ certs
 entry/patch.json
 .connect-wifi-history.txt
 .vscode/tasks.json
+
+# Local scratch / debug captures / ad-hoc sample PDFs at repo root
+/temp/
+/temp_*.txt
+/*.pdf
