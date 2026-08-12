@@ -1,6 +1,6 @@
 {
   "src": [
-    "pages/Index",
-    "pages/PDFView"
+    "product/pages/Index",
+    "features/viewer/PDFView"
   ]
 }

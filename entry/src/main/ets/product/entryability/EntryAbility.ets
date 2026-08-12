@@ -3,9 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Router, window } from '@kit.ArkUI';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
-import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { systemShare } from '@kit.ShareKit';
-import { rememberRecentFile } from '../components/RecentFilesHelper';
 import {
   describeLaunchReason,
   extractContinuationPayload,
@@ -15,20 +13,37 @@ import {
   logContinuationWarn,
   logWantParameterKeys,
   extractContinuationExtraLocalPaths
-} from '../continuation/PdfContinuation';
+} from '../../features/continuation/PdfContinuation';
 import {
   createPendingContinuationRouterArgs
-} from '../continuation/PdfContinuationRestore';
-import { ensureDistributedDataSyncPermission } from '../continuation/PdfContinuationPermission';
-import { pdfContinuationDistributed } from '../continuation/PdfContinuationDistributed';
+} from '../../features/continuation/PdfContinuationRestore';
+import { ensureDistributedDataSyncPermission } from '../../features/continuation/PdfContinuationPermission';
+import { pdfContinuationDistributed } from '../../features/continuation/PdfContinuationDistributed';
 import {
   EVENT_APP_TERMINATE_REQUESTED,
   isPdfViewerActiveWithUnsaved,
-  PDF_VIEWER_ACTIVE_KEY,
   requestReplacePdfDocument,
   setExitViewerOnBack
-} from '../navigation/PendingDocumentOpen';
-
+} from '../../navigation/PendingDocumentOpen';
+import {
+  clearLaunchUri,
+  initAvoidAreaPx,
+  isPdfViewerActive,
+  peekLaunchUri,
+  setAvoidAreaPx,
+  setInitialPdfViewArgs,
+  setLaunchUri,
+  setSessionPreferences,
+  setSessionWindow,
+  takeLaunchUri
+} from '../../common/session/AppSession';
+import {
+  DocumentOpenParams,
+  documentOpenParamsToRecord,
+  prepareFromLocalPath,
+  prepareFromUri,
+  rememberOpenedDocument
+} from '../../common/document/DocumentOpenService';
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
 const TAG = 'EntryAbility';
 const WANT_ACTION_HOME: string = 'ohos.want.action.home';
@@ -81,7 +96,7 @@ export default class EntryAbility extends UIAbility {
     }
 
     setExitViewerOnBack(true);
-    AppStorage.setOrCreate('launchUri', createUri);
+    setLaunchUri(createUri);
     hilog.info(0, TAG, 'onCreate 文档打开：武装 Want 返回 action=' + (want.action ?? '') +
       ', uriLen=' + createUri.length);
   }
@@ -121,7 +136,7 @@ export default class EntryAbility extends UIAbility {
     }
 
     setExitViewerOnBack(true);
-    AppStorage.setOrCreate('launchUri', openUri);
+    setLaunchUri(openUri);
     hilog.info(0, TAG, 'onNewWant 文档打开：武装 Want 返回');
     if (this.resolveActiveRouter() === undefined) {
       logContinuationLine('onNewWant 已写入 launchUri，等待 Router 就绪后打开');
@@ -218,10 +233,9 @@ export default class EntryAbility extends UIAbility {
       logContinuationError(`bootstrapWindowStage 失败: ${error}`);
       return;
     }
-    AppStorage.setOrCreate('window', this.window);
-    AppStorage.setOrCreate('preferences', this.preferences);
-    AppStorage.setOrCreate('avoidAreaTopPx', 0);
-    AppStorage.setOrCreate('avoidAreaBottomPx', 0);
+    setSessionWindow(this.window);
+    setSessionPreferences(this.preferences);
+    initAvoidAreaPx();
     void this.loadInitialContent(windowStage, stageKind);
   }
 
@@ -311,11 +325,11 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       if (this.currentRouter) {
-        AppStorage.setOrCreate('launchUri', uri);
+        setLaunchUri(uri);
         this.tryDirectLaunch();
         return;
       }
-      AppStorage.setOrCreate('launchUri', uri);
+      setLaunchUri(uri);
     });
   }
 
@@ -371,8 +385,11 @@ export default class EntryAbility extends UIAbility {
   private async loadInitialContent(windowStage: window.WindowStage, stageKind: string): Promise<void> {
     this.clearContinuationLaunchFallback();
 
-    let pageUrl: string = 'pages/Index';
-    let launchUri: string | undefined = AppStorage.get<string>('launchUri');
+    let pageUrl: string = 'product/pages/Index';
+    let launchUri: string | undefined = peekLaunchUri();
+    if (launchUri !== undefined && launchUri.length === 0) {
+      launchUri = undefined;
+    }
     logContinuationLine(
       `loadInitialContent 开始 kind=${stageKind}, pendingContinuation=${this.pendingContinuationWant !== undefined}`
     );
@@ -385,7 +402,7 @@ export default class EntryAbility extends UIAbility {
         logContinuationError('loadInitialContent 接续载荷无效，留在 Index');
       } else {
         const router = this.resolveActiveRouter();
-        const viewerActive = AppStorage.get<boolean>(PDF_VIEWER_ACTIVE_KEY) === true;
+        const viewerActive = isPdfViewerActive();
         this.pendingContinuationWant = undefined;
 
         // 迁移恢复 + 阅读页未保存：不 loadContent(Index)，保留当前页并弹窗
@@ -413,9 +430,9 @@ export default class EntryAbility extends UIAbility {
         }
 
         // 冷启动 / onWindowStageRestore：必须由 loadContent 进入 PDFView
-        AppStorage.setOrCreate('initialPdfViewArgs', continuationArgs);
-        pageUrl = 'pages/PDFView';
-        logContinuationLine('loadInitialContent 接续 -> pages/PDFView（PDFView 内等待分布式落地）');
+        setInitialPdfViewArgs(continuationArgs);
+        pageUrl = 'features/viewer/PDFView';
+        logContinuationLine('loadInitialContent 接续 -> features/viewer/PDFView（PDFView 内等待分布式落地）');
       }
     } else if (this.pendingSystemShareWant) {
       const shareWant = this.pendingSystemShareWant;
@@ -426,19 +443,13 @@ export default class EntryAbility extends UIAbility {
       }
     }
 
-    if (pageUrl === 'pages/Index' && launchUri) {
+    if (pageUrl === 'product/pages/Index' && launchUri) {
       try {
         const params = await this.buildLaunchParams(launchUri);
-        if (this.preferences != null) {
-          await rememberRecentFile(this.preferences, {
-            fileName: params['fileName'],
-            systemPath: params['systemPath'],
-            openedAt: new Date().getTime()
-          });
-        }
-        AppStorage.setOrCreate('initialPdfViewArgs', params);
-        pageUrl = 'pages/PDFView';
-        AppStorage.setOrCreate('launchUri', '');
+        await rememberOpenedDocument(this.preferences, params);
+        setInitialPdfViewArgs(documentOpenParamsToRecord(params));
+        pageUrl = 'features/viewer/PDFView';
+        clearLaunchUri();
       } catch (error) {
         hilog.error(0, TAG, `Cold launch preparation failed: ${error}`);
       }
@@ -494,9 +505,8 @@ export default class EntryAbility extends UIAbility {
     }
     try {
       const systemArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      AppStorage.setOrCreate('avoidAreaTopPx', systemArea.topRect.height);
       const navArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      AppStorage.setOrCreate('avoidAreaBottomPx', navArea.bottomRect.height);
+      setAvoidAreaPx(systemArea.topRect.height, navArea.bottomRect.height);
     } catch (error) {
       hilog.warn(0, TAG, `getWindowAvoidArea 失败: ${error}`);
     }
@@ -522,45 +532,12 @@ export default class EntryAbility extends UIAbility {
     localPath: string,
     systemPath: string,
     fileNameHint: string
-  ): Promise<Record<string, string>> {
-    const dir = this.context.tempDir;
-    let sourceFile: fs.File | undefined = undefined;
-    try {
-      sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
-      const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
-      const file = `${dir}/${fileName}`;
-      const tempFile = `${dir}/saveTemp_${fileName}`;
-      await fs.copyFile(sourceFile.fd, file);
-      await fs.close(sourceFile);
-      sourceFile = undefined;
-      return {
-        'systemPath': systemPath,
-        'sandboxPath': file,
-        'saveTempPath': tempFile,
-        'fileName': fileName
-      };
-    } catch (error) {
-      if (sourceFile !== undefined) {
-        try {
-          await fs.close(sourceFile);
-        } catch (closeError) {
-          hilog.error(0, TAG, `关闭文件失败: ${closeError}`);
-        }
-      }
-      throw new Error(`buildLaunchParamsFromLocalPath 失败: ${error}`);
-    }
+  ): Promise<DocumentOpenParams> {
+    return prepareFromLocalPath(this.context, localPath, systemPath, fileNameHint);
   }
 
-  private async buildLaunchParams(launchUri: string): Promise<Record<string, string>> {
-    let localPath = launchUri;
-    try {
-      const resolved = new fileUri.FileUri(launchUri).path;
-      if (resolved.length > 0) {
-        localPath = resolved;
-      }
-    } catch (_error) {
-    }
-    return this.buildLaunchParamsFromLocalPath(localPath, launchUri, '');
+  private async buildLaunchParams(launchUri: string): Promise<DocumentOpenParams> {
+    return prepareFromUri(this.context, launchUri);
   }
 
   /**
@@ -568,26 +545,22 @@ export default class EntryAbility extends UIAbility {
    * @returns 是否已发起打开（含 defer 到 PDFView）；false 表示 Router 未就绪，launchUri 仍保留
    */
   private async tryDirectLaunch(): Promise<boolean> {
-    const launchUri = AppStorage.get<string>('launchUri');
     const router = this.resolveActiveRouter();
-    if (!launchUri || router === undefined) {
+    if (router === undefined) {
       return false;
     }
-    AppStorage.setOrCreate('launchUri', '');
+    const launchUri = takeLaunchUri();
+    if (launchUri === undefined) {
+      return false;
+    }
     try {
-      const args = await this.buildLaunchParams(launchUri);
-      if (this.preferences != null) {
-        await rememberRecentFile(this.preferences, {
-          fileName: args['fileName'],
-          systemPath: args['systemPath'],
-          openedAt: new Date().getTime()
-        });
-      }
-      requestReplacePdfDocument(this.context, router, args);
+      const params = await this.buildLaunchParams(launchUri);
+      await rememberOpenedDocument(this.preferences, params);
+      requestReplacePdfDocument(this.context, router, documentOpenParamsToRecord(params));
       return true;
     } catch (error) {
       hilog.error(0, TAG, `Direct launch failed: ${error}`);
-      AppStorage.setOrCreate('launchUri', launchUri);
+      setLaunchUri(launchUri);
       return false;
     }
   }

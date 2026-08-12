@@ -1,38 +1,48 @@
 import { common } from '@kit.AbilityKit';
 import { Router } from '@kit.ArkUI';
-import { hasUnsavedDocumentChanges } from '../components/UnsavedChangesPrompt';
-import { isContinuationPendingRouterArgs } from '../continuation/PdfContinuationRestore';
-
-export const PDF_VIEWER_ACTIVE_KEY: string = 'pdfViewerActive';
-export const PDF_VIEWER_HAS_UNSAVED_KEY: string = 'pdfViewerHasUnsavedChanges';
-export const PENDING_DOCUMENT_OPEN_PARAMS_KEY: string = 'pendingDocumentOpenParams';
-/** 由系统 Want（打开/分享 PDF）进入阅读页时为 true：返回应移到后台回到调用方（不销毁 Ability）。 */
-export const EXIT_VIEWER_ON_BACK_KEY: string = 'exitViewerOnBack';
+import { isContinuationPendingRouterArgs } from '../features/continuation/PdfContinuationRestore';
+import {
+  APP_SESSION_EXIT_VIEWER_ON_BACK_KEY,
+  APP_SESSION_PDF_VIEWER_ACTIVE_KEY,
+  APP_SESSION_PDF_VIEWER_HAS_UNSAVED_KEY,
+  APP_SESSION_PENDING_DOCUMENT_OPEN_PARAMS_KEY,
+  isPdfViewerActiveWithUnsaved as isPdfViewerActiveWithUnsavedSession,
+  setExitViewerOnBack as setExitViewerOnBackSession,
+  setPdfViewerActive as setPdfViewerActiveSession,
+  shouldExitViewerOnBack as shouldExitViewerOnBackSession,
+  stashPendingDocumentOpenParams as stashPendingDocumentOpenParamsSession,
+  syncPdfViewerHasUnsavedChanges as syncPdfViewerHasUnsavedChangesSession,
+  takePendingDocumentOpenParams as takePendingDocumentOpenParamsSession
+} from '../common/session/AppSession';
+/** @deprecated 使用 AppSession 常量；保留导出以兼容既有 import。 */
+export const PDF_VIEWER_ACTIVE_KEY: string = APP_SESSION_PDF_VIEWER_ACTIVE_KEY;
+export const PDF_VIEWER_HAS_UNSAVED_KEY: string = APP_SESSION_PDF_VIEWER_HAS_UNSAVED_KEY;
+export const PENDING_DOCUMENT_OPEN_PARAMS_KEY: string = APP_SESSION_PENDING_DOCUMENT_OPEN_PARAMS_KEY;
+export const EXIT_VIEWER_ON_BACK_KEY: string = APP_SESSION_EXIT_VIEWER_ON_BACK_KEY;
 
 export const EVENT_DOCUMENT_OPEN_REQUESTED: string = 'documentOpenRequested';
 export const EVENT_APP_TERMINATE_REQUESTED: string = 'appTerminateRequested';
 
-const PDF_VIEW_PAGE_URL: string = 'pages/PDFView';
+const PDF_VIEW_PAGE_URL: string = 'features/viewer/PDFView';
 
 export function setPdfViewerActive(active: boolean): void {
-  AppStorage.setOrCreate(PDF_VIEWER_ACTIVE_KEY, active);
+  setPdfViewerActiveSession(active);
 }
 
 export function setExitViewerOnBack(exitOnBack: boolean): void {
-  AppStorage.setOrCreate(EXIT_VIEWER_ON_BACK_KEY, exitOnBack);
+  setExitViewerOnBackSession(exitOnBack);
 }
 
 export function shouldExitViewerOnBack(): boolean {
-  return AppStorage.get<boolean>(EXIT_VIEWER_ON_BACK_KEY) === true;
+  return shouldExitViewerOnBackSession();
 }
 
 export function syncPdfViewerHasUnsavedChanges(hasUnsavedStrokes: boolean, bookmarksDirty: boolean): void {
-  AppStorage.setOrCreate(PDF_VIEWER_HAS_UNSAVED_KEY, hasUnsavedDocumentChanges(hasUnsavedStrokes, bookmarksDirty));
+  syncPdfViewerHasUnsavedChangesSession(hasUnsavedStrokes, bookmarksDirty);
 }
 
 export function isPdfViewerActiveWithUnsaved(): boolean {
-  return AppStorage.get<boolean>(PDF_VIEWER_ACTIVE_KEY) === true
-    && AppStorage.get<boolean>(PDF_VIEWER_HAS_UNSAVED_KEY) === true;
+  return isPdfViewerActiveWithUnsavedSession();
 }
 
 /** 普通打开需 sandboxPath；接续打开 sandbox 为空、由 PDFView 内落地。 */
@@ -46,16 +56,11 @@ export function isValidPendingDocumentOpenParams(params: Record<string, string>)
 }
 
 export function stashPendingDocumentOpenParams(params: Record<string, string>): void {
-  AppStorage.setOrCreate(PENDING_DOCUMENT_OPEN_PARAMS_KEY, params);
+  stashPendingDocumentOpenParamsSession(params);
 }
 
 export function takePendingDocumentOpenParams(): Record<string, string> | undefined {
-  if (!AppStorage.has(PENDING_DOCUMENT_OPEN_PARAMS_KEY)) {
-    return undefined;
-  }
-  const params = AppStorage.get<Record<string, string>>(PENDING_DOCUMENT_OPEN_PARAMS_KEY);
-  AppStorage.delete(PENDING_DOCUMENT_OPEN_PARAMS_KEY);
-  return params;
+  return takePendingDocumentOpenParamsSession();
 }
 
 /**

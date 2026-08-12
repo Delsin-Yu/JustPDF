@@ -3,18 +3,27 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
 import { window } from '@kit.ArkUI';
-import { pickFilePathAsync, pickFilePathWithDefaultAsync } from '../components/GUIO';
-import { showAlertDialog } from '../components/UIComponents';
+import { pickFilePathAsync, pickFilePathWithDefaultAsync } from '../../common/ui/GUIO';
+import { showAlertDialog } from '../../common/ui/UIComponents';
 import {
   getRecentFiles,
-  rememberRecentFile,
   forgetRecentFile,
   RecentFileEntry
-} from '../components/RecentFilesHelper';
-import { activateRecentFileUri } from '../components/RecentFilePermission';
-import { setExitViewerOnBack } from '../navigation/PendingDocumentOpen';
-import { OceanBackground, mixHexColors } from '../components/OceanBackground';
-
+} from '../../common/ui/RecentFilesHelper';
+import { activateRecentFileUri } from '../../common/ui/RecentFilePermission';
+import { setExitViewerOnBack } from '../../navigation/PendingDocumentOpen';
+import { OceanBackground, mixHexColors } from '../../common/ui/OceanBackground';
+import {
+  getSessionPreferences,
+  getSessionWindow,
+  setLaunchUri,
+  takeLaunchUri
+} from '../../common/session/AppSession';
+import {
+  documentOpenParamsToRecord,
+  prepareFromUriForPicker,
+  rememberOpenedDocument
+} from '../../common/document/DocumentOpenService';
 const TAG = 'JustPDFIndex';
 
 type EntryStatus = 'valid' | 'noperm' | 'deleted';
@@ -64,7 +73,7 @@ struct Index {
   @State heroTint: string = HERO_TINT_BRIGHT;
   /** 页面可见时为 true，隐藏时暂停背景动画 */
   @State backgroundActive: boolean = true;
-  private preferences: preferences.Preferences = AppStorage.get('preferences') as preferences.Preferences;
+  private preferences: preferences.Preferences | undefined = getSessionPreferences();
   private mainWindow: window.Window | undefined = undefined;
   private windowSizeCallback: (size: window.Size) => void = (size: window.Size) => {
     // 尺寸与断点立即生效，避免 animateTo 插值中间帧出现裁切
@@ -73,7 +82,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.refreshBreakpoints();
-    this.mainWindow = AppStorage.get('window') as window.Window | undefined;
+    this.mainWindow = getSessionWindow();
     if (this.mainWindow) {
       try {
         const rect = this.mainWindow.getWindowProperties().windowRect;
@@ -86,20 +95,15 @@ struct Index {
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
     if (routerParams != null && routerParams['routerParams'] != '') {
-      AppStorage.setOrCreate('launchUri', routerParams['routerParams']);
+      setLaunchUri(routerParams['routerParams']);
     }
     if (this.preferences != null) {
       this.recentFiles = getRecentFiles(this.preferences);
       this.entryStatus = new Array(this.recentFiles.length).fill('valid');
       this.validateRecentFilesAsync();
     }
-    let launchUriLink = AppStorage?.link<string>('launchUri');
-    if (launchUriLink == null) {
-      return;
-    }
-    let launchUri = launchUriLink.get();
-    launchUriLink.set('');
-    if (launchUri == null || launchUri == '') {
+    const launchUri = takeLaunchUri();
+    if (launchUri === undefined) {
       return;
     }
     // 系统 Want 冷/温启动经 Index 转发时，返回应移到后台回到调用方。
@@ -172,55 +176,20 @@ struct Index {
   async loadAndViewFile(uri: string, exitOnBack: boolean = false) {
     setExitViewerOnBack(exitOnBack);
     let uiContext = this.getUIContext();
-    let dir = uiContext.getHostContext()!.tempDir;
-    let sourceFile: fs.File;
+    const hostContext = uiContext.getHostContext();
+    if (hostContext === undefined) {
+      return;
+    }
+    this.setLoadingAnimated(true);
     try {
-      sourceFile = await fs.open(uri, fs.OpenMode.READ_ONLY);
+      const params = await prepareFromUriForPicker(hostContext, uri);
+      this.loadingFileName = params.fileName;
+      await rememberOpenedDocument(this.preferences, params);
+      const args = documentOpenParamsToRecord(params);
+      uiContext.getRouter().replaceUrl({ url: 'features/viewer/PDFView', params: args });
     } catch (error) {
       hilog.error(0x0000, TAG, `Error opening file: ${error}`);
       await showAlertDialog('文件打开失败', `无法打开选定的PDF文件，请检查文件是否存在或已损坏。\n错误信息: ${error}`, uiContext);
-      this.setLoadingAnimated(false);
-      return;
-    }
-    let fileName = sourceFile.name;
-    this.loadingFileName = fileName;
-    this.setLoadingAnimated(true);
-    let file = dir + "/" + fileName;
-    let tempFile = dir + "/saveTemp_" + fileName;
-    try {
-      await fs.copyFile(sourceFile.fd, file);
-    } catch (error) {
-      hilog.error(0x0000, TAG, `Error copying file: ${error}`);
-      await showAlertDialog('文件复制失败', `无法将PDF文件复制到临时目录。请检查存储空间是否充足。\n错误信息: ${error}`, uiContext);
-      this.setLoadingAnimated(false);
-      return;
-    } finally {
-      try {
-        await fs.close(sourceFile);
-      } catch (error) {
-        hilog.error(0x0000, TAG, `Error closing file: ${error}`);
-      }
-    }
-
-    let args: Record<string, string> = {
-      'systemPath': uri,
-      'sandboxPath': file,
-      'saveTempPath': tempFile,
-      'fileName': fileName
-    }
-    if (this.preferences != null) {
-      // 趁临时授权仍有效时持久化，供下次直接打开。
-      await rememberRecentFile(this.preferences, {
-        fileName: fileName,
-        systemPath: uri,
-        openedAt: new Date().getTime()
-      });
-    }
-    try {
-      uiContext.getRouter().replaceUrl({ url: 'pages/PDFView', params: args });
-    } catch (error) {
-      hilog.error(0x0000, TAG, `Error navigating to PDFView: ${error}`);
-      await showAlertDialog('页面跳转失败', `无法打开PDF预览页面，请重试。\n错误信息: ${error}`, uiContext);
       this.setLoadingAnimated(false);
     }
   }
