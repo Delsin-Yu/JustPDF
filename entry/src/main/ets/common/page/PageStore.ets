@@ -9,9 +9,14 @@ import { ReadonlyStroke, Stroke } from './Stroke';
 import {
   MIN_RENDER_SCALE,
   PageCache,
-  PREVIEW_RENDER_SCALE,
-  probePdfPolylineAnnotationPages
+  PREVIEW_RENDER_SCALE
 } from './PageRasterCache';
+import {
+  MemoryPressurePolicy,
+  MemoryPressureSeverity,
+  resolveMemoryPressurePolicy
+} from './PageMemoryPressure';
+import { PdfRenderSession } from './PdfRenderSession';
 export class PageStore implements IDataSource {
   private pages: PageInfo[] = [];
   private listeners: DataChangeListener[] = [];
@@ -23,6 +28,10 @@ export class PageStore implements IDataSource {
   private previewLru: number[] = [];
   /** 与系统内存压力联动，临时收紧预览池 */
   private previewBudgetMultiplier: number = 1.0;
+  /** 内存压力下收紧预取半径 */
+  private prefetchRangeMultiplier: number = 1.0;
+  /** 内存压力下跳过远离中心的预览档预取 */
+  private skipDistantPreviewPrefetch: boolean = false;
 
   private indexInDisplayed(arr: number[], v: number): boolean {
     return arr.indexOf(v) >= 0;
@@ -175,6 +184,7 @@ export class PageStore implements IDataSource {
 
   /**
    * 响应系统内存压力（由 UIAbility.onMemoryLevel 经 eventHub 转发，勿在主回调内做重释放）。
+   * 策略按 MemoryLevel（含 API 24 后台档）与 deviceInfo.performanceClass 动态生成。
    */
   public applyMemoryPressure(
     level: AbilityConstant.MemoryLevel,
@@ -184,46 +194,44 @@ export class PageStore implements IDataSource {
     const center = this.lastPrefetchCenterIndex;
     const displayed =
       displayedPageIndices.length > 0 ? displayedPageIndices.slice() : [currentPageIndex];
+    const policy: MemoryPressurePolicy = resolveMemoryPressurePolicy(level);
 
-    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_MODERATE) {
-      this.previewBudgetMultiplier = 1.0;
+    this.previewBudgetMultiplier = policy.previewBudgetMultiplier;
+    this.prefetchRangeMultiplier = policy.prefetchRangeMultiplier;
+    this.skipDistantPreviewPrefetch = policy.skipDistantPreviewPrefetch;
+
+    PdfRenderSession.getInstance().applyMemoryPressurePolicy(
+      policy.cancelWorkerQueue,
+      policy.maxActiveWorkers
+    );
+
+    if (policy.severity === MemoryPressureSeverity.NONE) {
+      hilog.info(0, 'PageStore', '内存压力恢复：预览预算与预取已放宽');
       return;
     }
 
-    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_LOW) {
-      this.previewBudgetMultiplier = 0.55;
-      for (let i = 0; i < this.pages.length; i++) {
-        if (this.indexInDisplayed(displayed, i)) {
-          continue;
+    for (let i = 0; i < this.pages.length; i++) {
+      const onScreen = this.indexInDisplayed(displayed, i);
+      if (onScreen) {
+        if (policy.evictDisplayedHighRes) {
+          this.pages[i].evictHighResolutionCaches();
         }
+      } else if (policy.evictOffscreenAll) {
+        this.pages[i].evictAllViewerCaches();
+      } else if (policy.evictOffscreenHighRes) {
         this.pages[i].evictHighResolutionCaches();
       }
-      this.enforcePreviewBudget(center, displayed);
-      return;
     }
 
-    if (level === AbilityConstant.MemoryLevel.MEMORY_LEVEL_CRITICAL) {
-      this.previewBudgetMultiplier = 0.35;
-      for (let i = 0; i < this.pages.length; i++) {
-        if (this.indexInDisplayed(displayed, i)) {
-          this.pages[i].evictHighResolutionCaches();
-        } else {
-          this.pages[i].evictAllViewerCaches();
-        }
-      }
+    if (policy.evictOffscreenAll || policy.evictDisplayedHighRes) {
       this.rebuildPreviewLruFromCaches();
-      this.enforcePreviewBudget(center, displayed);
-      return;
-    }
-
-    this.previewBudgetMultiplier = 0.5;
-    for (let i = 0; i < this.pages.length; i++) {
-      if (this.indexInDisplayed(displayed, i)) {
-        continue;
-      }
-      this.pages[i].evictHighResolutionCaches();
     }
     this.enforcePreviewBudget(center, displayed);
+    hilog.info(0, 'PageStore',
+      '内存压力淘汰 level=' + level.toString() +
+        ' severity=' + policy.severity.toString() +
+        ' budget=' + policy.previewBudgetMultiplier.toString() +
+        ' maxWorkers=' + policy.maxActiveWorkers.toString());
   }
 
   /** IDataSource 要求的条目数。 */
@@ -297,7 +305,8 @@ export class PageStore implements IDataSource {
     this.lastPrefetchDisplayed = displayedPageIndices.slice();
     this.lastPrefetchWindowRadius = Math.max(prefetchRange, 4);
 
-    const adaptiveRange = this.adaptivePrefetchRange(prefetchRange, totalPages);
+    const scaledPrefetch = Math.max(1, Math.floor(prefetchRange * this.prefetchRangeMultiplier));
+    const adaptiveRange = this.adaptivePrefetchRange(scaledPrefetch, totalPages);
 
     for (let offset = -adaptiveRange; offset <= adaptiveRange; offset++) {
       const pageIndex = clampedCenter + offset;
@@ -311,9 +320,12 @@ export class PageStore implements IDataSource {
           (absOff <= 1 ? taskpool.Priority.MEDIUM : taskpool.Priority.LOW);
       const wantFullRes: boolean =
         absOff <= fullResRadius || this.indexInDisplayed(displayedPageIndices, pageIndex);
+      const wantPreview: boolean = !this.skipDistantPreviewPrefetch || absOff <= 1 || wantFullRes;
 
       try {
-        this.getPageInfo(pageIndex).ensureCached(PREVIEW_RENDER_SCALE, previewPriority);
+        if (wantPreview) {
+          this.getPageInfo(pageIndex).ensureCached(PREVIEW_RENDER_SCALE, previewPriority);
+        }
         if (wantFullRes) {
           this.getPageInfo(pageIndex).ensureCached(readingScale, renderPriority);
         }
@@ -446,10 +458,14 @@ export class PageStore implements IDataSource {
     for (const pageInfo of this.pages) {
       pageInfo.setPagePath(pagePath);
     }
+    // 保存/编辑预览可能改写磁盘内容或切换路径，Worker 需 reload
+    void PdfRenderSession.getInstance().replace(pagePath).catch((error: Error) => {
+      hilog.error(0, 'PageStore', 'PdfRenderSession.replace 失败: ' + error.message);
+    });
   }
 
   /**
-   * 在 TaskPool 中分批探测含折线批注的页码；主线程仅 await，不执行 getPage。
+   * 在光栅 Worker 中分批探测含折线批注的页码（复用已打开文档，避免反复 loadDocument）。
    */
   public async probePolylineAnnotationPageIndices(
     documentPath: string,
@@ -461,28 +477,31 @@ export class PageStore implements IDataSource {
       return [];
     }
 
+    const session = PdfRenderSession.getInstance();
+    if (!session.isDocumentReady()) {
+      await session.open(documentPath, openPassword);
+    }
+
     const PROBE_BATCH_SIZE = 64;
     const found: number[] = [];
     for (let start = 0; start < total; start += PROBE_BATCH_SIZE) {
       const end = Math.min(start + PROBE_BATCH_SIZE, total);
-      const task = new taskpool.Task(
-        probePdfPolylineAnnotationPages,
-        documentPath,
-        start,
-        end,
-        openPassword
-      );
       try {
-        const batchFound = await taskpool.execute(task, taskpool.Priority.MEDIUM) as number[];
+        const batchFound = await session.probePolylines(start, end);
         for (let i = 0; i < batchFound.length; i++) {
           found.push(batchFound[i]);
         }
       } catch (error) {
-        hilog.error(0, 'PageStore', `探测折线批注页失败 [${start}, ${end}): ${error}`);
-        throw new Error(`探测折线批注页失败 [${start}, ${end}): ${error}`);
+        const message = error instanceof Error ? error.message : '' + error;
+        hilog.error(0, 'PageStore', '探测折线批注页失败 [' + start.toString() + ', ' +
+          end.toString() + '): ' + message);
+        throw new Error('探测折线批注页失败 [' + start.toString() + ', ' +
+          end.toString() + '): ' + message);
       }
-      onBatchComplete?.(end, total);
-      await new Promise<void>((resolve) => {
+      if (onBatchComplete !== undefined) {
+        onBatchComplete(end, total);
+      }
+      await new Promise<void>((resolve: () => void) => {
         setTimeout(resolve, 0);
       });
     }

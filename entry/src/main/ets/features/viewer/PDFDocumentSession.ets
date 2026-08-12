@@ -2,6 +2,7 @@ import { toResultCode } from '../../common/ui/UIComponents';
 import { pdfLoadNeedsPassword, reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
 import { PageInfo } from '../../common/page/PageInfo';
 import { PageStore } from '../../common/page/PageStore';
+import { PdfRenderSession } from '../../common/page/PdfRenderSession';
 import {
   logAppStorageContinuationState,
   logContinuationError,
@@ -198,6 +199,20 @@ export class PDFDocumentSession {
       return;
     }
     const pathsAfterLoad = this.dependencies.getPaths();
+    try {
+      await PdfRenderSession.getInstance().open(pathsAfterLoad.sandBoxPath, this.sessionPdfPassword);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '打开光栅 Worker 失败';
+      hilog.error(0, 'PDFView', 'PdfRenderSession.open 失败: ' + message);
+      if (this.dependencies.getDocumentLoadVersion() === loadVersion) {
+        this.loadError = '无法初始化页面渲染: ' + message;
+        this.isDocumentLoading = false;
+      }
+      return;
+    }
+    if (this.dependencies.getDocumentLoadVersion() != loadVersion) {
+      return;
+    }
     this.dependencies.viewerViewModel.setTotalPageCount(this.dependencies.document.getPageCount());
     for (let i = 0; i < this.dependencies.viewerViewModel.totalPageCount; i++) {
       this.dependencies.pageDataSource.push(

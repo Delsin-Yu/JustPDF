@@ -41,6 +41,7 @@ import { taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { TutorialDialogBuilder } from '../../common/ui/TutorialDialog';
 import { PageCache, selectDisplayPixelMap } from '../../common/page/PageRasterCache';
+import { PdfRenderSession } from '../../common/page/PdfRenderSession';
 import { PageStore } from '../../common/page/PageStore';
 import { InputAction } from '../../common/ui/Input';
 import { SettingsDialogBuilder } from '../../common/ui/SettingsDialog';
@@ -596,6 +597,15 @@ struct PDFView {
       this.pageDataSource.clearImportedPdfPolylineTracking();
       this.annotationController.resetImportedPolylinePrepareState();
       this.pageDataSource.setPagePath(this.sandBoxPath);
+      try {
+        await PdfRenderSession.getInstance().replace(
+          this.sandBoxPath,
+          this.documentSession.sessionPdfPassword
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'replace failed';
+        hilog.error(0, 'PDFView', '丢弃更改后 PdfRenderSession.replace 失败: ' + message);
+      }
       this.bookmarkController.refresh();
       this.bookmarkController.markDocumentSaved();
       await this.refreshDisplayedPagesAfterDiscard();
@@ -1888,6 +1898,12 @@ struct PDFView {
       this.transparentPlaceholderPixelMap = undefined;
     }
 
+    // 释放 Worker 光栅会话（cancel + releaseDocument + terminate）
+    PdfRenderSession.getInstance().cancelAll();
+    void PdfRenderSession.getInstance().release().catch((error: Error) => {
+      hilog.error(0, 'PDFView', 'PdfRenderSession.release 失败: ' + error.message);
+    });
+
     // 释放主文档
     this.document.releaseDocument();
   }
@@ -2278,7 +2294,7 @@ struct PDFView {
     this.transparentPlaceholderPixelMap = await image.createPixelMap(transparentBuffer, opts);
   }
 
-  // 根据页面原始大小计算显示大小（与 cachePage 中的 displaySize 计算一致）
+  // 根据页面原始大小计算显示大小（与光栅 Worker 中的 displaySize 计算一致）
   private getPageDisplaySize(pageIndex: number): Vector2 {
     const rawSize = this.pageDataSource.getPageRawSize(pageIndex);
     return mul(rawSize, 2);

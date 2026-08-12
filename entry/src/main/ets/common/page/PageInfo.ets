@@ -14,12 +14,13 @@ import {
   Stroke
 } from './Stroke';
 import {
-  cachePage,
   MIN_RENDER_SCALE,
   PageCache,
   PREVIEW_RENDER_SCALE,
   releasePageCachePixelMaps
 } from './PageRasterCache';
+import { PdfRenderSession } from './PdfRenderSession';
+import { RasterPriority } from './PdfRenderWorkerProtocol';
 import { PageStore } from './PageStore';
 
 export interface ReadonlyPageInfo {
@@ -31,13 +32,23 @@ export interface ReadonlyPageInfo {
 }
 
 interface PendingCacheTask {
-  task: taskpool.Task;
+  requestId: number;
   promise: Promise<PageCache>;
 }
 
 interface PendingThumbnailTask {
-  task: taskpool.Task;
+  requestId: number;
   promise: Promise<void>;
+}
+
+function toRasterPriority(priority: taskpool.Priority): RasterPriority {
+  if (priority === taskpool.Priority.HIGH) {
+    return RasterPriority.HIGH;
+  }
+  if (priority === taskpool.Priority.LOW) {
+    return RasterPriority.LOW;
+  }
+  return RasterPriority.MEDIUM;
 }
 
 @Observed
@@ -106,21 +117,38 @@ export class PageInfo implements ReadonlyPageInfo {
     const scaleX = preferredSize.x / pageSize.x;
     const scaleY = preferredSize.y / pageSize.y;
     const scale = Math.min(scaleX, scaleY);
-    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, scale, this.openPassword);
-    const promise = taskpool.execute(task, taskpool.Priority.LOW)
-      .then(result => {
-        const pageCache = result as PageCache;
+    const session = PdfRenderSession.getInstance();
+    const promise: Promise<void> = (async (): Promise<void> => {
+      const handle = await session.renderHandle(this.localPageIndex, scale, RasterPriority.LOW);
+      if (this.pageThumbnailTask === undefined) {
+        session.cancel(handle.requestId);
+        throw new Error('canceled');
+      }
+      this.pageThumbnailTask.requestId = handle.requestId;
+      try {
+        const pageCache = await handle.promise;
         this.pageThumbnail = pageCache.pixelMap;
+        if (pageCache.layoutPixelMap !== undefined) {
+          try {
+            pageCache.layoutPixelMap.release();
+          } catch (_e) {
+          }
+        }
         this.pageThumbnailTask = undefined;
-        if (!this.associatedSource || !this.globalPageIndex) return;
-        this.associatedSource.markPageChanged(this.globalPageIndex);
-      })
-      .catch((error: Error) => {
+        if (this.associatedSource !== undefined && this.globalPageIndex !== undefined) {
+          this.associatedSource.markPageChanged(this.globalPageIndex);
+        }
+      } catch (error) {
         this.pageThumbnailTask = undefined;
-        hilog.error(0, 'PageInfo', `生成页面 ${this.localPageIndex} 缩略图失败: ${error.message}`);
-        throw error;
-      });
-    this.pageThumbnailTask = { task, promise };
+        const err = error instanceof Error ? error : new Error('' + error);
+        if (err.message !== 'canceled') {
+          hilog.error(0, 'PageInfo', '生成页面 ' + this.localPageIndex.toString() +
+            ' 缩略图失败: ' + err.message);
+        }
+        throw err;
+      }
+    })();
+    this.pageThumbnailTask = { requestId: -1, promise: promise };
     return;
   }
 
@@ -154,43 +182,55 @@ export class PageInfo implements ReadonlyPageInfo {
   }
 
   private startNewCacheTask(renderScale: number, priority: taskpool.Priority): Promise<PageCache> {
-    const task = new taskpool.Task(cachePage, this.pagePath, this.localPageIndex, renderScale, this.openPassword);
-    const promise = taskpool.execute(task, priority)
-      .then(result => {
-        const pageCache = result as PageCache;
-        this.caches.set(renderScale, pageCache as PageCache);
+    const session = PdfRenderSession.getInstance();
+    const rasterPriority = toRasterPriority(priority);
+    const promise: Promise<PageCache> = (async (): Promise<PageCache> => {
+      const handle = await session.renderHandle(this.localPageIndex, renderScale, rasterPriority);
+      const stillPending = this.pendingTasks.get(renderScale);
+      if (stillPending === undefined) {
+        session.cancel(handle.requestId);
+        throw new Error('canceled');
+      }
+      stillPending.requestId = handle.requestId;
+      try {
+        const pageCache = await handle.promise;
+        this.caches.set(renderScale, pageCache);
         this.pendingTasks.delete(renderScale);
         if (renderScale === PREVIEW_RENDER_SCALE && this.associatedSource !== undefined &&
           this.globalPageIndex !== undefined) {
           this.associatedSource.notifyPreviewCacheFilled(this.globalPageIndex);
         }
-        return pageCache as PageCache;
-      })
-      .catch((error: Error) => {
+        return pageCache;
+      } catch (error) {
         this.pendingTasks.delete(renderScale);
-        hilog.error(0, 'PageInfo', `在缩放 ${renderScale} 下缓存页面 ${this.localPageIndex} 失败: ${error.message}`);
-        throw error;
-      });
+        const err = error instanceof Error ? error : new Error('' + error);
+        if (err.message !== 'canceled') {
+          hilog.error(0, 'PageInfo', '在缩放 ' + renderScale.toString() + ' 下缓存页面 ' +
+            this.localPageIndex.toString() + ' 失败: ' + err.message);
+        }
+        throw err;
+      }
+    })();
 
-    this.pendingTasks.set(renderScale, { task, promise });
-    return promise as Promise<PageCache>;
+    this.pendingTasks.set(renderScale, { requestId: -1, promise: promise });
+    return promise;
   }
 
   /**
    * Cancels all pending cache tasks.
    */
   public cancelPendingTasks(): void {
+    const session = PdfRenderSession.getInstance();
     for (const pendingTask of this.pendingTasks.values()) {
-      try {
-        taskpool.cancel(pendingTask.task);
-      } catch (_error) {
-        // Task may have already completed or been cancelled.
+      if (pendingTask.requestId >= 0) {
+        session.cancel(pendingTask.requestId);
       }
     }
     this.pendingTasks.clear();
   }
 
   private cancelPendingWhere(predicate: (scale: number) => boolean): void {
+    const session = PdfRenderSession.getInstance();
     const scales: number[] = [];
     for (const pair of this.pendingTasks.entries()) {
       if (predicate(pair[0])) {
@@ -200,9 +240,8 @@ export class PageInfo implements ReadonlyPageInfo {
     for (const scale of scales) {
       const pendingTask = this.pendingTasks.get(scale);
       if (pendingTask !== undefined) {
-        try {
-          taskpool.cancel(pendingTask.task);
-        } catch (_error) {
+        if (pendingTask.requestId >= 0) {
+          session.cancel(pendingTask.requestId);
         }
         this.pendingTasks.delete(scale);
       }
@@ -275,11 +314,9 @@ export class PageInfo implements ReadonlyPageInfo {
     this.thumbnailRefCount = 0;
 
     // Cancel pending thumbnail task if any
-    if (this.pageThumbnailTask) {
-      try {
-        taskpool.cancel(this.pageThumbnailTask.task);
-      } catch (error) {
-        // Task may have already completed or been cancelled.
+    if (this.pageThumbnailTask !== undefined) {
+      if (this.pageThumbnailTask.requestId >= 0) {
+        PdfRenderSession.getInstance().cancel(this.pageThumbnailTask.requestId);
       }
       this.pageThumbnailTask = undefined;
     }
