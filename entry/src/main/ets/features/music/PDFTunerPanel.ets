@@ -1,5 +1,5 @@
-import { ScrollSpinBox } from "../../components/ScrollSpinBox";
-import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, getCheckIcon, toVisibility } from "../../components/UIComponents";
+import { ScrollSpinBox } from "../../common/ui/ScrollSpinBox";
+import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, getCheckIcon, toVisibility } from "../../common/ui/UIComponents";
 import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier } from '@kit.ArkUI';
 import {
@@ -12,8 +12,7 @@ import {
   TunerReferenceHzMax,
   TunerReferenceHzMin,
 } from './PDFTunerController';
-import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from './PDFPanelVisualConstants';
-
+import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from '../viewer/PDFPanelVisualConstants';
 const TunerWindowMargin: number = 16;
 const TunerWindowWidth: number = 392;
 export const TunerTotalWidth: number = TunerWindowWidth + TunerWindowMargin * 2;

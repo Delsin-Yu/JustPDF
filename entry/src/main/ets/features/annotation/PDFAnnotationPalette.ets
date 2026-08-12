@@ -2,8 +2,8 @@ import {
   SharedPanelBackgroundColor,
   SharedPanelControlHighlightColor,
   UnsavedChangesIndicatorColor
-} from './PDFPanelVisualConstants';
-import { PDFAnnotateMode } from './PDFViewerViewModel';
+} from '../viewer/PDFPanelVisualConstants';
+import { PDFAnnotateMode } from '../viewer/PDFViewerViewModel';
 import {
   AnnotationColor,
   AnnotationColorPalette,

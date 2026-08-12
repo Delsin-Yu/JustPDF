@@ -1,9 +1,9 @@
-import { ContainerPadding, toVisibility } from '../../components/UIComponents';
+import { ContainerPadding, toVisibility } from '../../common/ui/UIComponents';
 import {
   SharedPanelBackgroundColor,
   SharedPanelControlHighlightColor,
   UnsavedChangesIndicatorColor
-} from './PDFPanelVisualConstants';
+} from '../viewer/PDFPanelVisualConstants';
 import { PDFBookmarkListItem } from './PDFBookmarkController';
 
 const BookmarkWindowMargin: number = 16;

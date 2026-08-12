@@ -8,7 +8,10 @@ import {
   ROUTER_INITIAL_PAGE_INDEX
 } from './PdfContinuation';
 import { pdfContinuationDistributed } from './PdfContinuationDistributed';
-
+import {
+  documentOpenParamsToRecord,
+  prepareFromLocalPath
+} from '../../common/document/DocumentOpenService';
 /** 路由参数：由 PDFView 在页面内完成分布式文件落地 */
 export const ROUTER_CONTINUATION_PENDING: string = 'continuationPending';
 
@@ -148,32 +151,8 @@ export async function buildLaunchParamsFromLocalPath(
   systemPath: string,
   fileNameHint: string
 ): Promise<Record<string, string>> {
-  const dir = context.tempDir;
-  let sourceFile: fs.File | undefined = undefined;
-  try {
-    sourceFile = await fs.open(localPath, fs.OpenMode.READ_ONLY);
-    const fileName = fileNameHint.length > 0 ? fileNameHint : sourceFile.name;
-    const sandboxPath = `${dir}/${fileName}`;
-    const saveTempPath = `${dir}/saveTemp_${fileName}`;
-    await fs.copyFile(sourceFile.fd, sandboxPath);
-    await fs.close(sourceFile);
-    sourceFile = undefined;
-    return {
-      'systemPath': systemPath,
-      'sandboxPath': sandboxPath,
-      'saveTempPath': saveTempPath,
-      'fileName': fileName
-    };
-  } catch (error) {
-    if (sourceFile !== undefined) {
-      try {
-        await fs.close(sourceFile);
-      } catch (closeError) {
-        logContinuationWarn(`关闭文件失败: ${closeError}`);
-      }
-    }
-    throw new Error(`buildLaunchParamsFromLocalPath 失败: ${error}`);
-  }
+  const params = await prepareFromLocalPath(context, localPath, systemPath, fileNameHint);
+  return documentOpenParamsToRecord(params);
 }
 
 /**

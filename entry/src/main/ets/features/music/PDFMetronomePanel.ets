@@ -1,9 +1,8 @@
 import { LengthMetrics } from '@kit.ArkUI';
-import { ScrollSpinBox } from '../../components/ScrollSpinBox';
-import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, StyleIconButton, toVisibility } from '../../components/UIComponents';
+import { ScrollSpinBox } from '../../common/ui/ScrollSpinBox';
+import { ContainerPadding, DropdownMenuBackgroundColor, DropdownMenuPrimaryBlurStyle, StyleIconButton, toVisibility } from '../../common/ui/UIComponents';
 import { PDFMetronomeController } from './PDFMetronomeController';
-import { SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
-
+import { SharedPanelBackgroundColor } from '../viewer/PDFPanelVisualConstants';
 const MetronomeBeatSpacing: Length = `10vp`;
 const MetronomeSpinBoxSettleMs: number = 160;
 const MetronomeWindowMargin: number = 16;

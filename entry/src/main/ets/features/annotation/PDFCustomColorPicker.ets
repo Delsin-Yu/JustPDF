@@ -1,4 +1,4 @@
-import { SharedPanelBackgroundColor } from './PDFPanelVisualConstants';
+import { SharedPanelBackgroundColor } from '../viewer/PDFPanelVisualConstants';
 import {
   AnnotationColor,
   hsvToRgb,
