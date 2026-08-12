@@ -1,5 +1,4 @@
-import { PDFLinkVisualMode } from '../pages/pdfview/PDFViewerViewModel';
-
+import { PDFLinkVisualMode } from '../../features/viewer/PDFViewerViewModel';
 const LabelColor: ResourceColor = '#AAAAAA';
 const HintColor: ResourceColor = '#888888';
 const SegmentedButtonActiveColor: ResourceColor = 'rgba(77, 166, 255, 0.34)';

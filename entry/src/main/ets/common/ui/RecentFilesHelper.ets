@@ -89,15 +89,3 @@ export async function forgetRecentFile(
   await revokeRecentFileUri(systemPath);
   removeRecentFile(prefs, systemPath);
 }
-
-/**
- * 清空最近文件列表
- */
-export function clearRecentFiles(prefs: preferences.Preferences): void {
-  try {
-    prefs.putSync(RECENT_FILES_KEY, '[]');
-    prefs.flushSync();
-  } catch (error) {
-    hilog.error(0x0000, TAG, `清空最近文件出错: ${error}`);
-  }
-}
