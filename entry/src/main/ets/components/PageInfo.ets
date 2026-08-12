@@ -102,11 +102,11 @@ export interface History {
 }
 
 /** 光栅化「预览档」缩放，用于快速首帧；须小于 MIN_RENDER_SCALE */
-export const PREVIEW_RENDER_SCALE: number = 1;
+export const PREVIEW_RENDER_SCALE: number = 2;
 /** 与 PDF 页面坐标一致的布局倍率（页面框在 vp 中的尺度），与光栅 renderScale 无关 */
 export const DISPLAY_LAYOUT_SCALE: number = 2;
 /** 阅读器默认可用光栅档位下限（与 PDFViewerViewModel.ViewerMinRenderScale 对齐） */
-export const MIN_RENDER_SCALE: number = 4;
+export const MIN_RENDER_SCALE: number = 6;
 
 export interface PageCache {
   pixelMap: PixelMap;

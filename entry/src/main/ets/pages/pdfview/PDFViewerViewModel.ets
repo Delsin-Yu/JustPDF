@@ -3,9 +3,11 @@ import { mul, pxToVp, Vec2, Vector2 } from '../../components/Numbers';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
 
-export const ViewerRenderScaleLevels: number[] = [4, 8];
-export const ViewerMinRenderScale: number = 4;
-const ViewerScaleThresholds: number[] = [2.0];
+/** 阅读档 / 高清档；下限提高以减少密谱细线在小缩放下被光栅丢弃 */
+export const ViewerRenderScaleLevels: number[] = [6, 8];
+export const ViewerMinRenderScale: number = 6;
+/** viewScale 超过此阈值时升到高清档（宜低于旧值 2.0，避免长时间卡在阅读档） */
+const ViewerScaleThresholds: number[] = [1.3];
 
 export type PDFPageDisplayMode = 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
 export type PDFPageFlipMode = 'side' | 'button' | 'extern' | 'horizontalSlide';
