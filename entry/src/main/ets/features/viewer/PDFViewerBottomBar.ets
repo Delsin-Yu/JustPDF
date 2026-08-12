@@ -3,8 +3,7 @@ import {
   ContainerCfg,
   StyleIconButton,
   toVisibility
-} from '../../components/UIComponents';
-
+} from '../../common/ui/UIComponents';
 @ComponentV2
 export struct PDFViewerBottomBar {
   @Param showControls: boolean = true;

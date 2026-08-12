@@ -6,7 +6,7 @@ import {
   DropdownMenuSubmenuBackgroundColor,
   DropdownMenuSubmenuBlurStyle,
   dropdownMenuBindMenuOptions
-} from '../../components/UIComponents';
+} from '../../common/ui/UIComponents';
 import { UnsavedChangesIndicatorColor } from './PDFPanelVisualConstants';
 
 @ComponentV2

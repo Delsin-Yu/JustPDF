@@ -1,6 +1,6 @@
-import { FullRect, toVisibility } from '../../components/UIComponents';
-import { toSizePx, Vector2 } from '../../components/Numbers';
-import { PdfLinkTarget } from '../../components/PageInfo';
+import { FullRect, toVisibility } from '../../common/ui/UIComponents';
+import { toSizePx, Vector2 } from '../../common/ui/Numbers';
+import { PdfLinkTarget } from '../../common/page/PdfLinks';
 import { LengthMetricsUnit } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -127,7 +127,11 @@ export struct PDFPageSlot {
 
   build() {
     RelativeContainer() {
-      Image(this.pixelMap).alignRules(FullRect).draggable(false)
+      Image(this.pixelMap)
+        .alignRules(FullRect)
+        .draggable(false)
+        // 适口时高分位图会被缩小；Medium(MipMap) 减轻混叠/闪烁（见 ImageInterpolation 文档）
+        .interpolation(ImageInterpolation.Medium)
       Canvas(this.annotateCtx)
         .size(toSizePx(this.canvasSize))
         .scale(this.canvasScale)
