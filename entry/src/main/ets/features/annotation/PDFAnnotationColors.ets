@@ -54,13 +54,6 @@ export function pdfColorToRgb(pdfColor: number): RgbTuple {
   return { r, g, b };
 }
 
-export function rgbToPdfColor(r: number, g: number, b: number): number {
-  const cr: number = Math.max(0, Math.min(255, Math.round(r)));
-  const cg: number = Math.max(0, Math.min(255, Math.round(g)));
-  const cb: number = Math.max(0, Math.min(255, Math.round(b)));
-  return ((cb & 0xFF) << 16) | ((cg & 0xFF) << 8) | (cr & 0xFF);
-}
-
 export function makeCustomAnnotationColor(r: number, g: number, b: number): AnnotationColor {
   const cr: number = Math.max(0, Math.min(255, Math.round(r)));
   const cg: number = Math.max(0, Math.min(255, Math.round(g)));
