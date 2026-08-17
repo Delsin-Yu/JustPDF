@@ -12,17 +12,26 @@ import {
   DefaultCustomAnnotationColor
 } from './PDFAnnotationColors';
 import { PDFCustomColorPicker } from './PDFCustomColorPicker';
+import { AnnotationLayerListItem } from '../../common/page/AnnotationLayer';
+import { AnnotationLayerEmbedHeight, PDFAnnotationLayerPanel } from './PDFAnnotationLayerPanel';
 
 const BtnSize: number = 44;
 const Gap: number = 6;
 const Pad: number = 10;
-const HandleW: number = 40;
 const DragDistance: number = 1;
 
-const GridW: number = 3 * BtnSize + 2 * Gap;
+const GridW: number = 4 * BtnSize + 3 * Gap;
 const GridH: number = 2 * BtnSize + Gap;
-export const AnnotationPaletteContentWidth: number = HandleW + Gap + GridW + Pad * 2;
-export const AnnotationPaletteContentHeight: number = GridH + Pad * 2;
+export const AnnotationPaletteContentWidth: number = GridW + Pad * 2;
+export const AnnotationPaletteCollapsedHeight: number = GridH + Pad * 2;
+export const AnnotationPaletteContentHeight: number = AnnotationPaletteCollapsedHeight;
+
+export function getAnnotationPaletteContentHeight(expanded: boolean): number {
+  if (expanded) {
+    return AnnotationPaletteCollapsedHeight + Gap + AnnotationLayerEmbedHeight;
+  }
+  return AnnotationPaletteCollapsedHeight;
+}
 
 // 迷你色板（预设颜色弹出层）尺寸——加大圆点与间距。
 const ColorSwatchSize: number = 34;
@@ -57,6 +66,14 @@ export struct PDFAnnotationPalette {
   @Param onRedo: () => void = () => {};
   @Param onSave: () => void = () => {};
   @Param onClose: () => void = () => {};
+  @Param layerPanelVisible: boolean = false;
+  @Param layerItems: AnnotationLayerListItem[] = [];
+  @Param onToggleLayerPanel: () => void = () => {};
+  @Param onSelectLayer: (id: string) => void = () => {};
+  @Param onToggleLayerVisible: (id: string, visible: boolean) => void = () => {};
+  @Param onAddLayer: () => void = () => {};
+  @Param onRenameLayer: (id: string, name: string) => void = () => {};
+  @Param onDeleteLayer: (id: string) => void = () => {};
   @Event onHostDragStart: () => void = () => {};
   @Event onHostDragUpdate: (event: GestureEvent) => void = () => {};
   @Event onHostDragEnd: () => void = () => {};
@@ -209,172 +226,188 @@ export struct PDFAnnotationPalette {
     }
   }
 
-  build() {
-    Row() {
-      Column({ space: 3 }) {
-        Row({ space: 3 }) {
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
-        }
-        Row({ space: 3 }) {
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
-        }
-        Row({ space: 3 }) {
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
-        }
-        Row({ space: 3 }) {
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
-          Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
-        }
+  @Builder
+  private buildDragHandle() {
+    Column({ space: 3 }) {
+      Row({ space: 3 }) {
+        Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
+        Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.26)')
       }
-      .width(HandleW)
-      .height(GridH)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .borderRadius(10)
-      .backgroundColor('rgba(255, 255, 255, 0.05)')
-      .border({ width: 1, color: 'rgba(255, 255, 255, 0.06)' })
-      .gesture(
-        PanGesture({ fingers: 1, distance: DragDistance })
-          .onActionStart(() => this.onHostDragStart())
-          .onActionUpdate((event: GestureEvent) => this.onHostDragUpdate(event))
-          .onActionEnd(() => this.onHostDragEnd())
-          .onActionCancel(() => this.onHostDragEnd())
-      )
+      Row({ space: 3 }) {
+        Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
+        Text('').width(4).height(4).borderRadius(2).backgroundColor('rgba(255, 255, 255, 0.16)')
+      }
+    }
+    .width(BtnSize)
+    .height(BtnSize)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .borderRadius(10)
+    .backgroundColor('rgba(255, 255, 255, 0.05)')
+    .border({ width: 1, color: 'rgba(255, 255, 255, 0.06)' })
+    .gesture(
+      PanGesture({ fingers: 1, distance: DragDistance })
+        .onActionStart(() => this.onHostDragStart())
+        .onActionUpdate((event: GestureEvent) => this.onHostDragUpdate(event))
+        .onActionEnd(() => this.onHostDragEnd())
+        .onActionCancel(() => this.onHostDragEnd())
+    )
+  }
 
-      Blank().width(Gap)
+  build() {
+    Column({ space: Gap }) {
+      Row({ space: Gap }) {
+        this.buildDragHandle()
 
-      Column({ space: Gap }) {
-        Row({ space: Gap }) {
-          Button({ type: ButtonType.Normal }) {
-            Stack() {
-              SymbolGlyph($r('sys.symbol.pencil_waveform')).fontSize(20).fontColor([Color.White])
-              Text('')
-                .width(8).height(8).borderRadius(4)
-                .backgroundColor(this.drawColor.canvasColor)
-                .border({ width: 1, color: 'rgba(255, 255, 255, 0.9)' })
-                .position({ x: BtnSize - 18, y: BtnSize - 18 })
-            }.width('100%').height('100%')
-          }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(this.annotateMode === 'draw' ? SharedPanelControlHighlightColor : Color.Transparent)
-          .enabled(!this.readOnly)
-          .opacity(this.readOnly ? 0.4 : 1)
-          .onClick(() => this.handleDrawButtonClick())
-          .bindPopup(this.showColorPopup, {
-            builder: this.buildColorPopup,
-            placement: Placement.Top,
-            popupColor: Color.Transparent,
-            mask: false,
-            autoCancel: true,
-            enableArrow: false,
-            showInSubWindow: false,
-            followTransformOfTarget: true,
-            onStateChange: (event) => {
-              this.handleColorPopupVisibility(event.isVisible);
-            }
-          })
-
-          Button({ type: ButtonType.Normal }) {
-            SymbolGlyph($r('sys.symbol.eraser_line')).fontSize(20).fontColor([Color.White])
-          }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(this.annotateMode === 'erase' ? SharedPanelControlHighlightColor : Color.Transparent)
-          .enabled(!this.readOnly)
-          .opacity(this.readOnly ? 0.4 : 1)
-          .onClick(() => {
-            if (this.readOnly) {
-              return;
-            }
-            this.showColorPopup = false;
-            this.onSetMode('erase');
-          })
-
-          Button({ type: ButtonType.Normal }) {
-            SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([Color.White])
-          }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(Color.Transparent)
-          .onClick(() => {
-            this.showColorPopup = false;
-            this.onClose();
-          })
+        Button({ type: ButtonType.Normal }) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.pencil_waveform')).fontSize(20).fontColor([Color.White])
+            Text('')
+              .width(8).height(8).borderRadius(4)
+              .backgroundColor(this.drawColor.canvasColor)
+              .border({ width: 1, color: 'rgba(255, 255, 255, 0.9)' })
+              .position({ x: BtnSize - 18, y: BtnSize - 18 })
+          }.width('100%').height('100%')
         }
-
-        Row({ space: Gap }) {
-          Button({ type: ButtonType.Normal }) {
-            Stack() {
-              SymbolGlyph($r('sys.symbol.undo')).fontSize(20).fontColor([Color.White])
-              if (this.undoCount > 0) {
-                Text(`${this.undoCount}`)
-                  .fontSize(9)
-                  .fontColor(Color.White)
-                  .fontWeight(FontWeight.Bold)
-                  .textAlign(TextAlign.Center)
-                  .width(16).height(16).borderRadius(8)
-                  .backgroundColor('rgba(255, 132, 0, 0.9)')
-                  .position({ x: BtnSize - 22, y: 2 })
-              }
-            }.width('100%').height('100%')
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(this.annotateMode === 'draw' ? SharedPanelControlHighlightColor : Color.Transparent)
+        .enabled(!this.readOnly)
+        .opacity(this.readOnly ? 0.4 : 1)
+        .onClick(() => this.handleDrawButtonClick())
+        .bindPopup(this.showColorPopup, {
+          builder: this.buildColorPopup,
+          placement: Placement.Top,
+          popupColor: Color.Transparent,
+          mask: false,
+          autoCancel: true,
+          enableArrow: false,
+          showInSubWindow: false,
+          followTransformOfTarget: true,
+          onStateChange: (event) => {
+            this.handleColorPopupVisibility(event.isVisible);
           }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(Color.Transparent)
-          .enabled(!this.readOnly && this.undoCount > 0)
-          .opacity(!this.readOnly && this.undoCount > 0 ? 1.0 : 0.35)
-          .onClick(() => this.onUndo())
+        })
 
-          Button({ type: ButtonType.Normal }) {
-            Stack() {
-              SymbolGlyph($r('sys.symbol.redo')).fontSize(20).fontColor([Color.White])
-              if (this.redoCount > 0) {
-                Text(`${this.redoCount}`)
-                  .fontSize(9)
-                  .fontColor(Color.White)
-                  .fontWeight(FontWeight.Bold)
-                  .textAlign(TextAlign.Center)
-                  .width(16).height(16).borderRadius(8)
-                  .backgroundColor('rgba(255, 132, 0, 0.9)')
-                  .position({ x: BtnSize - 22, y: 2 })
-              }
-            }.width('100%').height('100%')
-          }
-          .width(BtnSize).height(BtnSize).borderRadius(10)
-          .backgroundColor(Color.Transparent)
-          .enabled(!this.readOnly && this.redoCount > 0)
-          .opacity(!this.readOnly && this.redoCount > 0 ? 1.0 : 0.35)
-          .onClick(() => this.onRedo())
-
-          Stack({ alignContent: Alignment.TopEnd }) {
-            Button({ type: ButtonType.Normal }) {
-              SymbolGlyph($r('sys.symbol.save')).fontSize(20).fontColor([Color.White])
-            }
-            .width(BtnSize).height(BtnSize).borderRadius(10)
-            .backgroundColor(Color.Transparent)
-            .onClick(() => this.onSave())
-
-            if (this.hasUnsaved) {
-              Text('')
-                .width(10)
-                .height(10)
-                .borderRadius(5)
-                .backgroundColor(UnsavedChangesIndicatorColor)
-            }
-          }
-          .width(BtnSize)
-          .height(BtnSize)
+        Button({ type: ButtonType.Normal }) {
+          SymbolGlyph($r('sys.symbol.eraser_line')).fontSize(20).fontColor([Color.White])
         }
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(this.annotateMode === 'erase' ? SharedPanelControlHighlightColor : Color.Transparent)
+        .enabled(!this.readOnly)
+        .opacity(this.readOnly ? 0.4 : 1)
+        .onClick(() => {
+          if (this.readOnly) {
+            return;
+          }
+          this.showColorPopup = false;
+          this.onSetMode('erase');
+        })
+
+        Button({ type: ButtonType.Normal }) {
+          SymbolGlyph($r('sys.symbol.xmark')).fontSize(18).fontColor([Color.White])
+        }
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => {
+          this.showColorPopup = false;
+          this.onClose();
+        })
+      }
+      .width(GridW)
+
+      Row({ space: Gap }) {
+        Button({ type: ButtonType.Normal }) {
+          SymbolGlyph(this.layerPanelVisible ? $r('sys.symbol.square_stack_3d_fill') : $r('sys.symbol.square_stack_3d'))
+            .fontSize(20)
+            .fontColor([Color.White])
+        }
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(this.layerPanelVisible ? SharedPanelControlHighlightColor : Color.Transparent)
+        .onClick(() => this.onToggleLayerPanel())
+
+        Button({ type: ButtonType.Normal }) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.undo')).fontSize(20).fontColor([Color.White])
+            if (this.undoCount > 0) {
+              Text('' + this.undoCount.toString())
+                .fontSize(9)
+                .fontColor(Color.White)
+                .fontWeight(FontWeight.Bold)
+                .textAlign(TextAlign.Center)
+                .width(16).height(16).borderRadius(8)
+                .backgroundColor('rgba(255, 132, 0, 0.9)')
+                .position({ x: BtnSize - 22, y: 2 })
+            }
+          }.width('100%').height('100%')
+        }
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(Color.Transparent)
+        .enabled(!this.readOnly && this.undoCount > 0)
+        .opacity(!this.readOnly && this.undoCount > 0 ? 1.0 : 0.35)
+        .onClick(() => this.onUndo())
+
+        Button({ type: ButtonType.Normal }) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.redo')).fontSize(20).fontColor([Color.White])
+            if (this.redoCount > 0) {
+              Text('' + this.redoCount.toString())
+                .fontSize(9)
+                .fontColor(Color.White)
+                .fontWeight(FontWeight.Bold)
+                .textAlign(TextAlign.Center)
+                .width(16).height(16).borderRadius(8)
+                .backgroundColor('rgba(255, 132, 0, 0.9)')
+                .position({ x: BtnSize - 22, y: 2 })
+            }
+          }.width('100%').height('100%')
+        }
+        .width(BtnSize).height(BtnSize).borderRadius(10)
+        .backgroundColor(Color.Transparent)
+        .enabled(!this.readOnly && this.redoCount > 0)
+        .opacity(!this.readOnly && this.redoCount > 0 ? 1.0 : 0.35)
+        .onClick(() => this.onRedo())
+
+        Stack({ alignContent: Alignment.TopEnd }) {
+          Button({ type: ButtonType.Normal }) {
+            SymbolGlyph($r('sys.symbol.save')).fontSize(20).fontColor([Color.White])
+          }
+          .width(BtnSize).height(BtnSize).borderRadius(10)
+          .backgroundColor(Color.Transparent)
+          .onClick(() => this.onSave())
+
+          if (this.hasUnsaved) {
+            Text('')
+              .width(10)
+              .height(10)
+              .borderRadius(5)
+              .backgroundColor(UnsavedChangesIndicatorColor)
+          }
+        }
+        .width(BtnSize)
+        .height(BtnSize)
+      }
+      .width(GridW)
+
+      if (this.layerPanelVisible) {
+        PDFAnnotationLayerPanel({
+          readOnly: this.readOnly,
+          items: this.layerItems,
+          onSelect: this.onSelectLayer,
+          onToggleVisible: this.onToggleLayerVisible,
+          onAdd: this.onAddLayer,
+          onRename: this.onRenameLayer,
+          onDelete: this.onDeleteLayer
+        })
       }
     }
     .width(AnnotationPaletteContentWidth)
-    .height(AnnotationPaletteContentHeight)
+    .height(getAnnotationPaletteContentHeight(this.layerPanelVisible))
     .padding(Pad)
     .backgroundColor(SharedPanelBackgroundColor)
     .borderRadius(16)
     .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
     .shadow({ radius: 12, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
-    .margin(10)
+    .margin(0)
     .align(Alignment.TopStart)
     .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
     .onTouch((event: TouchEvent) => {
