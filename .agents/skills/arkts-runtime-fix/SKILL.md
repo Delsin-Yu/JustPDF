@@ -97,6 +97,8 @@ node "{SKILL_DIR}/scripts/parse-jscrash-log.mjs" --log-file "{localFaultlogPath}
 
 If `status: not_found`, do not broad-read the project or guess from symptoms alone. Ask the user to reproduce the crash on the selected device, then probe faultlogger again immediately.
 
+For on-device behavior bugs (not only jscrash), prefer live `hilog` over Cursor localhost ingest: the HAP cannot POST to the PC's `127.0.0.1`. Tag lines distinctly, then `devecocli log --device <id> --bundle-name <bundleName> --follow` and grep the capture. See AGENTS.md Builds and diagnostics.
+
 If faultlogger is unavailable, the reproduced crash still does not create a matching faultlog, or the parsed faultlog is still not enough, fall back to hilog:
 
 ```bash

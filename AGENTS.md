@@ -21,6 +21,7 @@ Treat this rule as workspace-wide policy. When it conflicts with default agent h
 
 - To actually check for syntactical correctness and build errors, always use `.\build.ps1` to build the project.
 - Initial syntax diagnostics from OpenHarmony tooling may be false positives; prefer HarmonyOS and DevEco Studio behavior when they disagree.
+- **Runtime debug logs go through `hilog`, not localhost ingest.** The app runs on the HarmonyOS device. `fetch` / HTTP to `127.0.0.1` from the device does not reach the PC, so Cursor debug-ingest URLs will stay empty. Instrument with `hilog` (`import { hilog } from '@kit.PerformanceAnalysisKit'`), use a distinctive tag (for example `hilog.info(0, 'DBG-justpdf', 'location|message|data')`), deploy, then collect with `devecocli log --device <id> --bundle-name deyu.just.pdf --follow` and search that capture for the tag. Remove the temporary logs after the issue is confirmed.
 
 ## HarmonyOS documentation
 
