@@ -1,5 +1,6 @@
 # JustPDF - Build/install via devecocli, then launch with hdc `aa start -D`
 # May leave the app waiting at splash until a debugger attaches.
+# Default: every connected device. Use -Target <serial> for one device.
 
 param(
     [switch]$ClearLogs,

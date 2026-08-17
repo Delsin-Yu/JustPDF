@@ -66,9 +66,9 @@ function Resolve-HapPath {
 function Resolve-DeployDevice {
     <#
     .SYNOPSIS
-    Resolve a device serial for `devecocli --device`.
-    Uses hdc-target.ps1 for discovery / interactive pick.
-    When ResolvedTarget is "all", returns every connected key (caller loops).
+    Resolve device serials for `devecocli --device`.
+    With no SpecifiedTarget, returns every connected key (caller loops).
+    Pass a serial or "all" via SpecifiedTarget.
     #>
     param(
         [string]$SpecifiedTarget,

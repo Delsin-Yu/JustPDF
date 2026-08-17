@@ -1,5 +1,6 @@
 # JustPDF - Build, deploy, and launch normally via devecocli
 # Non-debug launch path (no aa start -D).
+# Default: every connected device. Use -Target <serial> for one device.
 
 param(
     [switch]$ClearLogs,

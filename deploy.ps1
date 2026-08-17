@@ -1,4 +1,5 @@
 # JustPDF - Deploy existing HAP and launch via devecocli (no build)
+# Default: every connected device. Use -Target <serial> for one device.
 
 param(
     [switch]$ClearLogs,

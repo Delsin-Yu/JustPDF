@@ -235,7 +235,7 @@ function Resolve-HdcTarget {
     <#
     .SYNOPSIS
     Returns an HDC connect key, or "all" to run on every connected target.
-    Auto-selects when exactly one target is connected; prompts when multiple (default: all).
+    With no -SpecifiedTarget, uses every connected device. Pass a serial to target one.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -271,29 +271,9 @@ function Resolve-HdcTarget {
         return $Key
     }
 
-    Show-HdcTargets -Hdc $Hdc | Out-Null
-    Write-Host '  [0] 全部设备 (all，默认)' -ForegroundColor Green
-    Write-Host ''
-    $Choice = Read-Host '检测到多个设备，请输入编号 [0=all，Enter=全部]'
-    $Trimmed = $Choice.Trim()
-
-    if (-not $Trimmed -or $Trimmed -eq '0' -or (Test-HdcResolvedTargetIsAll -ResolvedTarget $Trimmed)) {
-        Write-Host '已选择: 全部设备' -ForegroundColor Green
-        return 'all'
-    }
-
-    if ($Trimmed -notmatch ('^\d+' + '$')) {
-        throw "无效选择：$Choice"
-    }
-
-    $Index = [int]$Trimmed - 1
-    if ($Index -lt 0 -or $Index -ge $Count) {
-        throw ('无效编号 {0}，请输入 1-{1}、0 或 all' -f $Trimmed, $Count)
-    }
-
-    $Key = Get-HdcTargetKeyFromLine -Line $Targets[$Index]
-    Write-Host ('已选择设备: ' + $Key) -ForegroundColor Green
-    return $Key
+    Show-HdcTargets -Hdc $Hdc -Title '将部署到全部已连接设备:' | Out-Null
+    Write-Host ('共 {0} 台，使用 -Target <serial> 可只装一台。' -f $Count) -ForegroundColor DarkGray
+    return 'all'
 }
 
 function Test-HdcAvailable {
