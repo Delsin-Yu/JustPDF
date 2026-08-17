@@ -544,6 +544,8 @@ export class PDFPageTurnController {
             return;
           }
           this.assignTransitionSlot(kind, slot, cache);
+        })
+        .catch((_e: Error) => {
         }));
     }
     await Promise.all(tasks);

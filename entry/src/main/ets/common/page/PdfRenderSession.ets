@@ -195,6 +195,34 @@ export class PdfRenderSession {
     // 已派发飞行中：结果返回时按 pending 缺失丢弃
   }
 
+  /**
+   * 取消主机队列中不在 keep 集合内的光栅任务。
+   * 不拒绝已派发到 Worker 的飞行中请求，以便完成后仍写入缓存。
+   */
+  cancelQueuedExcept(keepPageIndices: number[]): number[] {
+    const cancelledIds: number[] = [];
+    const kept: QueuedRenderJob[] = [];
+    for (let i = 0; i < this.renderQueue.length; i++) {
+      const job = this.renderQueue[i];
+      if (keepPageIndices.indexOf(job.pageIndex) >= 0) {
+        kept.push(job);
+      } else {
+        cancelledIds.push(job.requestId);
+        const pending = this.pendingRender.get(job.requestId);
+        if (pending !== undefined) {
+          this.pendingRender.delete(job.requestId);
+          pending.reject(new Error('canceled'));
+        }
+      }
+    }
+    this.renderQueue = kept;
+    if (cancelledIds.length > 0) {
+      hilog.info(0, 'PdfRenderSession',
+        '已取消过期排队光栅 count=' + cancelledIds.length.toString());
+    }
+    return cancelledIds;
+  }
+
   cancelAll(): void {
     const renderIds: number[] = [];
     this.pendingRender.forEach((_value: PendingRenderRequest, key: number) => {
@@ -270,7 +298,8 @@ export class PdfRenderSession {
   private enqueueJob(job: QueuedRenderJob): void {
     let insertAt: number = this.renderQueue.length;
     for (let i = 0; i < this.renderQueue.length; i++) {
-      if (this.renderQueue[i].priority < job.priority) {
+      // 同优先级插到该档最前（LIFO），最新导航页先于过期 HIGH 任务派发
+      if (this.renderQueue[i].priority <= job.priority) {
         insertAt = i;
         break;
       }
