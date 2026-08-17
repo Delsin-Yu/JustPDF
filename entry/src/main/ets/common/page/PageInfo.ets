@@ -14,6 +14,15 @@ import {
   Stroke
 } from './Stroke';
 import {
+  AnnotationLayer,
+  AnnotationLayerListItem,
+  createDefaultLayer,
+  DefaultLayerName,
+  isProtectedLayer,
+  nextLayerName,
+  parseLayerContent
+} from './AnnotationLayer';
+import {
   MIN_RENDER_SCALE,
   PageCache,
   PREVIEW_RENDER_SCALE,
@@ -59,6 +68,9 @@ export class PageInfo implements ReadonlyPageInfo {
   private _pdfPage: pdfService.PdfPage | undefined = undefined;
   private pdfDocument: pdfService.PdfDocument;
   public strokes: Stroke[] = [];
+  public layers: AnnotationLayer[] = [];
+  public activeLayerId: string = '';
+  private deletedLayers: AnnotationLayer[] = [];
   private caches: Map<number, PageCache> = new Map();
   private pendingTasks: Map<number, PendingCacheTask> = new Map();
   private pagePath: string;
@@ -93,6 +105,7 @@ export class PageInfo implements ReadonlyPageInfo {
     this.pdfDocument = pdfDocument;
     this.pagePath = pagePath;
     this.openPassword = openPassword;
+    this.resetLayerCatalog();
   }
 
   public getPageLinks(): PdfLinkAnnotation[] {
@@ -214,6 +227,24 @@ export class PageInfo implements ReadonlyPageInfo {
 
     this.pendingTasks.set(renderScale, { requestId: -1, promise: promise });
     return promise;
+  }
+
+  /**
+   * 丢弃已从主机队列取消、或尚未拿到 requestId 的 pending。
+   * 飞行中任务保留，避免快速滑回同一页时重复派发。
+   */
+  public abandonQueuedPending(cancelledRequestIds: number[]): void {
+    const scalesToDrop: number[] = [];
+    for (const pair of this.pendingTasks.entries()) {
+      const scale = pair[0];
+      const pendingTask = pair[1];
+      if (pendingTask.requestId < 0 || cancelledRequestIds.indexOf(pendingTask.requestId) >= 0) {
+        scalesToDrop.push(scale);
+      }
+    }
+    for (let i = 0; i < scalesToDrop.length; i++) {
+      this.pendingTasks.delete(scalesToDrop[i]);
+    }
   }
 
   /**
@@ -412,6 +443,297 @@ export class PageInfo implements ReadonlyPageInfo {
     this.invalidateCaches();
   }
 
+  public resetLayerCatalog(): void {
+    const layer: AnnotationLayer = createDefaultLayer();
+    this.layers = [layer];
+    this.activeLayerId = layer.id;
+    this.deletedLayers = [];
+  }
+
+  public findLayer(layerId: string): AnnotationLayer | undefined {
+    for (let i = 0; i < this.layers.length; i++) {
+      if (this.layers[i].id === layerId) {
+        return this.layers[i];
+      }
+    }
+    return undefined;
+  }
+
+  public isLayerVisible(layerId: string): boolean {
+    if (layerId.length === 0) {
+      return this.ensureDefaultLayerPresent().visible;
+    }
+    const layer: AnnotationLayer | undefined = this.findLayer(layerId);
+    if (layer === undefined) {
+      return true;
+    }
+    return layer.visible;
+  }
+
+  public isStrokeVisible(stroke: ReadonlyStroke): boolean {
+    return this.isLayerVisible(stroke.layerId);
+  }
+
+  public ensureDefaultLayerPresent(): AnnotationLayer {
+    if (this.layers.length === 0) {
+      this.resetLayerCatalog();
+    }
+    return this.layers[0];
+  }
+
+  public ensureLayerForStroke(stroke: Stroke): void {
+    if (stroke.layerId.length === 0) {
+      stroke.layerId = this.ensureDefaultLayerPresent().id;
+      return;
+    }
+    if (this.findLayer(stroke.layerId) !== undefined) {
+      return;
+    }
+    for (let i = 0; i < this.deletedLayers.length; i++) {
+      if (this.deletedLayers[i].id === stroke.layerId) {
+        this.layers.push(this.deletedLayers[i]);
+        this.deletedLayers.splice(i, 1);
+        this.sortLayersInPlace(this.layers);
+        return;
+      }
+    }
+    this.layers.push(new AnnotationLayer(stroke.layerId, nextLayerName(this.layers), true, this.layers.length));
+  }
+
+  public setActiveLayer(layerId: string): boolean {
+    if (this.findLayer(layerId) === undefined) {
+      return false;
+    }
+    if (this.activeLayerId === layerId) {
+      return false;
+    }
+    this.activeLayerId = layerId;
+    return true;
+  }
+
+  public setLayerVisible(layerId: string, visible: boolean): boolean {
+    const layer: AnnotationLayer | undefined = this.findLayer(layerId);
+    if (layer === undefined) {
+      return false;
+    }
+    if (layer.visible === visible) {
+      return false;
+    }
+    layer.visible = visible;
+    return true;
+  }
+
+  public addNamedLayer(name: string): AnnotationLayer {
+    const trimmed: string = name.trim();
+    const layerName: string = trimmed.length > 0 ? trimmed : nextLayerName(this.layers);
+    const layer: AnnotationLayer = new AnnotationLayer(
+      util.generateRandomUUID(true),
+      layerName,
+      true,
+      this.layers.length
+    );
+    this.layers.push(layer);
+    this.activeLayerId = layer.id;
+    return layer;
+  }
+
+  public isProtectedLayer(layerId: string): boolean {
+    return isProtectedLayer(this.layers, layerId);
+  }
+
+  public renameLayer(layerId: string, name: string): boolean {
+    const trimmed: string = name.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    if (this.isProtectedLayer(layerId)) {
+      return false;
+    }
+    const layer: AnnotationLayer | undefined = this.findLayer(layerId);
+    if (layer === undefined) {
+      return false;
+    }
+    layer.name = trimmed;
+    return true;
+  }
+
+  public deleteLayer(layerId: string): Stroke[] {
+    if (this.isProtectedLayer(layerId)) {
+      return [];
+    }
+    const layer: AnnotationLayer | undefined = this.findLayer(layerId);
+    if (layer === undefined) {
+      return [];
+    }
+    const removed: Stroke[] = [];
+    const kept: Stroke[] = [];
+    for (let i = 0; i < this.strokes.length; i++) {
+      if (this.strokes[i].layerId === layerId) {
+        removed.push(this.strokes[i]);
+      } else {
+        kept.push(this.strokes[i]);
+      }
+    }
+    this.strokes = kept;
+    this.deletedLayers.push(layer);
+    const remaining: AnnotationLayer[] = [];
+    for (let i = 0; i < this.layers.length; i++) {
+      if (this.layers[i].id !== layerId) {
+        remaining.push(this.layers[i]);
+      }
+    }
+    this.layers = remaining;
+    if (this.layers.length === 0) {
+      this.resetLayerCatalog();
+    } else if (this.activeLayerId === layerId) {
+      this.activeLayerId = this.pickActiveLayerId();
+    }
+    return removed;
+  }
+
+  public toLayerListItems(): AnnotationLayerListItem[] {
+    const items: AnnotationLayerListItem[] = [];
+    for (let i = 0; i < this.layers.length; i++) {
+      const layer: AnnotationLayer = this.layers[i];
+      items.push(new AnnotationLayerListItem(
+        layer.id,
+        layer.name,
+        layer.visible,
+        layer.order,
+        this.countStrokesOnLayer(layer.id),
+        layer.id === this.activeLayerId,
+        i === 0
+      ));
+    }
+    return items;
+  }
+
+  public rebuildLayersFromStrokes(): void {
+    const collected: AnnotationLayer[] = [];
+    let defaultLayer: AnnotationLayer | undefined = undefined;
+
+    for (let i = 0; i < this.strokes.length; i++) {
+      const stroke: Stroke = this.strokes[i];
+      const sourceInfo: pdfService.PolylineAnnotationInfo | undefined = this.getImportedSourceInfo(stroke);
+      const parsed = sourceInfo !== undefined ? parseLayerContent(sourceInfo.content) : undefined;
+
+      if (parsed !== undefined) {
+        stroke.layerId = parsed.layerId;
+        if (this.findLayerIn(collected, parsed.layerId) === undefined) {
+          let name: string = DefaultLayerName;
+          if (sourceInfo !== undefined && sourceInfo.title !== undefined && sourceInfo.title.length > 0) {
+            name = sourceInfo.title;
+          }
+          collected.push(new AnnotationLayer(parsed.layerId, name, parsed.visible, parsed.order));
+        }
+        continue;
+      }
+
+      if (stroke.layerId.length > 0) {
+        if (this.findLayerIn(collected, stroke.layerId) === undefined) {
+          const previous: AnnotationLayer | undefined = this.findLayer(stroke.layerId);
+          if (previous !== undefined) {
+            collected.push(new AnnotationLayer(previous.id, previous.name, previous.visible, previous.order));
+          } else {
+            collected.push(new AnnotationLayer(stroke.layerId, nextLayerName(collected), true, collected.length));
+          }
+        }
+        continue;
+      }
+
+      if (defaultLayer === undefined) {
+        defaultLayer = createDefaultLayer();
+        collected.push(defaultLayer);
+      }
+      stroke.layerId = defaultLayer.id;
+    }
+
+    if (collected.length === 0) {
+      this.resetLayerCatalog();
+      return;
+    }
+
+    const ordered: AnnotationLayer[] = this.placeProtectedDefaultFirst(collected, defaultLayer);
+    for (let i = 0; i < ordered.length; i++) {
+      ordered[i].order = i;
+    }
+    this.layers = ordered;
+    this.deletedLayers = [];
+    this.activeLayerId = this.pickActiveLayerId();
+  }
+
+  private countStrokesOnLayer(layerId: string): number {
+    let count: number = 0;
+    for (let i = 0; i < this.strokes.length; i++) {
+      if (this.strokes[i].layerId === layerId) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private pickActiveLayerId(): string {
+    if (this.findLayer(this.activeLayerId) !== undefined) {
+      return this.activeLayerId;
+    }
+    for (let i = this.layers.length - 1; i >= 0; i--) {
+      if (this.layers[i].visible) {
+        return this.layers[i].id;
+      }
+    }
+    return this.layers[this.layers.length - 1].id;
+  }
+
+  private findLayerIn(layers: AnnotationLayer[], layerId: string): AnnotationLayer | undefined {
+    for (let i = 0; i < layers.length; i++) {
+      if (layers[i].id === layerId) {
+        return layers[i];
+      }
+    }
+    return undefined;
+  }
+
+  private sortLayersInPlace(layers: AnnotationLayer[]): void {
+    layers.sort((left: AnnotationLayer, right: AnnotationLayer) => {
+      return left.order - right.order;
+    });
+  }
+
+  private placeProtectedDefaultFirst(
+    collected: AnnotationLayer[],
+    defaultLayer: AnnotationLayer | undefined
+  ): AnnotationLayer[] {
+    let protectedLayer: AnnotationLayer | undefined = defaultLayer;
+    if (protectedLayer === undefined) {
+      for (let i = 0; i < collected.length; i++) {
+        if (collected[i].name === DefaultLayerName) {
+          protectedLayer = collected[i];
+          break;
+        }
+      }
+    }
+    if (protectedLayer === undefined) {
+      protectedLayer = createDefaultLayer();
+    } else {
+      protectedLayer.name = DefaultLayerName;
+    }
+    const ordered: AnnotationLayer[] = [protectedLayer];
+    this.sortLayersInPlace(collected);
+    for (let i = 0; i < collected.length; i++) {
+      if (collected[i].id !== protectedLayer.id) {
+        ordered.push(collected[i]);
+      }
+    }
+    return ordered;
+  }
+
+  private getImportedSourceInfo(stroke: ReadonlyStroke): pdfService.PolylineAnnotationInfo | undefined {
+    if (stroke.source === undefined || stroke.source.kind !== 'importedPdfPolyline') {
+      return undefined;
+    }
+    return stroke.source.annotationInfo;
+  }
+
   public importPdfPolylineAnnotations(uiContext: UIContext, canvasOverSampling: number): number {
     if (this.importedPdfPolylineSources.length > 0) {
       return 0;
@@ -446,6 +768,7 @@ export class PageInfo implements ReadonlyPageInfo {
     if (annotationsToRemove.length > 0) {
       this.invalidateCaches();
     }
+    this.rebuildLayersFromStrokes();
     return annotationsToRemove.length;
   }
 
@@ -465,6 +788,7 @@ export class PageInfo implements ReadonlyPageInfo {
     const restoredCount = this.importedPdfPolylineSources.length;
     this.strokes = this.strokes.filter((stroke: Stroke) => stroke.source?.kind !== 'importedPdfPolyline');
     this.importedPdfPolylineSources = [];
+    this.rebuildLayersFromStrokes();
     this.invalidateCaches();
     return restoredCount;
   }
@@ -528,13 +852,45 @@ export class PageInfo implements ReadonlyPageInfo {
     }
 
     const pdfLineColor = annotationInfo.lineColor ?? DefaultAnnotationColor.pdfColor;
-    return new Stroke(path, points, pdfLineColor, source);
+    const parsed = parseLayerContent(annotationInfo.content);
+    const layerId: string = parsed !== undefined ? parsed.layerId : '';
+    return new Stroke(path, points, pdfLineColor, source, layerId);
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
-    for (const stroke of this.strokes) {
-      stroke.stroke(renderingContext);
+    const orderedLayers: AnnotationLayer[] = [];
+    for (let i = 0; i < this.layers.length; i++) {
+      orderedLayers.push(this.layers[i]);
     }
+    this.sortLayersInPlace(orderedLayers);
+    const defaultLayerId: string = this.ensureDefaultLayerPresent().id;
+
+    for (let i = 0; i < orderedLayers.length; i++) {
+      const layer: AnnotationLayer = orderedLayers[i];
+      if (!layer.visible) {
+        continue;
+      }
+      for (let j = 0; j < this.strokes.length; j++) {
+        const stroke: Stroke = this.strokes[j];
+        if (this.strokeBelongsToLayer(stroke, layer.id, defaultLayerId)) {
+          stroke.stroke(renderingContext);
+        }
+      }
+    }
+
+    for (let j = 0; j < this.strokes.length; j++) {
+      const stroke: Stroke = this.strokes[j];
+      if (stroke.layerId.length > 0 && this.findLayer(stroke.layerId) === undefined) {
+        stroke.stroke(renderingContext);
+      }
+    }
+  }
+
+  private strokeBelongsToLayer(stroke: ReadonlyStroke, layerId: string, defaultLayerId: string): boolean {
+    if (stroke.layerId === layerId) {
+      return true;
+    }
+    return stroke.layerId.length === 0 && layerId === defaultLayerId;
   }
 
   public async getPageCacheAsync(
@@ -590,5 +946,18 @@ export class PageInfo implements ReadonlyPageInfo {
 
   get strokesCount(): number {
     return this.strokes.length;
+  }
+
+  public hasUnsavedStrokeEdits(): boolean {
+    let importedRemaining: number = 0;
+    for (let i = 0; i < this.strokes.length; i++) {
+      const source = this.strokes[i].source;
+      if (source !== undefined && source.kind === 'importedPdfPolyline') {
+        importedRemaining++;
+      } else {
+        return true;
+      }
+    }
+    return importedRemaining !== this.importedPdfPolylineSources.length;
   }
 }

@@ -14,6 +14,7 @@ export interface ReadonlyStroke {
   readonly pdfLineColor: number;
   readonly canvasColor: string;
   readonly source: StrokeSource | undefined;
+  readonly layerId: string;
   stroke(renderingContext: CanvasRenderingContext2D): void;
 }
 
@@ -27,18 +28,21 @@ export class Stroke implements ReadonlyStroke {
   pdfLineColor: number;
   canvasColor: string;
   source: StrokeSource | undefined;
+  layerId: string;
 
   constructor(
     path: Path2D,
     points: Vector2[],
     pdfLineColor: number = DefaultAnnotationColor.pdfColor,
-    source: StrokeSource | undefined = undefined
+    source: StrokeSource | undefined = undefined,
+    layerId: string = ''
   ) {
     this.path = path;
     this.points = points;
     this.pdfLineColor = pdfLineColor;
     this.canvasColor = pdfColorToCanvasColor(pdfLineColor);
     this.source = source;
+    this.layerId = layerId;
   }
 
   public stroke(renderingContext: CanvasRenderingContext2D): void {
