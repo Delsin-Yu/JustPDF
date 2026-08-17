@@ -6,6 +6,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PageInfo } from './PageInfo';
 import { PdfLinkAnnotation } from './PdfLinks';
 import { ReadonlyStroke, Stroke } from './Stroke';
+import { AnnotationLayer, AnnotationLayerListItem, nextLayerName } from './AnnotationLayer';
 import {
   MIN_RENDER_SCALE,
   PageCache,
@@ -281,6 +282,20 @@ export class PageStore implements IDataSource {
   }
 
   /**
+   * 取消不在 keep 集合内的排队光栅，并清掉对应 PageInfo pending。
+   * 飞行中任务不取消，完成后仍写入缓存。
+   */
+  public cancelQueuedPendingExcept(keepPageIndices: number[]): void {
+    const cancelledIds = PdfRenderSession.getInstance().cancelQueuedExcept(keepPageIndices);
+    for (let i = 0; i < this.pages.length; i++) {
+      if (this.indexInDisplayed(keepPageIndices, i)) {
+        continue;
+      }
+      this.pages[i].abandonQueuedPending(cancelledIds);
+    }
+  }
+
+  /**
    * Prefetches pages around the center index and evicts caches for distant pages.
    * @param centerIndex The current page index being viewed
    * @param prefetchRange Number of pages to prefetch on each side (default: 3)
@@ -365,6 +380,10 @@ export class PageStore implements IDataSource {
     return this.getPageInfo(index).strokesCount;
   }
 
+  public hasUnsavedStrokeEdits(index: number): boolean {
+    return this.getPageInfo(index).hasUnsavedStrokeEdits();
+  }
+
   public getPageRawSize(index: number): Vector2 {
     const pageInfo = this.getPageInfo(index);
     return Vec2(pageInfo.pdfPage.getWidth(), pageInfo.pdfPage.getHeight());
@@ -416,7 +435,9 @@ export class PageStore implements IDataSource {
   }
 
   public addStroke(index: number, pathWithPoints: Stroke): void {
-    this.getPageInfo(index).strokes.push(pathWithPoints);
+    const pageInfo = this.getPageInfo(index);
+    pageInfo.ensureLayerForStroke(pathWithPoints);
+    pageInfo.strokes.push(pathWithPoints);
     this.markPageChanged(index);
   }
 
@@ -439,8 +460,10 @@ export class PageStore implements IDataSource {
   public clearAllStrokes(): void {
     const changedPageIndices: number[] = [];
     for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
-      if (this.pages[pageIndex].strokes.length > 0) {
-        this.pages[pageIndex].strokes = [];
+      const hadStrokes: boolean = this.pages[pageIndex].strokes.length > 0;
+      this.pages[pageIndex].strokes = [];
+      this.pages[pageIndex].resetLayerCatalog();
+      if (hadStrokes) {
         changedPageIndices.push(pageIndex);
       }
     }
@@ -448,6 +471,82 @@ export class PageStore implements IDataSource {
     for (const pageIndex of changedPageIndices) {
       this.listeners.forEach(listener => listener.onDataChange(pageIndex));
     }
+  }
+
+  public getPageLayers(pageIndex: number): AnnotationLayer[] {
+    return this.getPageInfo(pageIndex).layers;
+  }
+
+  public getPageLayer(pageIndex: number, layerId: string): AnnotationLayer | undefined {
+    return this.getPageInfo(pageIndex).findLayer(layerId);
+  }
+
+  public getPageLayerItems(pageIndex: number): AnnotationLayerListItem[] {
+    return this.getPageInfo(pageIndex).toLayerListItems();
+  }
+
+  public getActiveLayerId(pageIndex: number): string {
+    return this.getPageInfo(pageIndex).activeLayerId;
+  }
+
+  public isPageStrokeVisible(pageIndex: number, stroke: ReadonlyStroke): boolean {
+    return this.getPageInfo(pageIndex).isStrokeVisible(stroke);
+  }
+
+  public setActiveLayer(pageIndex: number, layerId: string): boolean {
+    const changed: boolean = this.getPageInfo(pageIndex).setActiveLayer(layerId);
+    if (changed) {
+      this.markPageChanged(pageIndex);
+    }
+    return changed;
+  }
+
+  public setLayerVisible(pageIndex: number, layerId: string, visible: boolean): boolean {
+    const changed: boolean = this.getPageInfo(pageIndex).setLayerVisible(layerId, visible);
+    if (changed) {
+      this.markPageChanged(pageIndex);
+    }
+    return changed;
+  }
+
+  public addLayer(pageIndex: number, name: string): AnnotationLayer {
+    const layer: AnnotationLayer = this.getPageInfo(pageIndex).addNamedLayer(name);
+    this.markPageChanged(pageIndex);
+    return layer;
+  }
+
+  public addDefaultNamedLayer(pageIndex: number): AnnotationLayer {
+    const pageInfo = this.getPageInfo(pageIndex);
+    return this.addLayer(pageIndex, nextLayerName(pageInfo.layers));
+  }
+
+  public renameLayer(pageIndex: number, layerId: string, name: string): boolean {
+    const changed: boolean = this.getPageInfo(pageIndex).renameLayer(layerId, name);
+    if (changed) {
+      this.markPageChanged(pageIndex);
+    }
+    return changed;
+  }
+
+  public deleteLayer(pageIndex: number, layerId: string): Stroke[] {
+    const pageInfo = this.getPageInfo(pageIndex);
+    if (pageInfo.isProtectedLayer(layerId)) {
+      return [];
+    }
+    const removed: Stroke[] = pageInfo.deleteLayer(layerId);
+    this.markPageChanged(pageIndex);
+    return removed;
+  }
+
+  public ensureActiveLayerVisible(pageIndex: number): boolean {
+    const pageInfo = this.getPageInfo(pageIndex);
+    const layer: AnnotationLayer | undefined = pageInfo.findLayer(pageInfo.activeLayerId);
+    if (layer !== undefined && !layer.visible) {
+      layer.visible = true;
+      this.markPageChanged(pageIndex);
+      return true;
+    }
+    return false;
   }
 
   public invalidateCaches(pageIndex: number): void {
