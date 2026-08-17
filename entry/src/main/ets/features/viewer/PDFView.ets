@@ -1,4 +1,4 @@
-import { ContainerCfg, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
+import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
 import { hasUnsavedDocumentChanges, promptUnsavedChangesAction, UnsavedChangesChoice } from '../../common/ui/UnsavedChangesPrompt';
 import { reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
 import {
@@ -404,7 +404,7 @@ struct PDFView {
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
-  /** 系统栏 / 导航指示条 / 标题按钮避让（px），仅约束交互控件，根布局不整体 padding */
+  /** 系统栏 / 导航指示条 / 标题按钮避让（px），主要约束浮动面板，常驻控件只用 ContainerPadding */
   @Local avoidAreaTopPx: number = 0;
   @Local avoidAreaBottomPx: number = 0;
   @Local avoidAreaLeftPx: number = 0;
@@ -1037,17 +1037,6 @@ struct PDFView {
 
   private getSafeRightVp(): number {
     return this.getUIContext().px2vp(this.avoidAreaRightPx);
-  }
-
-  private getChromeMargin(): Padding {
-    const edgeVp: number = this.getUIContext().px2vp(16);
-    const padding: Padding = {
-      left: edgeVp,
-      right: edgeVp,
-      top: edgeVp,
-      bottom: edgeVp + this.getSafeBottomVp()
-    };
-    return padding;
   }
 
   private getMetronomeClampParams(): FloatingPanelClampParams {
@@ -3962,7 +3951,7 @@ struct PDFView {
           .hitTestBehavior(HitTestMode.Transparent)
         }
         .alignRules(FullRect)
-        .margin(this.getChromeMargin())
+        .margin(ContainerPadding)
         .hitTestBehavior(HitTestMode.Transparent)
         .opacity(this.viewerViewModel.controlsTransparency)
 
