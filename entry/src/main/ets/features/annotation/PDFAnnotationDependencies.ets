@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { pdfService } from '@kit.PDFKit';
 import { taskpool } from '@kit.ArkTS';
 import { PageStore } from '../../common/page/PageStore';
+import { AnnotationLayer, AnnotationLayerListItem } from '../../common/page/AnnotationLayer';
 import { ReadonlyStroke, Stroke } from '../../common/page/Stroke';
 import { Vector2 } from '../../common/ui/Numbers';
 import { PDFAnnotateMode } from '../viewer/PDFViewerViewModel';
@@ -18,6 +19,7 @@ export interface AnnotatePreparePhaseOptions {
 export interface StrokeStore {
   totalPageCount(): number;
   getPageStrokesCount(pageIndex: number): number;
+  hasUnsavedStrokeEdits(pageIndex: number): boolean;
   getPageRawSize(pageIndex: number): Vector2;
   iteratePageStrokes(pageIndex: number): Iterable<ReadonlyStroke>;
   strokePage(pageIndex: number, renderingContext: CanvasRenderingContext2D): void;
@@ -25,6 +27,17 @@ export interface StrokeStore {
   removeStroke(pageIndex: number, pathWithPoints: Stroke): void;
   removeStrokeWhere(pageIndex: number, predicate: (stroke: ReadonlyStroke) => boolean): void;
   clearAllStrokes(): void;
+  getPageLayers(pageIndex: number): AnnotationLayer[];
+  getPageLayer(pageIndex: number, layerId: string): AnnotationLayer | undefined;
+  getPageLayerItems(pageIndex: number): AnnotationLayerListItem[];
+  getActiveLayerId(pageIndex: number): string;
+  isPageStrokeVisible(pageIndex: number, stroke: ReadonlyStroke): boolean;
+  setActiveLayer(pageIndex: number, layerId: string): boolean;
+  setLayerVisible(pageIndex: number, layerId: string, visible: boolean): boolean;
+  addDefaultNamedLayer(pageIndex: number): AnnotationLayer;
+  renameLayer(pageIndex: number, layerId: string, name: string): boolean;
+  deleteLayer(pageIndex: number, layerId: string): Stroke[];
+  ensureActiveLayerVisible(pageIndex: number): boolean;
   invalidateCaches(pageIndex: number): void;
   setPagePath(pagePath: string): void;
   ensureCached(pageIndex: number, renderScale: number, priority: taskpool.Priority): void;
@@ -104,6 +117,10 @@ export class PageStoreStrokeStore implements StrokeStore {
     return this.pageStore.getPageStrokesCount(pageIndex);
   }
 
+  hasUnsavedStrokeEdits(pageIndex: number): boolean {
+    return this.pageStore.hasUnsavedStrokeEdits(pageIndex);
+  }
+
   getPageRawSize(pageIndex: number): Vector2 {
     return this.pageStore.getPageRawSize(pageIndex);
   }
@@ -130,6 +147,50 @@ export class PageStoreStrokeStore implements StrokeStore {
 
   clearAllStrokes(): void {
     this.pageStore.clearAllStrokes();
+  }
+
+  getPageLayers(pageIndex: number): AnnotationLayer[] {
+    return this.pageStore.getPageLayers(pageIndex);
+  }
+
+  getPageLayer(pageIndex: number, layerId: string): AnnotationLayer | undefined {
+    return this.pageStore.getPageLayer(pageIndex, layerId);
+  }
+
+  getPageLayerItems(pageIndex: number): AnnotationLayerListItem[] {
+    return this.pageStore.getPageLayerItems(pageIndex);
+  }
+
+  getActiveLayerId(pageIndex: number): string {
+    return this.pageStore.getActiveLayerId(pageIndex);
+  }
+
+  isPageStrokeVisible(pageIndex: number, stroke: ReadonlyStroke): boolean {
+    return this.pageStore.isPageStrokeVisible(pageIndex, stroke);
+  }
+
+  setActiveLayer(pageIndex: number, layerId: string): boolean {
+    return this.pageStore.setActiveLayer(pageIndex, layerId);
+  }
+
+  setLayerVisible(pageIndex: number, layerId: string, visible: boolean): boolean {
+    return this.pageStore.setLayerVisible(pageIndex, layerId, visible);
+  }
+
+  addDefaultNamedLayer(pageIndex: number): AnnotationLayer {
+    return this.pageStore.addDefaultNamedLayer(pageIndex);
+  }
+
+  renameLayer(pageIndex: number, layerId: string, name: string): boolean {
+    return this.pageStore.renameLayer(pageIndex, layerId, name);
+  }
+
+  deleteLayer(pageIndex: number, layerId: string): Stroke[] {
+    return this.pageStore.deleteLayer(pageIndex, layerId);
+  }
+
+  ensureActiveLayerVisible(pageIndex: number): boolean {
+    return this.pageStore.ensureActiveLayerVisible(pageIndex);
   }
 
   invalidateCaches(pageIndex: number): void {

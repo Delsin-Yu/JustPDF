@@ -6,6 +6,13 @@ import { taskpool, util } from '@kit.ArkTS';
 import { showAlertDialog } from '../../common/ui/UIComponents';
 import { Stack as DataStack } from '../../common/ui/Colletions';
 import { History, NewStroke, ReadonlyStroke, Stroke } from '../../common/page/Stroke';
+import {
+  AnnotationLayer,
+  AnnotationLayerListItem,
+  DefaultLayerName,
+  encodeLayerContent,
+  JustPdfLayerSubject
+} from '../../common/page/AnnotationLayer';
 import { mul, pxToVp, Vec2, Vector2 } from '../../common/ui/Numbers';
 import { PDFAnnotateMode, ViewerMinRenderScale } from '../viewer/PDFViewerViewModel';
 import {
@@ -31,7 +38,6 @@ const AnnotationPrefCustomPdfKey: string = 'annotationCustomPdfColor';
 const AnnotationPrefRecentCustomPdfsKey: string = 'annotationRecentCustomPdfColors';
 
 const DefaultAnnotationCanvasOverSampling: number = 3;
-const DefaultAnnotationSubject: string = '由 Just PDF 创建的注释';
 
 /**
  * 测试用：每个保存阶段额外停留时长（毫秒）。5 个阶段合计约 ≥2.5s，便于观察右上角指示器。
@@ -73,6 +79,10 @@ export class PDFAnnotationController {
   @Trace public selectedDrawColor: AnnotationColor = DefaultAnnotationColor;
   @Trace public customDrawColor: AnnotationColor = DefaultCustomAnnotationColor;
   @Trace public recentCustomColors: AnnotationColor[] = [];
+  @Trace public layerItems: AnnotationLayerListItem[] = [];
+  @Trace public layerPanelPageIndex: number = 0;
+  @Trace public layerCatalogRevision: number = 0;
+  private layerCatalogDirty: boolean = false;
 
   constructor(dependencies: PDFAnnotationControllerDependencies, canvasOverSampling: number = DefaultAnnotationCanvasOverSampling) {
     this.dependencies = dependencies;
@@ -230,8 +240,88 @@ export class PDFAnnotationController {
     this.dependencies.strokes.clearAllStrokes();
     this.dependencies.strokes.clearImportedPdfPolylineTracking();
     this.clearHistory();
+    this.layerCatalogDirty = false;
     this.hasUnsavedStrokes = false;
     this.importedPolylinePrepared = false;
+    this.refreshLayerItems();
+  }
+
+  setLayerPanelPageIndex(pageIndex: number): void {
+    if (pageIndex < 0) {
+      return;
+    }
+    this.layerPanelPageIndex = pageIndex;
+    this.refreshLayerItems();
+  }
+
+  refreshLayerItems(): void {
+    this.layerItems = this.dependencies.strokes.getPageLayerItems(this.layerPanelPageIndex);
+    this.layerCatalogRevision = this.layerCatalogRevision + 1;
+  }
+
+  setActiveLayer(layerId: string): boolean {
+    const pageIndex: number = this.layerPanelPageIndex;
+    const changed: boolean = this.dependencies.strokes.setActiveLayer(pageIndex, layerId);
+    const shown: boolean = this.dependencies.strokes.ensureActiveLayerVisible(pageIndex);
+    if (shown) {
+      this.markLayerCatalogDirty();
+      this.dependencies.host.onRedrawRequested();
+      return true;
+    }
+    if (changed) {
+      this.refreshLayerItems();
+    }
+    return changed;
+  }
+
+  setLayerVisible(layerId: string, visible: boolean): boolean {
+    const changed: boolean = this.dependencies.strokes.setLayerVisible(this.layerPanelPageIndex, layerId, visible);
+    if (!changed) {
+      return false;
+    }
+    this.markLayerCatalogDirty();
+    this.dependencies.host.onRedrawRequested();
+    return true;
+  }
+
+  addLayer(): AnnotationLayer {
+    const layer: AnnotationLayer = this.dependencies.strokes.addDefaultNamedLayer(this.layerPanelPageIndex);
+    this.markLayerCatalogDirty();
+    return layer;
+  }
+
+  renameLayer(layerId: string, name: string): boolean {
+    const changed: boolean = this.dependencies.strokes.renameLayer(this.layerPanelPageIndex, layerId, name);
+    if (!changed) {
+      return false;
+    }
+    this.markLayerCatalogDirty();
+    return true;
+  }
+
+  deleteLayer(layerId: string): boolean {
+    const pageIndex: number = this.layerPanelPageIndex;
+    const items: AnnotationLayerListItem[] = this.dependencies.strokes.getPageLayerItems(pageIndex);
+    if (items.length > 0 && items[0].isProtected && items[0].id === layerId) {
+      return false;
+    }
+    const removed: Stroke[] = this.dependencies.strokes.deleteLayer(pageIndex, layerId);
+    for (let i = 0; i < removed.length; i++) {
+      this.appendUndoHistory({
+        path: removed[i],
+        mode: 'erase',
+        pageIndex: pageIndex
+      });
+    }
+    this.markLayerCatalogDirty();
+    this.dependencies.host.onRedrawRequested();
+    return true;
+  }
+
+  private markLayerCatalogDirty(): void {
+    this.layerCatalogDirty = true;
+    this.hasUnsavedStrokes = true;
+    this.refreshLayerItems();
   }
 
   /**
@@ -377,6 +467,7 @@ export class PDFAnnotationController {
     }
     this.importedPolylinePrepared = true;
     this.updateUnsavedStrokesFlag();
+    this.refreshLayerItems();
     this.dependencies.host.onRedrawRequested();
   }
 
@@ -466,6 +557,8 @@ export class PDFAnnotationController {
       this.activeDrawPath.points.push(nudged);
     }
 
+    this.dependencies.strokes.ensureActiveLayerVisible(pageIndex);
+    this.activeDrawPath.layerId = this.dependencies.strokes.getActiveLayerId(pageIndex);
     this.dependencies.strokes.addStroke(pageIndex, this.activeDrawPath);
     this.appendUndoHistory({
       path: this.activeDrawPath,
@@ -473,6 +566,7 @@ export class PDFAnnotationController {
       pageIndex: pageIndex
     });
     this.updateUnsavedStrokesFlag();
+    this.refreshLayerItems();
     // 提交前清空持久画布，再整页重绘；否则旧笔画会叠绘，抗锯齿半透明边会越来越实。
     targetCtx.reset();
     this.loadPageStrokes(targetCtx, pageIndex);
@@ -495,6 +589,9 @@ export class PDFAnnotationController {
       if (this.pathsToErase.has(stroke)) {
         continue;
       }
+      if (!this.dependencies.strokes.isPageStrokeVisible(pageIndex, stroke)) {
+        continue;
+      }
       for (const strokePoint of stroke.points) {
         const dx = point.x - strokePoint.x;
         const dy = point.y - strokePoint.y;
@@ -509,9 +606,13 @@ export class PDFAnnotationController {
     targetCtx.reset();
     this.applyStrokeStyle(targetCtx);
     for (const stroke of this.dependencies.strokes.iteratePageStrokes(pageIndex)) {
-      if (!this.pathsToErase.has(stroke)) {
-        stroke.stroke(targetCtx);
+      if (this.pathsToErase.has(stroke)) {
+        continue;
       }
+      if (!this.dependencies.strokes.isPageStrokeVisible(pageIndex, stroke)) {
+        continue;
+      }
+      stroke.stroke(targetCtx);
     }
   }
 
@@ -532,6 +633,7 @@ export class PDFAnnotationController {
     this.pathsToErase.clear();
     targetCtx.reset();
     this.updateUnsavedStrokesFlag();
+    this.refreshLayerItems();
     this.loadPageStrokes(targetCtx, pageIndex);
   }
 
@@ -555,6 +657,7 @@ export class PDFAnnotationController {
     this.redoHistory.push(history);
     this.redoHistoryCount = this.redoHistory.length;
     this.updateUnsavedStrokesFlag();
+    this.refreshLayerItems();
     this.dependencies.host.onRedrawRequested();
   }
 
@@ -578,6 +681,7 @@ export class PDFAnnotationController {
     this.undoHistory.push(history);
     this.undoHistoryCount = this.undoHistory.length;
     this.updateUnsavedStrokesFlag();
+    this.refreshLayerItems();
     this.dependencies.host.onRedrawRequested();
   }
 
@@ -620,11 +724,16 @@ export class PDFAnnotationController {
     this.dependencies.strokes.clearImportedPdfPolylineTracking();
     this.dependencies.strokes.setPagePath(this.dependencies.documentIO.getSandBoxPath());
     this.clearHistory();
+    this.layerCatalogDirty = false;
     this.hasUnsavedStrokes = false;
     this.importedPolylinePrepared = false;
+    this.refreshLayerItems();
 
     await this.reportSavePhase('正在刷新页面…');
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
+    if (this.annotateMode !== 'drag') {
+      await this.startPrepareImportedPolylineSession();
+    }
     return true;
   }
 
@@ -636,9 +745,13 @@ export class PDFAnnotationController {
   }
 
   private updateUnsavedStrokesFlag(): void {
+    if (this.layerCatalogDirty) {
+      this.hasUnsavedStrokes = true;
+      return;
+    }
     const totalPageCount = this.dependencies.pageNavigator.getTotalPageCount();
     for (let i = 0; i < totalPageCount; i++) {
-      if (this.dependencies.strokes.getPageStrokesCount(i) > 0) {
+      if (this.dependencies.strokes.hasUnsavedStrokeEdits(i)) {
         this.hasUnsavedStrokes = true;
         return;
       }
@@ -724,7 +837,7 @@ export class PDFAnnotationController {
       const annotationsToAdd: pdfService.PolylineAnnotationInfo[] = [];
 
       for (const stroke of this.dependencies.strokes.iteratePageStrokes(pageIndex)) {
-        annotationsToAdd.push(this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp));
+        annotationsToAdd.push(this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp, pageIndex));
       }
 
       const annotations = annotationsToAdd.length > 0
@@ -739,7 +852,8 @@ export class PDFAnnotationController {
   private makePolylineAnnotationInfo(
     stroke: ReadonlyStroke,
     pdfPageSize: Vector2,
-    canvasSizeVp: Vector2
+    canvasSizeVp: Vector2,
+    pageIndex: number
   ): pdfService.PolylineAnnotationInfo {
     const transformedPoints: Vector2[] = [];
     for (const point of stroke.points) {
@@ -752,27 +866,40 @@ export class PDFAnnotationController {
     const annotationInfo = new pdfService.PolylineAnnotationInfo();
     const sourceInfo = stroke.source?.kind === 'importedPdfPolyline' ? stroke.source.annotationInfo : undefined;
     if (sourceInfo) {
-      annotationInfo.subject = sourceInfo.subject;
       annotationInfo.creationDate = sourceInfo.creationDate;
-      annotationInfo.content = sourceInfo.content;
       annotationInfo.border = sourceInfo.border;
-      annotationInfo.flag = sourceInfo.flag;
-      annotationInfo.title = sourceInfo.title;
-      annotationInfo.opacity = sourceInfo.opacity;
-      annotationInfo.lineColor = sourceInfo.lineColor;
       annotationInfo.uniqueId = stroke.source?.uniqueId && stroke.source.uniqueId.length > 0
         ? stroke.source.uniqueId
         : (sourceInfo.uniqueId && sourceInfo.uniqueId.length > 0 ? sourceInfo.uniqueId : util.generateRandomUUID(true));
     } else {
-      annotationInfo.subject = DefaultAnnotationSubject;
       annotationInfo.creationDate = new Date(Date.now());
-      annotationInfo.lineColor = stroke.pdfLineColor;
       annotationInfo.uniqueId = util.generateRandomUUID(true);
-      annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
     }
+    annotationInfo.lineColor = stroke.pdfLineColor;
+    this.applyLayerMetadata(annotationInfo, stroke, pageIndex);
     annotationInfo.modifiedTime = new Date(Date.now());
     annotationInfo.vertexes = transformedPoints;
     return annotationInfo;
+  }
+
+  private applyLayerMetadata(
+    annotationInfo: pdfService.PolylineAnnotationInfo,
+    stroke: ReadonlyStroke,
+    pageIndex: number
+  ): void {
+    const layer: AnnotationLayer | undefined = this.dependencies.strokes.getPageLayer(pageIndex, stroke.layerId);
+    const layerId: string = layer !== undefined
+      ? layer.id
+      : (stroke.layerId.length > 0 ? stroke.layerId : this.dependencies.strokes.getActiveLayerId(pageIndex));
+    const name: string = layer !== undefined ? layer.name : DefaultLayerName;
+    const order: number = layer !== undefined ? layer.order : 0;
+    const visible: boolean = layer !== undefined ? layer.visible : true;
+    annotationInfo.subject = JustPdfLayerSubject;
+    annotationInfo.title = name;
+    annotationInfo.content = encodeLayerContent(layerId, order, visible);
+    annotationInfo.flag = pdfService.AnnotationFlag.PRINTED;
+    // 隐藏图层：保留真实线色，用透明度让 PDF 光栅不可见（不用 AnnotationFlag.HIDDEN）。
+    annotationInfo.opacity = visible ? 1 : 0;
   }
 
   private async saveDocumentToTemp(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
