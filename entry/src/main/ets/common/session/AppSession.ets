@@ -1,12 +1,15 @@
 import { preferences } from '@kit.ArkData';
 import { window } from '@kit.ArkUI';
 import { hasUnsavedDocumentChanges } from '../ui/UnsavedChangesPrompt';
+import { WindowSafeInsetsPx } from '../ui/WindowSafeInsets';
 /** 启动/阅读会话在 AppStorage 中的键（新键只允许加在本文件）。 */
 export const APP_SESSION_LAUNCH_URI_KEY: string = 'launchUri';
 export const APP_SESSION_WINDOW_KEY: string = 'window';
 export const APP_SESSION_PREFERENCES_KEY: string = 'preferences';
 export const APP_SESSION_AVOID_AREA_TOP_PX_KEY: string = 'avoidAreaTopPx';
 export const APP_SESSION_AVOID_AREA_BOTTOM_PX_KEY: string = 'avoidAreaBottomPx';
+export const APP_SESSION_AVOID_AREA_LEFT_PX_KEY: string = 'avoidAreaLeftPx';
+export const APP_SESSION_AVOID_AREA_RIGHT_PX_KEY: string = 'avoidAreaRightPx';
 export const APP_SESSION_INITIAL_PDF_VIEW_ARGS_KEY: string = 'initialPdfViewArgs';
 export const APP_SESSION_PDF_VIEWER_ACTIVE_KEY: string = 'pdfViewerActive';
 export const APP_SESSION_PDF_VIEWER_HAS_UNSAVED_KEY: string = 'pdfViewerHasUnsavedChanges';
@@ -29,14 +32,18 @@ export function getSessionPreferences(): preferences.Preferences | undefined {
   return AppStorage.get<preferences.Preferences>(APP_SESSION_PREFERENCES_KEY);
 }
 
-export function setAvoidAreaPx(topPx: number, bottomPx: number): void {
-  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_TOP_PX_KEY, topPx);
-  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_BOTTOM_PX_KEY, bottomPx);
+export function setAvoidAreaPx(insets: WindowSafeInsetsPx): void {
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_TOP_PX_KEY, insets.top);
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_BOTTOM_PX_KEY, insets.bottom);
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_LEFT_PX_KEY, insets.left);
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_RIGHT_PX_KEY, insets.right);
 }
 
 export function initAvoidAreaPx(): void {
   AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_TOP_PX_KEY, 0);
   AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_BOTTOM_PX_KEY, 0);
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_LEFT_PX_KEY, 0);
+  AppStorage.setOrCreate(APP_SESSION_AVOID_AREA_RIGHT_PX_KEY, 0);
 }
 
 export function setLaunchUri(uri: string): void {

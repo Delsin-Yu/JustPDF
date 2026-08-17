@@ -44,6 +44,7 @@ import {
   prepareFromUri,
   rememberOpenedDocument
 } from '../../common/document/DocumentOpenService';
+import { readWindowSafeInsetsPx } from '../../common/ui/WindowSafeInsets';
 const SYSTEM_SHARE_LAUNCH_REASON: string = 'ReasonMessage_SystemShare';
 const TAG = 'EntryAbility';
 const WANT_ACTION_HOME: string = 'ohos.want.action.home';
@@ -57,6 +58,8 @@ export default class EntryAbility extends UIAbility {
   private window: window.Window | undefined;
   /** 与 window.on('avoidAreaChange') 传入 off 的引用需一致 */
   private avoidAreaChangeHandler: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
+  /** 与 window.on('windowTitleButtonRectChange') 传入 off 的引用需一致 */
+  private titleButtonRectChangeHandler: ((rect: window.TitleButtonRect) => void) | undefined = undefined;
   /** 冷启动时系统分享传入的 Want，在 loadInitialContent 中解析 */
   private pendingSystemShareWant: Want | undefined = undefined;
   /** 冷启动接续：在 onCreate 暂存，于 loadInitialContent 处理 */
@@ -80,10 +83,14 @@ export default class EntryAbility extends UIAbility {
       return;
     }
 
-    if (this.isSystemShareLaunch(launchParam)) {
+    if (this.isInboundShareWant(want, launchParam)) {
       setExitViewerOnBack(true);
       this.pendingSystemShareWant = want;
-      hilog.info(0, TAG, 'onCreate 系统分享：武装 Want 返回');
+      const fallbackUri = this.getWantUriOrStream(want);
+      if (fallbackUri !== undefined) {
+        setLaunchUri(fallbackUri);
+      }
+      hilog.info(0, TAG, 'onCreate 系统分享/sendData：武装 Want 返回');
       return;
     }
 
@@ -119,9 +126,9 @@ export default class EntryAbility extends UIAbility {
       return;
     }
 
-    if (this.isSystemShareLaunch(launchParam)) {
+    if (this.isInboundShareWant(want, launchParam)) {
       setExitViewerOnBack(true);
-      hilog.info(0, TAG, 'onNewWant 系统分享：武装 Want 返回');
+      hilog.info(0, TAG, 'onNewWant 系统分享/sendData：武装 Want 返回');
       this.handleSystemShareWant(want);
       return;
     }
@@ -265,6 +272,15 @@ export default class EntryAbility extends UIAbility {
     return launchParam.launchReasonMessage === SYSTEM_SHARE_LAUNCH_REASON;
   }
 
+  /** 系统分享面板，或其它应用以 sendData 直接拉起（微信等可能不带 ReasonMessage_SystemShare）。 */
+  private isInboundShareWant(want: Want, launchParam: AbilityConstant.LaunchParam): boolean {
+    if (this.isSystemShareLaunch(launchParam)) {
+      return true;
+    }
+    const action = want.action ?? '';
+    return action === WANT_ACTION_SEND_DATA || action === WANT_ACTION_SEND_MULTIPLE_DATA;
+  }
+
   private wantUriLength(want: Want): number {
     const uri = want.uri;
     if (uri === undefined || uri === null) {
@@ -276,60 +292,151 @@ export default class EntryAbility extends UIAbility {
   /**
    * 从「文件管理器/分享打开 PDF」的 Want 取出 uri；桌面图标（home）或粘性 uri 返回 undefined。
    * 桌面图标温启动常复用上次文档 uri，但 action 为 home，不得武装 Want 返回。
+   * 微信 PDF 预览「用其他应用打开」常省略 action，只带 file URI + application/pdf + READ 授权。
    */
   private getDocumentOpenUri(want: Want, launchParam: AbilityConstant.LaunchParam): string | undefined {
     if (this.isSystemShareLaunch(launchParam)) {
       return undefined;
     }
     const action = want.action ?? '';
-    if (action === WANT_ACTION_HOME || action.length === 0) {
+    if (action === WANT_ACTION_HOME) {
       return undefined;
     }
-    if (action !== WANT_ACTION_VIEW_DATA
-      && action !== WANT_ACTION_SEND_DATA
-      && action !== WANT_ACTION_SEND_MULTIPLE_DATA) {
+    const hasFileOpenAction = action === WANT_ACTION_VIEW_DATA
+      || action === WANT_ACTION_SEND_DATA
+      || action === WANT_ACTION_SEND_MULTIPLE_DATA;
+    if (!hasFileOpenAction && !this.isImplicitPdfFileOpenWant(want)) {
       return undefined;
     }
     const uri = want.uri;
-    if (uri === undefined || uri === null || uri.length === 0) {
+    if (uri !== undefined && uri !== null && uri.length > 0) {
+      return uri;
+    }
+    return this.extractStreamUri(want);
+  }
+
+  /** 无 action 的隐式打开：须同时具备 PDF 标识与 URI 读授权，避免把桌面空启动当成打开文档。 */
+  private isImplicitPdfFileOpenWant(want: Want): boolean {
+    const action = want.action ?? '';
+    if (action.length > 0) {
+      return false;
+    }
+    const rawUri = want.uri;
+    if (rawUri === undefined || rawUri === null || rawUri.length === 0) {
+      return false;
+    }
+    const flags = want.flags;
+    const flagValue = flags === undefined ? 0 : flags;
+    if ((flagValue & wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION) === 0) {
+      return false;
+    }
+    const wantType = want.type ?? '';
+    if (wantType === 'application/pdf' || wantType === 'com.adobe.pdf' || wantType === 'general.pdf') {
+      return true;
+    }
+    return rawUri.toLowerCase().indexOf('.pdf') >= 0;
+  }
+
+  private getWantUriOrStream(want: Want): string | undefined {
+    const uri = want.uri;
+    if (uri !== undefined && uri !== null && uri.length > 0) {
+      return uri;
+    }
+    return this.extractStreamUri(want);
+  }
+
+  private extractStreamUri(want: Want): string | undefined {
+    const params = want.parameters;
+    if (params === undefined) {
       return undefined;
     }
-    return uri;
+    const streamRaw = params[wantConstant.Params.PARAMS_STREAM];
+    if (streamRaw === undefined || streamRaw === null) {
+      return undefined;
+    }
+    if (typeof streamRaw === 'string' && streamRaw.length > 0) {
+      return streamRaw;
+    }
+    const joined = String(streamRaw);
+    if (joined.length === 0 || joined === '[object Object]') {
+      return undefined;
+    }
+    const comma = joined.indexOf(',');
+    if (comma < 0) {
+      return joined;
+    }
+    return joined.substring(0, comma);
+  }
+
+  private shareRecordLooksLikePdf(record: systemShare.SharedRecord): boolean {
+    const recordUtd = record.utd;
+    if (recordUtd === utd.UniformDataType.PDF || recordUtd === 'com.adobe.pdf' ||
+      recordUtd === 'application/pdf') {
+      return true;
+    }
+    if (recordUtd !== undefined && recordUtd.length > 0) {
+      try {
+        const typeDesc = utd.getTypeDescriptor(recordUtd);
+        if (typeDesc !== null && typeDesc.belongsTo(utd.UniformDataType.PDF)) {
+          return true;
+        }
+      } catch (_error) {
+      }
+    }
+    const recordUri = record.uri;
+    if (recordUri !== undefined && recordUri.toLowerCase().indexOf('.pdf') >= 0) {
+      return true;
+    }
+    const title = record.title;
+    if (title !== undefined && title.toLowerCase().endsWith('.pdf')) {
+      return true;
+    }
+    return false;
   }
 
   private async extractPdfUriFromShareWant(want: Want): Promise<string | null> {
     try {
       const data: systemShare.SharedData = await systemShare.getSharedData(want);
       const records = data.getRecords();
-      const pdfUtd: string = utd.UniformDataType.PDF;
+      let firstFileUri: string | null = null;
       for (let i = 0; i < records.length; i++) {
         const record = records[i];
-        if (!record.uri || record.uri.length === 0) {
+        const recordUri = record.uri;
+        if (recordUri === undefined || recordUri.length === 0) {
           continue;
         }
-        if (record.utd === pdfUtd || record.utd === 'com.adobe.pdf' ||
-          (record.uri.toLowerCase().endsWith('.pdf'))) {
-          return record.uri;
+        hilog.info(0, TAG, '分享记录[' + i.toString() + '] utd=' + (record.utd ?? '') +
+          ', uriLen=' + recordUri.length.toString());
+        if (this.shareRecordLooksLikePdf(record)) {
+          return recordUri;
+        }
+        if (firstFileUri === null) {
+          firstFileUri = recordUri;
         }
       }
+      if (firstFileUri !== null) {
+        hilog.info(0, TAG, '分享未标 PDF，使用首条文件 URI');
+        return firstFileUri;
+      }
     } catch (error) {
-      hilog.error(0, TAG, `解析系统分享数据失败: ${error}`);
+      hilog.error(0, TAG, '解析系统分享数据失败: ' + String(error));
+    }
+    const fallback = this.getWantUriOrStream(want);
+    if (fallback !== undefined) {
+      hilog.info(0, TAG, '分享回退 want.uri/stream，uriLen=' + fallback.length.toString());
+      return fallback;
     }
     return null;
   }
 
   private handleSystemShareWant(want: Want): void {
     this.extractPdfUriFromShareWant(want).then((uri: string | null) => {
-      if (!uri) {
+      if (uri === null) {
         hilog.warn(0, TAG, '系统分享未包含可打开的 PDF');
         return;
       }
-      if (this.currentRouter) {
-        setLaunchUri(uri);
-        this.tryDirectLaunch();
-        return;
-      }
       setLaunchUri(uri);
+      void this.tryDirectLaunch();
     });
   }
 
@@ -440,6 +547,8 @@ export default class EntryAbility extends UIAbility {
       const shareUri = await this.extractPdfUriFromShareWant(shareWant);
       if (shareUri) {
         launchUri = shareUri;
+      } else {
+        hilog.warn(0, TAG, 'loadInitialContent 系统分享未解析到 URI，回退 launchUri');
       }
     }
 
@@ -504,9 +613,7 @@ export default class EntryAbility extends UIAbility {
       return;
     }
     try {
-      const systemArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      const navArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      setAvoidAreaPx(systemArea.topRect.height, navArea.bottomRect.height);
+      setAvoidAreaPx(readWindowSafeInsetsPx(win));
     } catch (error) {
       hilog.warn(0, TAG, `getWindowAvoidArea 失败: ${error}`);
     }
@@ -525,6 +632,17 @@ export default class EntryAbility extends UIAbility {
     } catch (error) {
       hilog.error(0, TAG, `注册 avoidAreaChange 失败: ${error}`);
       this.avoidAreaChangeHandler = undefined;
+    }
+    if (this.titleButtonRectChangeHandler === undefined) {
+      this.titleButtonRectChangeHandler = (_rect: window.TitleButtonRect) => {
+        this.syncWindowAvoidAreasToAppStorage();
+      };
+      try {
+        win.on('windowTitleButtonRectChange', this.titleButtonRectChangeHandler);
+      } catch (error) {
+        hilog.warn(0, TAG, `注册 windowTitleButtonRectChange 失败: ${error}`);
+        this.titleButtonRectChangeHandler = undefined;
+      }
     }
   }
 
@@ -620,6 +738,7 @@ export default class EntryAbility extends UIAbility {
         this.preferences.putSync('maximizeMode', 'windowed');
       }
       this.preferences.flushSync();
+      this.syncWindowAvoidAreasToAppStorage();
     } catch (error) {
       hilog.error(0, TAG, 'Failed to save window state. Cause: %{public}s', error);
     }
@@ -632,6 +751,13 @@ export default class EntryAbility extends UIAbility {
       } catch (_e) {
       }
       this.avoidAreaChangeHandler = undefined;
+    }
+    if (this.window !== undefined && this.titleButtonRectChangeHandler !== undefined) {
+      try {
+        this.window.off('windowTitleButtonRectChange', this.titleButtonRectChangeHandler);
+      } catch (_e) {
+      }
+      this.titleButtonRectChangeHandler = undefined;
     }
   }
 

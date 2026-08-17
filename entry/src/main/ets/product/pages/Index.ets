@@ -59,6 +59,8 @@ const HISTORY_TRANSITION: TransitionEffect = TransitionEffect.OPACITY
 struct Index {
   @StorageProp('avoidAreaTopPx') avoidAreaTopPx: number = 0;
   @StorageProp('avoidAreaBottomPx') avoidAreaBottomPx: number = 0;
+  @StorageProp('avoidAreaLeftPx') avoidAreaLeftPx: number = 0;
+  @StorageProp('avoidAreaRightPx') avoidAreaRightPx: number = 0;
   @State isLoading: boolean = false;
   @State loadingFileName: string = '';
   @State recentFiles: RecentFileEntry[] = [];
@@ -721,7 +723,9 @@ struct Index {
       .clip(true)
       .padding({
         top: this.getUIContext().px2vp(this.avoidAreaTopPx),
-        bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx)
+        bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx),
+        left: this.getUIContext().px2vp(this.avoidAreaLeftPx),
+        right: this.getUIContext().px2vp(this.avoidAreaRightPx)
       })
     }
     .width('100%')

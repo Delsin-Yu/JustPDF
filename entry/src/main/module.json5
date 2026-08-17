@@ -44,6 +44,11 @@
                 "scheme": "file",
                 "type": "com.adobe.pdf",
                 "linkFeature": "FileOpen"
+              },
+              {
+                "scheme": "file",
+                "type": "application/pdf",
+                "linkFeature": "FileOpen"
               }
             ]
           },
