@@ -226,6 +226,14 @@ export struct TutorialDialogBuilder {
         Span('• 沿笔划擦除尚未保存的笔迹，擦除过程有高亮提示\n')
         Span('• 已保存进文件的笔迹不会被擦除\n\n')
 
+        Span('图层\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('批注浮窗内可打开当前页的图层；图层按页分别管理。新绘制的笔迹落在标为「')
+        Span('当前').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('」的图层上，可将笔迹分至不同图层，或暂时隐藏某一层。每页均有「')
+        Span('无图层').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span('」，不可删除。图层更改与笔迹相同，须通过「保存文档」写入文件。\n\n')
+
         Span('撤销与重做\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
         Span('• 浮窗内 ')
@@ -340,7 +348,7 @@ export struct TutorialDialogBuilder {
         Span('A: 「全屏」或「窗口」仅在支持的设备上显示。\n\n')
 
         Span('Q: 保存的批注能在别的应用里看吗？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
-        Span('A: 可以。保存为常见的 PDF 批注与书签，一般阅读器均可查看。\n\n')
+        Span('A: 可以。保存为常见的 PDF 批注与书签，可见笔迹一般阅读器均可查看。其他阅读器不提供图层列表；已隐藏的图层在其他应用中通常亦不可见。\n\n')
 
         Span('Q: 蓝牙翻谱器怎么用？\n').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span('A: 连接后即可翻页。若希望隐藏底部「<」「>」，可选「外设翻页」。\n\n')
