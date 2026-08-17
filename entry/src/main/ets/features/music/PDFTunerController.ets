@@ -70,6 +70,12 @@ const TunerPitchNoteNames: string[] = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G'
 const TunerPitchTransitionWidth: number = 5;
 /** 转换代价占候选评分的权重；剩余部分为纯候选概率。 */
 const TunerPitchTransitionWeight: number = 0.38;
+/** readData 在 UI 线程，限制分析频率以免占满 16ms 帧预算。 */
+const TunerMicProcessMinIntervalMs: number = 40;
+/** 基频检测前按此倍数抽取，降低 NSDF 复杂度。 */
+const TunerPitchDecimate: number = 8;
+/** 频谱柱变化小于该值时不写 @Trace，减少无效刷新。 */
+const TunerSpectrumBarPublishEpsilon: number = 0.02;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -206,6 +212,10 @@ export class PDFTunerController {
   private displayCentsSmoothed: number = 0;
   private pendingNoteName: string = '--';
   private pendingNoteHoldCount: number = 0;
+  private lastMicProcessAt: number = 0;
+  private cachedHannLength: number = 0;
+  private cachedHannWindow: Float32Array = new Float32Array(1);
+  private pitchAnalysisArmed: boolean = true;
 
   @Trace public referenceHz: number = 440;
   @Trace public transposeIndex: number = 0;
@@ -418,6 +428,10 @@ export class PDFTunerController {
 
   private readonly handleCapturerReadData = (buffer: ArrayBuffer): void => {
     if (!this.audioCapturer) {
+      return;
+    }
+    const now: number = Date.now();
+    if (this.lastMicProcessAt > 0 && now - this.lastMicProcessAt < TunerMicProcessMinIntervalMs) {
       return;
     }
     this.processMicPcmBuffer(buffer);
@@ -939,30 +953,16 @@ export class PDFTunerController {
   }
 
   private processMicPcmBuffer(buffer: ArrayBuffer): void {
+    this.lastMicProcessAt = Date.now();
     const samples: Float32Array = this.preprocessMicSamples(new Int16Array(buffer));
     if (samples.length === 0) {
       return;
     }
 
-    const n: number = samples.length;
-    const invN: number = 1 / Math.max(1, n - 1);
-    const rawMagnitudes: number[] = [];
+    const rawMagnitudes: number[] = this.computeSpectrumMagnitudes(samples);
     let bandPeak: number = 0;
-    for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
-      const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
-      const omegaPerSample: number = (2 * Math.PI * freqHz) / TunerMicSampleRateHz;
-      let re: number = 0;
-      let im: number = 0;
-      for (let i = 0; i < n; i++) {
-        const hann: number = 0.5 * (1 - Math.cos((2 * Math.PI * i) * invN));
-        const x: number = samples[i] * hann;
-        const angle: number = omegaPerSample * i;
-        re += x * Math.cos(angle);
-        im -= x * Math.sin(angle);
-      }
-      const mag: number = Math.sqrt(re * re + im * im) / n;
-      rawMagnitudes.push(mag);
-      bandPeak = Math.max(bandPeak, mag);
+    for (let band = 0; band < rawMagnitudes.length; band++) {
+      bandPeak = Math.max(bandPeak, rawMagnitudes[band]);
     }
 
     this.micPeakEnvelope = this.micPeakEnvelope * 0.992 + bandPeak * 0.008;
@@ -981,8 +981,78 @@ export class PDFTunerController {
       this.smoothedMicSpectrum[band] = nextHeld;
       nextLevels.push(nextHeld);
     }
-    this.spectrumBarLevels = nextLevels.slice();
-    this.updateDetectedPitch(this.detectPitchHz(samples));
+    if (this.shouldPublishSpectrumLevels(nextLevels)) {
+      this.spectrumBarLevels = nextLevels.slice();
+    }
+    if (this.pitchAnalysisArmed) {
+      const pitchSampleRateHz: number = TunerMicSampleRateHz / TunerPitchDecimate;
+      this.updateDetectedPitch(
+        this.detectPitchHz(this.decimateSamples(samples, TunerPitchDecimate), pitchSampleRateHz),
+      );
+    }
+    this.pitchAnalysisArmed = !this.pitchAnalysisArmed;
+  }
+
+  private ensureHannWindow(sampleCount: number): Float32Array {
+    if (this.cachedHannLength === sampleCount && this.cachedHannWindow.length === sampleCount) {
+      return this.cachedHannWindow;
+    }
+    const window: Float32Array = new Float32Array(sampleCount);
+    const denom: number = Math.max(1, sampleCount - 1);
+    for (let i = 0; i < sampleCount; i++) {
+      window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / denom));
+    }
+    this.cachedHannWindow = window;
+    this.cachedHannLength = sampleCount;
+    return window;
+  }
+
+  private computeSpectrumMagnitudes(samples: Float32Array): number[] {
+    const n: number = samples.length;
+    const hann: Float32Array = this.ensureHannWindow(n);
+    const magnitudes: number[] = [];
+    for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
+      const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
+      const omega: number = (2 * Math.PI * freqHz) / TunerMicSampleRateHz;
+      const coeff: number = 2 * Math.cos(omega);
+      let s0: number = 0;
+      let s1: number = 0;
+      let s2: number = 0;
+      for (let i = 0; i < n; i++) {
+        s0 = samples[i] * hann[i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+      }
+      const power: number = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+      magnitudes.push(Math.sqrt(Math.max(0, power)) / n);
+    }
+    return magnitudes;
+  }
+
+  private decimateSamples(samples: Float32Array, factor: number): Float32Array {
+    const outLen: number = Math.floor(samples.length / factor);
+    const decimated: Float32Array = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      let sum: number = 0;
+      const base: number = i * factor;
+      for (let k = 0; k < factor; k++) {
+        sum += samples[base + k];
+      }
+      decimated[i] = sum / factor;
+    }
+    return decimated;
+  }
+
+  private shouldPublishSpectrumLevels(nextLevels: number[]): boolean {
+    if (this.spectrumBarLevels.length !== nextLevels.length) {
+      return true;
+    }
+    for (let band = 0; band < nextLevels.length; band++) {
+      if (Math.abs(this.spectrumBarLevels[band] - nextLevels[band]) >= TunerSpectrumBarPublishEpsilon) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private getMicSpectrumTargetFreqHz(bandIndex: number): number {
@@ -996,12 +1066,12 @@ export class PDFTunerController {
    * 2. 在当前预设音域内寻找局部峰值
    * 3. 对最佳峰值做抛物线插值，并结合前一帧音高抑制跳变
    */
-  private detectPitchHz(samples: Float32Array): number {
+  private detectPitchHz(samples: Float32Array, sampleRateHz: number): number {
     const n: number = samples.length;
     const preset = this.getCurrentFilterPresetDefinition();
-    const minLag: number = Math.floor(TunerMicSampleRateHz / preset.pitchMaxHz);
+    const minLag: number = Math.floor(sampleRateHz / preset.pitchMaxHz);
     const maxLag: number = Math.min(
-      Math.floor(TunerMicSampleRateHz / preset.pitchMinHz),
+      Math.floor(sampleRateHz / preset.pitchMinHz),
       Math.floor(n / 2),
     );
     if (maxLag <= minLag) {
@@ -1055,7 +1125,7 @@ export class PDFTunerController {
 
       let score: number = peakValue;
       if (this.smoothedPitchHz > 0) {
-        const freqHz: number = TunerMicSampleRateHz / refinedTau;
+        const freqHz: number = sampleRateHz / refinedTau;
         const semitones: number = Math.abs(12 * Math.log2(freqHz / this.smoothedPitchHz));
         const twiceSigmaSq: number = 2 * TunerPitchTransitionWidth * TunerPitchTransitionWidth;
         const transition: number = Math.exp(-semitones * semitones / twiceSigmaSq);
@@ -1071,7 +1141,7 @@ export class PDFTunerController {
     if (bestRefinedTau <= 0 || bestScore < TunerMpmMinClarity) {
       return 0;
     }
-    return TunerMicSampleRateHz / bestRefinedTau;
+    return sampleRateHz / bestRefinedTau;
   }
 
   private updateDetectedPitch(pitchHz: number): void {
