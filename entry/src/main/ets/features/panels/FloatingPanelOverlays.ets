@@ -1,5 +1,6 @@
 /**
  * 浮动面板 Overlay 参数与 @Builder：节拍器 / 调音器 / 批注色板 / 书签。
+ * 图层列表嵌在批注色板内展开，不再单独占一个浮层。
  * 拖拽钳制状态见 FloatingPanelChrome；PDFView 只负责可见性与参数填充。
  */
 
@@ -9,6 +10,7 @@ import { PDFMetronomeController } from '../music/PDFMetronomeController';
 import { PDFTunerPanelContent } from '../music/PDFTunerPanel';
 import { PDFTunerController } from '../music/PDFTunerController';
 import { PDFAnnotationPalette } from '../annotation/PDFAnnotationPalette';
+import { AnnotationLayerListItem } from '../../common/page/AnnotationLayer';
 import { AnnotationColor } from '../annotation/PDFAnnotationColors';
 import { PDFAnnotateMode } from '../viewer/PDFViewerViewModel';
 import { PDFBookmarkListItem } from './PDFBookmarkController';
@@ -22,8 +24,9 @@ interface MetronomeOverlayOptions {
   dockedTopOffsetVp: number;
   hostScale: number;
   hostOffset: FloatingPanelOffset;
-  /** 状态栏避让（vp），仅用于播放中迷你浮动按钮顶边距 */
+  /** 状态栏避让（vp），仅用于播放中迷你浮动按钮边距 */
   overlaySafeTopVp: number;
+  overlaySafeLeftVp: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -45,6 +48,7 @@ export class MetronomeOverlayParams {
   hostScale: number;
   hostOffset: FloatingPanelOffset;
   overlaySafeTopVp: number;
+  overlaySafeLeftVp: number;
   onInteraction: () => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
@@ -65,6 +69,7 @@ export class MetronomeOverlayParams {
     this.hostScale = options.hostScale;
     this.hostOffset = options.hostOffset;
     this.overlaySafeTopVp = options.overlaySafeTopVp;
+    this.overlaySafeLeftVp = options.overlaySafeLeftVp;
     this.onInteraction = options.onInteraction;
     this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
@@ -156,6 +161,14 @@ interface AnnotationPaletteOverlayOptions {
   onRedo: () => void;
   onSave: () => void;
   onClose: () => void;
+  layerPanelVisible: boolean;
+  layerItems: AnnotationLayerListItem[];
+  onToggleLayerPanel: () => void;
+  onSelectLayer: (id: string) => void;
+  onToggleLayerVisible: (id: string, visible: boolean) => void;
+  onAddLayer: () => void;
+  onRenameLayer: (id: string, name: string) => void;
+  onDeleteLayer: (id: string) => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
@@ -185,6 +198,14 @@ export class AnnotationPaletteOverlayParams {
   onRedo: () => void;
   onSave: () => void;
   onClose: () => void;
+  layerPanelVisible: boolean;
+  layerItems: AnnotationLayerListItem[];
+  onToggleLayerPanel: () => void;
+  onSelectLayer: (id: string) => void;
+  onToggleLayerVisible: (id: string, visible: boolean) => void;
+  onAddLayer: () => void;
+  onRenameLayer: (id: string, name: string) => void;
+  onDeleteLayer: (id: string) => void;
   onTouchStateChanged: (active: boolean) => void;
   onHostDragStart: () => void;
   onHostDragUpdate: (event: GestureEvent) => void;
@@ -213,6 +234,14 @@ export class AnnotationPaletteOverlayParams {
     this.onRedo = options.onRedo;
     this.onSave = options.onSave;
     this.onClose = options.onClose;
+    this.layerPanelVisible = options.layerPanelVisible;
+    this.layerItems = options.layerItems;
+    this.onToggleLayerPanel = options.onToggleLayerPanel;
+    this.onSelectLayer = options.onSelectLayer;
+    this.onToggleLayerVisible = options.onToggleLayerVisible;
+    this.onAddLayer = options.onAddLayer;
+    this.onRenameLayer = options.onRenameLayer;
+    this.onDeleteLayer = options.onDeleteLayer;
     this.onTouchStateChanged = options.onTouchStateChanged;
     this.onHostDragStart = options.onHostDragStart;
     this.onHostDragUpdate = options.onHostDragUpdate;
@@ -355,7 +384,7 @@ export function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
         .margin(ContainerPadding)
     }
     .alignItems(HorizontalAlign.Start)
-    .padding({ top: params.overlaySafeTopVp })
+    .padding({ top: params.overlaySafeTopVp, left: params.overlaySafeLeftVp })
   }
   .width('100%')
   .height('100%')
@@ -416,6 +445,14 @@ export function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayPa
         onRedo: params.onRedo,
         onSave: params.onSave,
         onClose: params.onClose,
+        layerPanelVisible: params.layerPanelVisible,
+        layerItems: params.layerItems,
+        onToggleLayerPanel: params.onToggleLayerPanel,
+        onSelectLayer: params.onSelectLayer,
+        onToggleLayerVisible: params.onToggleLayerVisible,
+        onAddLayer: params.onAddLayer,
+        onRenameLayer: params.onRenameLayer,
+        onDeleteLayer: params.onDeleteLayer,
         onTouchStateChanged: params.onTouchStateChanged,
         onHostDragStart: params.onHostDragStart,
         onHostDragUpdate: params.onHostDragUpdate,

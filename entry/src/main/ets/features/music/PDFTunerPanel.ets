@@ -1031,7 +1031,7 @@ export struct PDFTunerPanelContent {
       bottomLeft: 18,
       bottomRight: 18,
     })
-    .margin(this.useDocked ? 0 : ContainerPadding)
+    .margin(0)
     .border({ width: 1, color: "rgba(255, 255, 255, 0.07)" })
     .shadow({ radius: 16, color: "rgba(0, 0, 0, 0.24)", offsetY: 4 })
     .align(Alignment.TopStart)

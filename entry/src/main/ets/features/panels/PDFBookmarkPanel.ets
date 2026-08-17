@@ -325,7 +325,7 @@ export struct PDFBookmarkPanelContent {
     })
     .border({ width: 1, color: 'rgba(255, 255, 255, 0.07)' })
     .shadow({ radius: 12, color: 'rgba(0, 0, 0, 0.24)', offsetY: 4 })
-    .margin(this.useDocked ? 0 : BookmarkWindowMargin)
+    .margin(0)
     .align(Alignment.TopStart)
     .hitTestBehavior(HitTestMode.BLOCK_HIERARCHY)
     .onTouch((event: TouchEvent) => {

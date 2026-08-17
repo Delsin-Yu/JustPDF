@@ -17,6 +17,12 @@ export interface FloatingPanelClampParams {
   marginVp: number;
   minX: number;
   minY: number;
+  safeLeftVp: number;
+  safeTopVp: number;
+  safeRightVp: number;
+  safeBottomVp: number;
+  titleWidthVp: number;
+  titleHeightVp: number;
   useDocked: boolean;
   dockedOffset: FloatingPanelOffset;
 }
@@ -39,7 +45,7 @@ export interface FloatingPanelHostGestures {
   onHostPinchEnd: () => void;
 }
 
-export const FloatingPanelMarginVp: number = 16;
+export const FloatingPanelMarginVp: number = 10;
 
 export function createFloatingPanelOffset(x: number, y: number): FloatingPanelOffset {
   const offset: FloatingPanelOffset = { x: x, y: y };
@@ -60,11 +66,13 @@ export function clampFloatingPanelOffset(
   }
   const scaledWidthVp: number = params.contentWidthVp * scale;
   const scaledHeightVp: number = params.contentHeightVp * scale;
-  const maxX: number = params.viewportWidthVp - scaledWidthVp - params.marginVp;
-  const maxY: number = params.viewportHeightVp - scaledHeightVp - params.marginVp;
+  const minX: number = Math.max(params.minX, params.safeLeftVp + params.marginVp);
+  const minY: number = Math.max(params.minY, params.safeTopVp + params.marginVp);
+  const maxX: number = params.viewportWidthVp - scaledWidthVp - params.marginVp - params.safeRightVp;
+  const maxY: number = params.viewportHeightVp - scaledHeightVp - params.marginVp - params.safeBottomVp;
   return createFloatingPanelOffset(
-    Math.max(params.minX, Math.min(offset.x, Math.max(params.minX, maxX))),
-    Math.max(params.minY, Math.min(offset.y, Math.max(params.minY, maxY)))
+    Math.max(minX, Math.min(offset.x, Math.max(minX, maxX))),
+    Math.max(minY, Math.min(offset.y, Math.max(minY, maxY)))
   );
 }
 

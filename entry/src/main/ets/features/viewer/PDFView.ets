@@ -1,4 +1,4 @@
-import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
+import { ContainerCfg, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
 import { hasUnsavedDocumentChanges, promptUnsavedChangesAction, UnsavedChangesChoice } from '../../common/ui/UnsavedChangesPrompt';
 import { reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
 import {
@@ -20,6 +20,7 @@ import { ComponentContent, LengthMetricsUnit, OverlayManager, window } from '@ki
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fromArea, mul, pxToVp, toSizePx, Vec2, Vector2 } from '../../common/ui/Numbers';
+import { readWindowSafeInsetsPx } from '../../common/ui/WindowSafeInsets';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
 import { KeyCode } from '@kit.InputKit';
 import { fileUri } from '@kit.CoreFileKit';
@@ -76,7 +77,8 @@ import {
   FloatingPanelChrome,
   FloatingPanelClampParams,
   FloatingPanelHostGestures,
-  FloatingPanelMarginVp
+  FloatingPanelMarginVp,
+  FloatingPanelOffset
 } from '../panels/FloatingPanelChrome';
 import {
   AnnotationPaletteOverlayParams,
@@ -92,10 +94,14 @@ import { PDFViewerActionMenu } from './PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './PDFViewerBottomBar';
 import { PDFAnnotateMode, PDFLinkVisualMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './AnnotateLongPressIndicator';
-import { AnnotationPaletteContentHeight, AnnotationPaletteContentWidth } from '../annotation/PDFAnnotationPalette';
+import {
+  AnnotationPaletteContentWidth,
+  getAnnotationPaletteContentHeight
+} from '../annotation/PDFAnnotationPalette';
 import { PDFBookmarkController } from '../panels/PDFBookmarkController';
 import {
   BookmarkPanelContentHeight,
+  BookmarkPanelContentWidth,
   BookmarkTitleDialogBuilder,
   getFloatingBookmarkTotalWidth,
   PDFBookmarkPanelContent
@@ -120,6 +126,7 @@ import {
   ViewerPageLoadingTextColor
 } from './PDFPanelVisualConstants';
 import { AnnotationColor } from '../annotation/PDFAnnotationColors';
+
 // 双指手势结束后忽略绘制/擦除触摸的延迟（毫秒）
 const DUAL_FINGER_END_PROTECTION_DELAY: number = 300;
 const LONG_PRESS_DELAY_MS: number = 350;
@@ -134,7 +141,7 @@ const CanvasOverSampling: number = 3;
 const ShareButtonId: string = 'shareButton';
 const UnifiedDockTabBarHeightVp: number = 56;
 const FloatingMetronomeContentWidthVp: number = 400;
-const FloatingTunerContentWidthVp: number = 360;
+const FloatingTunerContentWidthVp: number = 392;
 const DefaultTunerOffsetX: number = 24;
 const DefaultTunerOffsetY: number = 112;
 const DefaultPaletteScale: number = 1.0;
@@ -397,10 +404,15 @@ struct PDFView {
   hotkeys: InputAction[] = [];
   prefetchDebounceId: number | undefined = undefined;
   windowSizeChangeCallback: ((windowSize: window.Size) => void) | undefined = undefined;
-  /** 系统栏避让高度（px），与窗口 getWindowAvoidArea 一致，用于根布局 padding */
+  /** 系统栏 / 导航指示条 / 标题按钮避让（px），仅约束交互控件，根布局不整体 padding */
   @Local avoidAreaTopPx: number = 0;
   @Local avoidAreaBottomPx: number = 0;
+  @Local avoidAreaLeftPx: number = 0;
+  @Local avoidAreaRightPx: number = 0;
+  @Local titleButtonWidthVp: number = 0;
+  @Local titleButtonHeightVp: number = 0;
   avoidAreaChangeCallback: ((data: window.AvoidAreaOptions) => void) | undefined = undefined;
+  titleButtonRectChangeCallback: ((rect: window.TitleButtonRect) => void) | undefined = undefined;
   private overlayManager: OverlayManager | undefined = undefined;
   private metronomeOverlayContent: ComponentContent<MetronomeOverlayParams> | undefined = undefined;
   private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
@@ -411,8 +423,7 @@ struct PDFView {
   // 避免快速翻页后显示内容与当前页码不符。
   private pageLoadVersion: number = 0;
   /**
-   * 与 loadAndDisplayPages 同步：commit 前 displayedPageIndices 仍为旧套，
-   * 高分辨率异步回调须按此列表写入主槽，避免少页视图时空槽被旧页位图盖一帧。
+   * 当前正在载入主槽的页索引。高分辨率异步回调按此列表写入主槽。
    */
   private mainSlotPagesBeingLoaded: number[] = [];
   private documentLoadVersion: number = 0;
@@ -530,8 +541,8 @@ struct PDFView {
       .shadow(ModalCardShadow)
       .alignRules(TopRight)
       .margin({
-        top: this.getUIContext().px2vp(this.avoidAreaTopPx) + 12,
-        right: 16
+        top: this.getSafeTopVp() + this.titleButtonHeightVp + 12,
+        right: this.getSafeRightVp() + this.titleButtonWidthVp + 16
       })
       .hitTestBehavior(HitTestMode.None)
       .zIndex(200)
@@ -863,6 +874,11 @@ struct PDFView {
     this.tunerViewportHeightVp = area.height as number;
   }
 
+  private updateBookmarkViewportFromArea(area: Area): void {
+    this.bookmarkViewportWidthVp = area.width as number;
+    this.bookmarkViewportHeightVp = area.height as number;
+  }
+
   private updateMetronomeViewport(windowSize: window.Size): void {
     this.metronomeViewportWidthVp = this.getUIContext().px2vp(windowSize.width) as number;
     this.metronomeViewportHeightVp = this.getUIContext().px2vp(windowSize.height) as number;
@@ -1007,6 +1023,33 @@ struct PDFView {
     this.syncPanelOverlays();
   }
 
+  private getSafeTopVp(): number {
+    return this.getUIContext().px2vp(this.avoidAreaTopPx);
+  }
+
+  private getSafeBottomVp(): number {
+    return this.getUIContext().px2vp(this.avoidAreaBottomPx);
+  }
+
+  private getSafeLeftVp(): number {
+    return this.getUIContext().px2vp(this.avoidAreaLeftPx);
+  }
+
+  private getSafeRightVp(): number {
+    return this.getUIContext().px2vp(this.avoidAreaRightPx);
+  }
+
+  private getChromeMargin(): Padding {
+    const edgeVp: number = this.getUIContext().px2vp(16);
+    const padding: Padding = {
+      left: edgeVp,
+      right: edgeVp,
+      top: edgeVp,
+      bottom: edgeVp + this.getSafeBottomVp()
+    };
+    return padding;
+  }
+
   private getMetronomeClampParams(): FloatingPanelClampParams {
     const params: FloatingPanelClampParams = {
       viewportWidthVp: this.metronomeViewportWidthVp,
@@ -1016,6 +1059,12 @@ struct PDFView {
       marginVp: FloatingPanelMarginVp,
       minX: 0,
       minY: this.getFloatingMetronomeMinYVp(),
+      safeLeftVp: this.getSafeLeftVp(),
+      safeTopVp: this.getSafeTopVp(),
+      safeRightVp: this.getSafeRightVp(),
+      safeBottomVp: this.getSafeBottomVp(),
+      titleWidthVp: this.titleButtonWidthVp,
+      titleHeightVp: this.titleButtonHeightVp,
       useDocked: this.useDockedMetronomePanel,
       dockedOffset: createFloatingPanelOffset(0, this.getDockedMetronomeTopOffsetVp())
     };
@@ -1031,10 +1080,20 @@ struct PDFView {
       marginVp: FloatingPanelMarginVp,
       minX: 0,
       minY: this.getFloatingTunerMinYVp(),
+      safeLeftVp: this.getSafeLeftVp(),
+      safeTopVp: this.getSafeTopVp(),
+      safeRightVp: this.getSafeRightVp(),
+      safeBottomVp: this.getSafeBottomVp(),
+      titleWidthVp: this.titleButtonWidthVp,
+      titleHeightVp: this.titleButtonHeightVp,
       useDocked: this.useDockedTunerPanel,
       dockedOffset: createFloatingPanelOffset(0, this.getDockedTunerTopOffsetVp())
     };
     return params;
+  }
+
+  private getPaletteContentHeightVp(): number {
+    return getAnnotationPaletteContentHeight(this.viewerViewModel.isAnnotationLayerPanelVisible);
   }
 
   private getPaletteClampParams(): FloatingPanelClampParams {
@@ -1042,10 +1101,16 @@ struct PDFView {
       viewportWidthVp: this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x),
       viewportHeightVp: this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y),
       contentWidthVp: AnnotationPaletteContentWidth,
-      contentHeightVp: AnnotationPaletteContentHeight,
-      marginVp: 0,
+      contentHeightVp: this.getPaletteContentHeightVp(),
+      marginVp: FloatingPanelMarginVp,
       minX: 0,
       minY: 0,
+      safeLeftVp: this.getSafeLeftVp(),
+      safeTopVp: this.getSafeTopVp(),
+      safeRightVp: this.getSafeRightVp(),
+      safeBottomVp: this.getSafeBottomVp(),
+      titleWidthVp: this.titleButtonWidthVp,
+      titleHeightVp: this.titleButtonHeightVp,
       useDocked: false,
       dockedOffset: createFloatingPanelOffset(0, 0)
     };
@@ -1053,17 +1118,14 @@ struct PDFView {
   }
 
   private getBookmarkClampParams(): FloatingPanelClampParams {
-    const viewportWidthVp: number = this.bookmarkViewportWidthVp > 0
-      ? this.bookmarkViewportWidthVp
-      : this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
-    const viewportHeightVp: number = this.bookmarkViewportHeightVp > 0
-      ? this.bookmarkViewportHeightVp
-      : this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    const viewerWidthVp: number = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
+    const viewerHeightVp: number = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    const viewportWidthVp: number = viewerWidthVp > 0 ? viewerWidthVp : this.bookmarkViewportWidthVp;
+    const viewportHeightVp: number = viewerHeightVp > 0 ? viewerHeightVp : this.bookmarkViewportHeightVp;
     const contentHeightVp: number = this.bookmarkPanelHeightVp > 0
       ? this.bookmarkPanelHeightVp
       : BookmarkPanelContentHeight;
-    // getFloatingBookmarkTotalWidth 已含 scale，钳制公式会再乘 scale，故此处传未缩放内容宽
-    const contentWidthVp: number = getFloatingBookmarkTotalWidth(1);
+    const contentWidthVp: number = BookmarkPanelContentWidth;
     const params: FloatingPanelClampParams = {
       viewportWidthVp: viewportWidthVp,
       viewportHeightVp: viewportHeightVp,
@@ -1072,6 +1134,12 @@ struct PDFView {
       marginVp: FloatingPanelMarginVp,
       minX: 0,
       minY: this.getFloatingBookmarkMinYVp(),
+      safeLeftVp: this.getSafeLeftVp(),
+      safeTopVp: this.getSafeTopVp(),
+      safeRightVp: this.getSafeRightVp(),
+      safeBottomVp: this.getSafeBottomVp(),
+      titleWidthVp: this.titleButtonWidthVp,
+      titleHeightVp: this.titleButtonHeightVp,
       useDocked: this.useDockedBookmarkPanel,
       dockedOffset: createFloatingPanelOffset(0, 0)
     };
@@ -1082,6 +1150,7 @@ struct PDFView {
     this.metronomeChrome.syncOffsetToBounds(this.getMetronomeClampParams());
     this.tunerChrome.syncOffsetToBounds(this.getTunerClampParams());
     this.bookmarkChrome.syncOffsetToBounds(this.getBookmarkClampParams());
+    this.paletteChrome.syncOffsetToBounds(this.getPaletteClampParams());
   }
 
   private beginPanelGesture(panel: OverlayPanelKey): void {
@@ -1249,7 +1318,8 @@ struct PDFView {
       dockedTopOffsetVp: this.getDockedMetronomeTopOffsetVp(),
       hostScale: this.useDockedMetronomePanel ? 1 : this.metronomeChrome.scale,
       hostOffset: this.metronomeChrome.getClampedOffset(this.getMetronomeClampParams()),
-      overlaySafeTopVp: this.getUIContext().px2vp(this.avoidAreaTopPx),
+      overlaySafeTopVp: this.getSafeTopVp(),
+      overlaySafeLeftVp: this.getSafeLeftVp(),
       onInteraction: () => this.focusPanel('metronome'),
       onTouchStateChanged: (active: boolean) => {
         this.isPanelGestureActive = active;
@@ -1571,6 +1641,11 @@ struct PDFView {
         .width('100%')
         .constraintSize({ maxHeight: '100%' })
         .align(Alignment.TopStart)
+        .padding({
+          top: Math.max(this.getSafeTopVp(), this.titleButtonHeightVp),
+          left: this.getSafeLeftVp(),
+          right: this.getSafeRightVp()
+        })
         .onAreaChange((_oldValue: Area, newValue: Area) => {
           this.handleDockedPanelHeightChanged(newValue.height as number);
         })
@@ -1642,6 +1717,7 @@ struct PDFView {
       this.useDockedMetronomePanel = false;
       this.useDockedTunerPanel = false;
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
+        this.syncAvoidAreasFromMainWindow();
         this.updateMetronomeViewport(_windowSize);
         this.updateTunerViewport(_windowSize);
         this.updateBookmarkViewport(_windowSize);
@@ -1652,8 +1728,16 @@ struct PDFView {
       this.avoidAreaChangeCallback = (_data: window.AvoidAreaOptions) => {
         this.syncAvoidAreasFromMainWindow();
       };
+      this.titleButtonRectChangeCallback = (_rect: window.TitleButtonRect) => {
+        this.syncAvoidAreasFromMainWindow();
+      };
       this.syncAvoidAreasFromMainWindow();
       this.mainWindow.on('avoidAreaChange', this.avoidAreaChangeCallback);
+      try {
+        this.mainWindow.on('windowTitleButtonRectChange', this.titleButtonRectChangeCallback);
+      } catch (_e) {
+        this.titleButtonRectChangeCallback = undefined;
+      }
     } catch (error) {
       hilog.error(0, 'PDFView', `获取窗口状态出错: ${error}.`);
     }
@@ -1866,6 +1950,14 @@ struct PDFView {
       this.avoidAreaChangeCallback = undefined;
     }
 
+    if (this.titleButtonRectChangeCallback) {
+      try {
+        this.mainWindow.off('windowTitleButtonRectChange', this.titleButtonRectChangeCallback);
+      } catch (_e) { /* ignore */
+      }
+      this.titleButtonRectChangeCallback = undefined;
+    }
+
     // 清除透明度定时器
     if (this.transparencyTimeoutId) {
       clearTimeout(this.transparencyTimeoutId);
@@ -2053,17 +2145,24 @@ struct PDFView {
     this.harmonyShareReceiveRegistered = false;
   }
 
-  /** 从主窗口同步状态栏与导航指示条避让高度（px）；用于节拍器迷你浮标，根布局不再整体 padding */
+  /** 从主窗口同步状态栏与导航指示条避让（px）；仅约束交互控件 */
   private syncAvoidAreasFromMainWindow(): void {
     try {
-      const systemArea = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      const navArea = this.mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      const nextTop = systemArea.topRect.height;
-      const nextBottom = navArea.bottomRect.height;
-      const changed = nextTop !== this.avoidAreaTopPx || nextBottom !== this.avoidAreaBottomPx;
-      this.avoidAreaTopPx = nextTop;
-      this.avoidAreaBottomPx = nextBottom;
+      const insets = readWindowSafeInsetsPx(this.mainWindow);
+      const changed = insets.top !== this.avoidAreaTopPx
+        || insets.bottom !== this.avoidAreaBottomPx
+        || insets.left !== this.avoidAreaLeftPx
+        || insets.right !== this.avoidAreaRightPx
+        || insets.titleWidthVp !== this.titleButtonWidthVp
+        || insets.titleHeightVp !== this.titleButtonHeightVp;
+      this.avoidAreaTopPx = insets.top;
+      this.avoidAreaBottomPx = insets.bottom;
+      this.avoidAreaLeftPx = insets.left;
+      this.avoidAreaRightPx = insets.right;
+      this.titleButtonWidthVp = insets.titleWidthVp;
+      this.titleButtonHeightVp = insets.titleHeightVp;
       if (changed) {
+        this.syncPanelOffsetsToBounds();
         this.syncPanelOverlays();
       }
     } catch (_e) {
@@ -2327,12 +2426,9 @@ struct PDFView {
     this.updateViewerViewSize();
   }
 
-  // 加载页面缓存并更新视图状态
-  private async loadAndDisplayPages(indices: number[], seedFromActiveTransitionStrip: boolean = false): Promise<void> {
-    // 捕获当前加载版本；若在异步过程中 gotoPage 再次被调用则放弃过期的状态更新
-    const loadVersion = this.pageLoadVersion;
+  // 立即铺主槽占位（白色/透明），不等待 Worker
+  private applyMainSlotPlaceholders(indices: number[], seedFromActiveTransitionStrip: boolean = false): void {
     this.mainSlotPagesBeingLoaded = indices.slice();
-    // 立即设置占位白色矩形并预计算目标页面尺寸
     for (let i = 0; i < this.mainSlots.length; i++) {
       this.mainSlots[i].clearLoading();
     }
@@ -2367,9 +2463,11 @@ struct PDFView {
       }
     }
 
-    // 使用占位符尺寸立即更新总体视图大小
     this.updateViewerViewSize();
+  }
 
+  // 将光栅填入主槽；若导航已被更新的 gotoPage 取代则丢弃结果
+  private async loadCachesIntoMainSlots(indices: number[], loadVersion: number): Promise<void> {
     const tasks: Array<Promise<void>> = [];
 
     for (let slot = 0; slot < indices.length && slot < PAGE_VIEW_SLOT_COUNT; slot++) {
@@ -2381,18 +2479,18 @@ struct PDFView {
             return;
           }
           this.applyRasterCacheToSlot(this.mainSlots[slotIndex], cache);
+        })
+        .catch((_e: Error) => {
         }));
     }
 
     await Promise.all(tasks);
 
-    // 若在加载期间已切到其他页面，不再更新视图大小
     if (loadVersion !== this.pageLoadVersion) {
       this.mainSlotPagesBeingLoaded = [];
       return;
     }
 
-    // 更新总体视图大小
     this.updateViewerViewSize();
   }
 
@@ -2436,8 +2534,21 @@ struct PDFView {
     // 导航到新页面时重置渲染缩放（先于 load，避免仍按旧缩放取缓存）
     this.currentRenderScale = ViewerMinRenderScale;
 
-    // 先加载位图再 commit，避免 displayed 已指向新页而主槽仍画上一套造成「目标→旧页→目标」闪动
-    await this.loadAndDisplayPages(indicesToLoad, deferSlideVisualReset);
+    // 丢掉已过期的排队光栅，避免滑块连跳后落地页排在中间页之后
+    this.pageDataSource.cancelQueuedPendingExcept(indicesToLoad);
+
+    // 先铺占位再 commit，滑块与页码跟上手指；位图仍按 navToken 异步填入
+    this.applyMainSlotPlaceholders(indicesToLoad, deferSlideVisualReset);
+    this.viewerViewModel.commitPageTarget(clampedTarget);
+    if (this.viewerViewModel.isAnnotatePaletteVisible) {
+      this.noteAnnotationPageInteraction(clampedTarget);
+    }
+    this.linkController.triggerPdfLinkVisualPageEnter();
+    this.documentSession.syncContinuationReadingState();
+    // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
+    this.redrawStrokes();
+
+    await this.loadCachesIntoMainSlots(indicesToLoad, navToken);
 
     if (navToken !== this.pageLoadVersion) {
       this.mainSlotPagesBeingLoaded = [];
@@ -2447,12 +2558,7 @@ struct PDFView {
       return;
     }
 
-    this.viewerViewModel.commitPageTarget(clampedTarget);
-    this.linkController.triggerPdfLinkVisualPageEnter();
     this.mainSlotPagesBeingLoaded = [];
-    this.documentSession.syncContinuationReadingState();
-    // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
-    this.redrawStrokes();
 
     // Debounce prefetch/eviction to avoid cache churn during rapid scrolling
     if (this.prefetchDebounceId !== undefined) {
@@ -2686,6 +2792,7 @@ struct PDFView {
 
     if (this.annotationController.annotateMode === 'draw') {
       if (event.type === TouchType.Down) {
+        this.noteAnnotationPageInteraction(pageIndex);
         this.annotationController.startDraw(touchPoint);
       } else if (event.type === TouchType.Move) {
         this.annotationController.extendDraw(touchPoint, drawCtx);
@@ -2699,6 +2806,7 @@ struct PDFView {
       }
 
       if (event.type === TouchType.Down) {
+        this.noteAnnotationPageInteraction(pageIndex);
         this.annotationController.startErase();
       }
 
@@ -2726,7 +2834,7 @@ struct PDFView {
     const offset = this.paletteChrome.getClampedOffset(this.getPaletteClampParams());
     const margin = 10;
     const w = AnnotationPaletteContentWidth * this.paletteChrome.scale;
-    const h = AnnotationPaletteContentHeight * this.paletteChrome.scale;
+    const h = this.getPaletteContentHeightVp() * this.paletteChrome.scale;
     return vpX >= offset.x + margin && vpX <= offset.x + margin + w
       && vpY >= offset.y + margin && vpY <= offset.y + margin + h;
   }
@@ -2974,6 +3082,7 @@ struct PDFView {
 
     if (this.annotationController.annotateMode === 'draw') {
       if (event.action === MouseAction.Press) {
+        this.noteAnnotationPageInteraction(pageIndex);
         this.annotationController.startDraw(mousePoint);
       } else if (event.action === MouseAction.Move && this.activeMouseButton === 1) {
         this.annotationController.extendDraw(mousePoint, drawCtx);
@@ -2987,6 +3096,7 @@ struct PDFView {
       }
 
       if (event.action === MouseAction.Press) {
+        this.noteAnnotationPageInteraction(pageIndex);
         this.annotationController.startErase();
       }
 
@@ -3060,6 +3170,7 @@ struct PDFView {
       return;
     }
     this.viewerViewModel.openAnnotatePalette(explicitTool);
+    this.noteAnnotationPageInteraction(this.viewerViewModel.currentPageIndex);
     this.initPalettePosition();
     this.syncPanelOverlays();
 
@@ -3082,11 +3193,12 @@ struct PDFView {
     const viewportWidthVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
     const viewportHeightVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
     const scaledW = AnnotationPaletteContentWidth * this.paletteChrome.scale;
-    const scaledH = AnnotationPaletteContentHeight * this.paletteChrome.scale;
+    const scaledH = this.getPaletteContentHeightVp() * this.paletteChrome.scale;
     this.paletteChrome.offset = createFloatingPanelOffset(
       Math.max(0, (viewportWidthVp - scaledW) / 2),
       Math.max(0, viewportHeightVp - scaledH - 80)
     );
+    this.paletteChrome.syncOffsetToBounds(this.getPaletteClampParams());
   }
 
   private handlePaletteHostDragStart(): void {
@@ -3120,8 +3232,14 @@ struct PDFView {
     this.endPanelGesture();
   }
 
+  private noteAnnotationPageInteraction(pageIndex: number): void {
+    this.annotationController.setLayerPanelPageIndex(pageIndex);
+    this.syncPanelOverlays();
+  }
+
   private createAnnotationPaletteOverlayParams(): AnnotationPaletteOverlayParams {
     const hostGestures: FloatingPanelHostGestures = this.createPaletteHostGestures();
+    const paletteOffset: FloatingPanelOffset = this.paletteChrome.getClampedOffset(this.getPaletteClampParams());
     return new AnnotationPaletteOverlayParams({
       showWindow: this.viewerViewModel.isAnnotatePaletteVisible,
       readOnly: this.isDocumentReadOnly(),
@@ -3130,7 +3248,7 @@ struct PDFView {
       redoCount: this.annotationController.redoHistoryCount,
       hasUnsaved: this.annotationController.hasUnsavedStrokes,
       hostScale: this.paletteChrome.scale,
-      hostOffset: this.paletteChrome.getClampedOffset(this.getPaletteClampParams()),
+      hostOffset: paletteOffset,
       drawColor: this.annotationController.selectedDrawColor,
       customDrawColor: this.annotationController.customDrawColor,
       recentCustomColors: this.annotationController.recentCustomColors,
@@ -3175,6 +3293,44 @@ struct PDFView {
       onClose: () => {
         this.annotationController.flushPendingDrawColorPreferences();
         this.viewerViewModel.closeAnnotatePalette();
+        this.syncPanelOverlays();
+      },
+      layerPanelVisible: this.viewerViewModel.isAnnotationLayerPanelVisible,
+      layerItems: this.annotationController.layerItems,
+      onToggleLayerPanel: () => {
+        this.viewerViewModel.toggleAnnotationLayerPanel();
+        this.syncPanelOverlays();
+      },
+      onSelectLayer: (id: string) => {
+        this.annotationController.setActiveLayer(id);
+        this.syncPanelOverlays();
+      },
+      onToggleLayerVisible: (id: string, visible: boolean) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
+        this.annotationController.setLayerVisible(id, visible);
+        this.syncPanelOverlays();
+      },
+      onAddLayer: () => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
+        this.annotationController.addLayer();
+        this.syncPanelOverlays();
+      },
+      onRenameLayer: (id: string, name: string) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
+        this.annotationController.renameLayer(id, name);
+        this.syncPanelOverlays();
+      },
+      onDeleteLayer: (id: string) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
+        this.annotationController.deleteLayer(id);
         this.syncPanelOverlays();
       },
       onTouchStateChanged: (active: boolean) => {
@@ -3622,6 +3778,7 @@ struct PDFView {
           .onAreaChange((_, newVal) => {
             this.updateMetronomeViewportFromArea(newVal);
             this.updateTunerViewportFromArea(newVal);
+            this.updateBookmarkViewportFromArea(newVal);
             this.syncPanelOverlays();
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             if (!this.pageTurnController.shouldDeferViewportFitReset()) {
@@ -3633,21 +3790,41 @@ struct PDFView {
           .onMouse(event => this.handleMouseEvent(event))
           .onAxisEvent(event => this.handleMouseAxisEvent(event))
 
-        Button(PageFlipButtonOption)
-          .size(PageFlipButtonSize)
-          .onClick(() => this.navigatePrevPageFromSideFlipZone())
-          .alignRules(TopLeft)
-          .backgroundColor(Color.Transparent)
-          .hitTestBehavior(HitTestMode.Transparent)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
+        Column() {
+          Button(PageFlipButtonOption)
+            .width('100%')
+            .height('100%')
+            .onClick(() => this.navigatePrevPageFromSideFlipZone())
+            .backgroundColor(Color.Transparent)
+            .hitTestBehavior(HitTestMode.Transparent)
+        }
+        .size(PageFlipButtonSize)
+        .padding({
+          top: this.getSafeTopVp(),
+          bottom: this.getSafeBottomVp(),
+          left: this.getSafeLeftVp()
+        })
+        .alignRules(TopLeft)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
 
-        Button(PageFlipButtonOption)
-          .size(PageFlipButtonSize)
-          .onClick(() => this.navigateNextPageFromSideFlipZone())
-          .alignRules(TopRight)
-          .backgroundColor(Color.Transparent)
-          .hitTestBehavior(HitTestMode.Transparent)
-          .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
+        Column() {
+          Button(PageFlipButtonOption)
+            .width('100%')
+            .height('100%')
+            .onClick(() => this.navigateNextPageFromSideFlipZone())
+            .backgroundColor(Color.Transparent)
+            .hitTestBehavior(HitTestMode.Transparent)
+        }
+        .size(PageFlipButtonSize)
+        .padding({
+          top: this.getSafeTopVp(),
+          bottom: this.getSafeBottomVp(),
+          right: this.getSafeRightVp()
+        })
+        .alignRules(TopRight)
+        .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(toVisibility(this.viewerViewModel.pageFlipMode == 'side' && this.viewerViewModel.annotateMode == 'drag'))
 
         Image('')
           .size(PageFlipButtonSize)
@@ -3785,7 +3962,7 @@ struct PDFView {
           .hitTestBehavior(HitTestMode.Transparent)
         }
         .alignRules(FullRect)
-        .margin(ContainerPadding)
+        .margin(this.getChromeMargin())
         .hitTestBehavior(HitTestMode.Transparent)
         .opacity(this.viewerViewModel.controlsTransparency)
 

@@ -31,6 +31,8 @@ export type PalettePersistedTool = 'draw' | 'erase';
 const PaletteToolModePreferenceKey: string = 'paletteToolMode';
 const HorizontalSlideSensitivityPreferenceKey: string = 'horizontalSlideSensitivity';
 const LinkVisualModePreferenceKey: string = 'linkVisualMode';
+/** 贴合视口时的溢出容差（vp）。略大于 0 即可吸收 px/vp/scale 浮点误差，避免误开 25% 松弛平移 */
+const PAN_FIT_OVERFLOW_EPSILON_VP: number = 3;
 
 @ObservedV2
 export class PDFViewerViewModel {
@@ -56,6 +58,7 @@ export class PDFViewerViewModel {
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
   @Trace public isAnnotatePaletteVisible: boolean = false;
+  @Trace public isAnnotationLayerPanelVisible: boolean = false;
   @Trace public isBookmarkPanelVisible: boolean = false;
   private savedPageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
@@ -282,11 +285,20 @@ export class PDFViewerViewModel {
     }
   }
 
+  toggleAnnotationLayerPanel(): void {
+    this.isAnnotationLayerPanelVisible = !this.isAnnotationLayerPanelVisible;
+  }
+
+  closeAnnotationLayerPanel(): void {
+    this.isAnnotationLayerPanelVisible = false;
+  }
+
   closeAnnotatePalette(): void {
     if (!this.isAnnotatePaletteVisible) {
       return;
     }
     this.isAnnotatePaletteVisible = false;
+    this.isAnnotationLayerPanelVisible = false;
     this.setAnnotateMode('drag');
     if (this.pageFlipMode !== this.savedPageFlipMode) {
       this.setPageFlipMode(this.savedPageFlipMode);
@@ -382,23 +394,25 @@ export class PDFViewerViewModel {
 
     let minX: number;
     let maxX: number;
-    if (scaledViewSizeVp.x <= viewportSizeVp.x) {
+    const overflowX = scaledViewSizeVp.x - viewportSizeVp.x;
+    if (overflowX <= PAN_FIT_OVERFLOW_EPSILON_VP) {
       const centered = (viewportSizeVp.x - scaledViewSizeVp.x) / 2;
       minX = centered;
       maxX = centered;
     } else {
-      minX = -(scaledViewSizeVp.x - viewportSizeVp.x) - relaxX;
+      minX = -overflowX - relaxX;
       maxX = relaxX;
     }
 
     let minY: number;
     let maxY: number;
-    if (scaledViewSizeVp.y <= viewportSizeVp.y) {
+    const overflowY = scaledViewSizeVp.y - viewportSizeVp.y;
+    if (overflowY <= PAN_FIT_OVERFLOW_EPSILON_VP) {
       const centeredY = (viewportSizeVp.y - scaledViewSizeVp.y) / 2;
       minY = centeredY;
       maxY = centeredY;
     } else {
-      minY = -(scaledViewSizeVp.y - viewportSizeVp.y) - relaxY;
+      minY = -overflowY - relaxY;
       maxY = relaxY;
     }
 
@@ -417,7 +431,7 @@ export class PDFViewerViewModel {
   /** 横向可滚动且已贴右端（可向左拖出下一页预览） */
   isAtHorizontalScrollRightEnd(uiContext: UIContext, epsilonVp: number = 2): boolean {
     const b = this.getPanClampBounds(uiContext);
-    if (b.scaledViewSizeVp.x <= b.viewportSizeVp.x) {
+    if (!this.canPanHorizontally(uiContext)) {
       return false;
     }
     return this.viewPan.x <= b.minX + b.relaxX * 0.35 + epsilonVp;
@@ -426,16 +440,16 @@ export class PDFViewerViewModel {
   /** 横向可滚动且已贴左端（可向右拖出上一页预览） */
   isAtHorizontalScrollLeftEnd(uiContext: UIContext, epsilonVp: number = 2): boolean {
     const b = this.getPanClampBounds(uiContext);
-    if (b.scaledViewSizeVp.x <= b.viewportSizeVp.x) {
+    if (!this.canPanHorizontally(uiContext)) {
       return false;
     }
     return this.viewPan.x >= b.maxX - b.relaxX * 0.35 - epsilonVp;
   }
 
-  /** 内容宽于视口时需横向平移才能看全 */
+  /** 内容明显宽于视口时需横向平移才能看全（贴合误差不计入） */
   canPanHorizontally(uiContext: UIContext): boolean {
     const b = this.getPanClampBounds(uiContext);
-    return b.scaledViewSizeVp.x > b.viewportSizeVp.x;
+    return b.maxX > b.minX + 0.5;
   }
 
   clampViewPan(uiContext: UIContext): void {
