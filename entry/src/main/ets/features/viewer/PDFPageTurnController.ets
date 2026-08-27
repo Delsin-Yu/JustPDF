@@ -31,6 +31,7 @@ export interface PDFPageTurnControllerDependencies {
   ensureMainRowEmptySlotsMatchDisplayed: () => void;
   resetViewToFit: () => void;
   redrawStrokes: () => void;
+  onSlideSessionIdle: () => void;
   gotoPage: (targetIndex: number, deferSlideVisualReset: boolean, recordJumpHistory: boolean) => Promise<void>;
   getMainSlotAt: (index: number) => PageViewSlot | undefined;
 }
@@ -185,6 +186,29 @@ export class PDFPageTurnController {
   }
 
   /**
+   * 用 duration=0 的 animateTo 停掉仍在插值的滑动属性。
+   * 仅给 @Trace 赋值无法取消已启动的动画，快速连滑时旧动画会继续带动 pageTurnOffsetVp / viewScale。
+   */
+  private snapSlideVisualProperties(offsetVp: number, crossfadeT: number, neighborOpacity: number): void {
+    this.dependencies.getUIContext().animateTo({ duration: 0 }, () => {
+      this.pageTurnOffsetVp = offsetVp;
+      this.pageTurnCrossfadeT = crossfadeT;
+      this.pageTurnNeighborAppearOpacity = neighborOpacity;
+    });
+  }
+
+  /** 新一次手指拖动或尚未 goto 的提交已接管画面，旧收尾不得再改偏移 / 缩放 */
+  private isNewerSlideSessionActive(): boolean {
+    return this.pageTurnDragActive || this.pendingSlideGotoTarget !== undefined;
+  }
+
+  private finishSlideSessionIdle(): void {
+    this.dependencies.resetViewToFit();
+    this.dependencies.redrawStrokes();
+    this.dependencies.onSlideSessionIdle();
+  }
+
+  /**
    * 单指新按下时打断尚未结束的提交动画或 defer goto 收尾，便于连续快速滑动翻页。
    * 与 slideCommitAnimGen / pageLoadVersion 配合丢弃已过期的 animateTo 与 load 回调。
    */
@@ -193,20 +217,19 @@ export class PDFPageTurnController {
       return;
     }
     this.slideCommitAnimGen++;
+    this.slideNeighborAppearFadeGen++;
     if (this.pageTurnCommitAnimating && this.pendingSlideGotoTarget !== undefined) {
       const t = this.pendingSlideGotoTarget;
       this.pendingSlideGotoTarget = undefined;
       const dir = this.pageTurnDirection;
-      this.pageTurnOffsetVp = this.computeCommitSlideEndOffsetVp(dir);
-      this.pageTurnCrossfadeT = 1;
       this.pageTurnCommitAnimating = false;
-      this.pageTurnNeighborAppearOpacity = 1;
+      this.snapSlideVisualProperties(this.computeCommitSlideEndOffsetVp(dir), 1, 1);
       void this.dependencies.gotoPage(t, true, false);
       return;
     }
     this.pageTurnCommitAnimating = false;
-    this.pageTurnCrossfadeT = 0;
     this.pendingSlideGotoTarget = undefined;
+    this.snapSlideVisualProperties(this.pageTurnOffsetVp, 0, this.pageTurnNeighborAppearOpacity);
     if (this.slideGotoInFlight) {
       this.dependencies.bumpPageLoadVersion();
       this.slideGotoInFlight = false;
@@ -219,15 +242,17 @@ export class PDFPageTurnController {
 
   /** defer goto 收尾：邻条淡出后再清条带并 resetViewToFit，避免视口与条带位移叠帧闪动 */
   fadeDeferSlideGotoTeardown(navToken: number): void {
+    if (this.slideGotoCompletionToken !== navToken || this.isNewerSlideSessionActive()) {
+      this.clearSlideGotoInFlightIfToken(navToken);
+      return;
+    }
     const hasStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
     if (!hasStrip) {
       this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
+      this.snapSlideVisualProperties(0, 0, 1);
       this.clearHorizontalSlidePreviewState();
-      this.dependencies.resetViewToFit();
-      this.dependencies.redrawStrokes();
-      if (this.slideGotoCompletionToken === navToken) {
-        this.slideGotoInFlight = false;
-      }
+      this.finishSlideSessionIdle();
+      this.clearSlideGotoInFlightIfToken(navToken);
       return;
     }
     // 先于淡出再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborPreviewFadeIn / assign
@@ -239,26 +264,24 @@ export class PDFPageTurnController {
     // 邻条常窄于双页主行全宽，恢复主层可见前强制对齐空槽，避免右侧仍一帧旧位图。
     this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
     this.pageTurnCommitAnimating = false;
-    this.pageTurnCrossfadeT = 0;
-    this.pageTurnOffsetVp = 0;
-    this.pageTurnNeighborAppearOpacity = 1;
+    this.snapSlideVisualProperties(0, 0, 1);
     setTimeout(() => {
-      if (g !== this.slideNeighborAppearFadeGen || this.slideGotoCompletionToken !== navToken) {
+      if (g !== this.slideNeighborAppearFadeGen || this.slideGotoCompletionToken !== navToken ||
+        this.isNewerSlideSessionActive()) {
+        this.clearSlideGotoInFlightIfToken(navToken);
         return;
       }
       this.dependencies.getUIContext().animateTo({
         duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
         curve: Curve.EaseIn,
         onFinish: () => {
-          if (g !== this.slideNeighborAppearFadeGen) {
+          if (g !== this.slideNeighborAppearFadeGen || this.isNewerSlideSessionActive()) {
+            this.clearSlideGotoInFlightIfToken(navToken);
             return;
           }
           this.clearHorizontalSlidePreviewState();
-          this.dependencies.resetViewToFit();
-          this.dependencies.redrawStrokes();
-          if (this.slideGotoCompletionToken === navToken) {
-            this.slideGotoInFlight = false;
-          }
+          this.finishSlideSessionIdle();
+          this.clearSlideGotoInFlightIfToken(navToken);
         }
       }, () => {
         this.pageTurnNeighborAppearOpacity = 0;
@@ -496,15 +519,18 @@ export class PDFPageTurnController {
   }
 
   private beginPageTurnSession(direction: number, firstHorizDeltaVp: number, viewportWvp: number): void {
+    this.slideCommitAnimGen++;
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 1;
     this.pageTurnDragActive = true;
     this.pageTurnDirection = direction;
     this.pageTurnPreviewOffsetLocked = false;
     this.pageTurnPreviewOffsetVp = 0;
     this.dependencies.setSuppressSidePageFlipFromGesture(true);
-    this.pageTurnOffsetVp =
-      this.applyElasticPageTurnOffset(firstHorizDeltaVp * this.getSlideDragGainEff(), viewportWvp);
+    this.snapSlideVisualProperties(
+      this.applyElasticPageTurnOffset(firstHorizDeltaVp * this.getSlideDragGainEff(), viewportWvp),
+      0,
+      1
+    );
     this.transitionNeighborGen++;
     const gen = this.transitionNeighborGen;
     this.slideVelocityVpPerMs = 0;
@@ -656,11 +682,12 @@ export class PDFPageTurnController {
         duration: 200,
         curve: Curve.EaseInOut,
         onFinish: () => {
-          if (cancelAnimGen !== this.slideNeighborAppearFadeGen) {
+          if (cancelAnimGen !== this.slideNeighborAppearFadeGen || this.isNewerSlideSessionActive()) {
             return;
           }
           if (!hasPreviewStrip) {
             this.clearHorizontalSlidePreviewState();
+            this.dependencies.onSlideSessionIdle();
           }
         }
       }, () => {
@@ -671,10 +698,11 @@ export class PDFPageTurnController {
           duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
           curve: Curve.EaseIn,
           onFinish: () => {
-            if (cancelAnimGen !== this.slideNeighborAppearFadeGen) {
+            if (cancelAnimGen !== this.slideNeighborAppearFadeGen || this.isNewerSlideSessionActive()) {
               return;
             }
             this.clearHorizontalSlidePreviewState();
+            this.dependencies.onSlideSessionIdle();
           }
         }, () => {
           this.pageTurnNeighborAppearOpacity = 0;

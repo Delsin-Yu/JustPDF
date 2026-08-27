@@ -345,21 +345,25 @@ export class PDFViewerViewModel {
   }
 
   updateViewSize(view1Size: Vector2, view2Size: Vector2, view3Size: Vector2): void {
+    let next: Vector2 = view1Size;
     if (this.getExpectedSlotCount() === 1) {
-      this.viewSize = view1Size;
-      return;
-    }
-    if (this.getExpectedSlotCount() === 2) {
-      this.viewSize = Vec2(
+      next = view1Size;
+    } else if (this.getExpectedSlotCount() === 2) {
+      next = Vec2(
         view1Size.x + ContainerSpacing + view2Size.x,
         Math.max(view1Size.y, view2Size.y)
       );
+    } else {
+      next = Vec2(
+        view1Size.x + ContainerSpacing + view2Size.x + ContainerSpacing + view3Size.x,
+        Math.max(view1Size.y, view2Size.y, view3Size.y)
+      );
+    }
+    // 连滑期间 animateTo 仍在跑时，重复写入相同 viewSize 也会被隐式插值，看起来像整页被缩小
+    if (this.viewSize.x === next.x && this.viewSize.y === next.y) {
       return;
     }
-    this.viewSize = Vec2(
-      view1Size.x + ContainerSpacing + view2Size.x + ContainerSpacing + view3Size.x,
-      Math.max(view1Size.y, view2Size.y, view3Size.y)
-    );
+    this.viewSize = next;
   }
 
   setViewportSize(viewportSize: Vector2): void {

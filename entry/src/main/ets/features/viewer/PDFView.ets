@@ -259,6 +259,7 @@ struct PDFView {
     ensureMainRowEmptySlotsMatchDisplayed: () => this.ensureMainRowEmptySlotsMatchDisplayed(),
     resetViewToFit: () => this.resetViewToFit(),
     redrawStrokes: () => this.redrawStrokes(),
+    onSlideSessionIdle: () => this.endInteractiveMotionDemote(),
     gotoPage: (targetIndex: number, deferSlideVisualReset: boolean, recordJumpHistory: boolean) =>
       this.gotoPage(targetIndex, deferSlideVisualReset, recordJumpHistory),
     getMainSlotAt: (index: number) => this.mainSlotAt(index)
@@ -2574,7 +2575,10 @@ struct PDFView {
   }
 
   resetViewToFit(): void {
-    this.viewerViewModel.resetViewToFit(this.getUIContext());
+    // duration=0：停掉连滑时被 animateTo 误插值的 viewScale / viewPan，再落到适口值
+    this.getUIContext().animateTo({ duration: 0 }, () => {
+      this.viewerViewModel.resetViewToFit(this.getUIContext());
+    });
   }
 
   navigatePrevPage(): void {
@@ -2916,7 +2920,9 @@ struct PDFView {
         if (this.viewerViewModel.pageFlipMode === 'horizontalSlide') {
           this.pageTurnController.finalizeHorizontalSlideOnUp();
         }
-        this.endInteractiveMotionDemote();
+        if (!this.pageTurnController.shouldDeferViewportFitReset()) {
+          this.endInteractiveMotionDemote();
+        }
         this.lastTouchPoint = undefined;
         this.panSessionStartPoint = undefined;
         this.linkController.schedulePdfLinkPressCandidateReset();
