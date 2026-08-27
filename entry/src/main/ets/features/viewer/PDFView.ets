@@ -3639,9 +3639,8 @@ struct PDFView {
         .translate({ x: this.pageTurnController.pageTurnOffsetVp, y: 0 })
         .opacity(this.pageTurnController.getSlideCurrentStripOpacity())
 
-        // 左侧预览条叠在主文档层之上，否则主条全宽时会挡住左侧邻条的可视区域。
-        if (this.pageTurnController.transPrevIndices.length > 0) {
-          Row(ContainerCfg) {
+        // 左侧预览条始终挂在树上，用 visibility 显隐，避免 if 卸节点时牵动主层 Image 重挂载。
+        Row(ContainerCfg) {
             PDFPageSlot({
               pixelMap: this.pageTurnController.transPrevSlots[0].pixelMap,
               loading: this.pageTurnController.transPrevSlots[0].loading,
@@ -3701,11 +3700,10 @@ struct PDFView {
           })
           .translate({ x: this.pageTurnController.getPreviewStripTranslateVp('prev'), y: 0 })
           .opacity(this.pageTurnController.getSlidePrevStripOpacity())
+          .visibility(this.pageTurnController.transPrevIndices.length > 0 ? Visibility.Visible : Visibility.None)
           .hitTestBehavior(HitTestMode.None)
-        }
 
-        if (this.pageTurnController.transNextIndices.length > 0) {
-          Row(ContainerCfg) {
+        Row(ContainerCfg) {
             PDFPageSlot({
               pixelMap: this.pageTurnController.transNextSlots[0].pixelMap,
               loading: this.pageTurnController.transNextSlots[0].loading,
@@ -3765,8 +3763,8 @@ struct PDFView {
           })
           .translate({ x: this.pageTurnController.getPreviewStripTranslateVp('next'), y: 0 })
           .opacity(this.pageTurnController.getSlideNextStripOpacity())
+          .visibility(this.pageTurnController.transNextIndices.length > 0 ? Visibility.Visible : Visibility.None)
           .hitTestBehavior(HitTestMode.None)
-        }
 
         Flex()
           .size({ width: '100%', height: '100%' })

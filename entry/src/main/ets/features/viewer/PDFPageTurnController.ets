@@ -1,4 +1,5 @@
 import { LengthMetricsUnit } from '@kit.ArkUI';
+import { displaySync } from '@kit.ArkGraphics2D';
 import { ContainerSpacing } from '../../common/ui/UIComponents';
 import { PageCache, selectDisplayPixelMap } from '../../common/page/PageRasterCache';
 import { Vec2, Vector2 } from '../../common/ui/Numbers';
@@ -14,7 +15,8 @@ const PAGE_TURN_FLICK_MIN_PROGRESS: number = 0.038;
 const PAGE_TURN_ELASTIC_EXTRA_RATIO: number = 0.38;
 /** 手指位移换算为翻页偏移的增益，略大于 1 可减少「拖很远才够翻页」的感觉 */
 const PAGE_TURN_DRAG_GAIN: number = 1.55;
-/** 横向滑动：邻条取消 / defer 收尾淡出时长（毫秒），宜短以减轻连滑时的节奏感与「浮层」感 */
+/** 横向滑动：邻条出现淡入 / 取消淡出时长（毫秒），只作用于滑动预览层 */
+const SLIDE_NEIGHBOR_FADE_IN_MS: number = 160;
 const SLIDE_NEIGHBOR_FADE_OUT_MS: number = 160;
 
 export interface PDFPageTurnControllerDependencies {
@@ -59,8 +61,10 @@ export class PDFPageTurnController {
   @Trace pageTurnCommitAnimating: boolean = false;
   /** 收尾动画：0=当前页不透明 / 目标页透明，1=当前淡出、目标淡入完成（与位移同一 animateTo 插值） */
   @Trace pageTurnCrossfadeT: number = 0;
-  /** 横向滑动邻条预览：短促出现淡入（非跟手）；取消/提交/重置前须回到 1 以免与 offset 回弹打架 */
-  @Trace pageTurnNeighborAppearOpacity: number = 1;
+  /** 右侧下一套预览条透明度（仅滑动面板，不作用于主条） */
+  @Trace pageTurnNextStripOpacity: number = 1;
+  /** 左侧上一套预览条透明度（仅滑动面板，不作用于主条） */
+  @Trace pageTurnPrevStripOpacity: number = 1;
   private slideNeighborAppearFadeGen: number = 0;
   /** defer 的 gotoPage 正在 await load；与 slideGotoCompletionToken 配对避免被过期的异步 return 误清 */
   slideGotoInFlight: boolean = false;
@@ -79,6 +83,11 @@ export class PDFPageTurnController {
     new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
   transPreviewDrawCtx: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
+  /** 提交收尾：等主层在 offset=0 处实际合成后再卸预览层。animateTo 在系统动画关闭时会瞬间结束。 */
+  private slideTeardownSync: displaySync.DisplaySync | undefined = undefined;
+  private slideTeardownFramesLeft: number = 0;
+  private slideTeardownNavToken: number = 0;
+  private slideTeardownFadeGen: number = 0;
 
   constructor(dependencies: PDFPageTurnControllerDependencies, settings: RenderingContextSettings) {
     this.dependencies = dependencies;
@@ -163,6 +172,7 @@ export class PDFPageTurnController {
 
   /** 立即清除横向滑动预览条带（无淡出） */
   clearHorizontalSlidePreviewState(): void {
+    this.stopSlideTeardownSync();
     this.pendingSlideGotoTarget = undefined;
     // 使尚未完成的 loadTransitionNeighbor 回调全部失效，避免收尾后仍 assign / 再触发淡入造成邻条 Next/Prev 闪跳
     this.transitionNeighborGen++;
@@ -182,18 +192,78 @@ export class PDFPageTurnController {
     this.clearTransitionPixelMaps();
     this.dependencies.viewerViewModel.clearSlideNavEffectiveStartIndex();
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 1;
+    this.pageTurnNextStripOpacity = 1;
+    this.pageTurnPrevStripOpacity = 1;
   }
 
   /**
    * 用 duration=0 的 animateTo 停掉仍在插值的滑动属性。
    * 仅给 @Trace 赋值无法取消已启动的动画，快速连滑时旧动画会继续带动 pageTurnOffsetVp / viewScale。
    */
-  private snapSlideVisualProperties(offsetVp: number, crossfadeT: number, neighborOpacity: number): void {
+  private snapSlideVisualProperties(
+    offsetVp: number,
+    crossfadeT: number,
+    nextOpacity: number,
+    prevOpacity: number
+  ): void {
     this.dependencies.getUIContext().animateTo({ duration: 0 }, () => {
       this.pageTurnOffsetVp = offsetVp;
       this.pageTurnCrossfadeT = crossfadeT;
-      this.pageTurnNeighborAppearOpacity = neighborOpacity;
+      this.pageTurnNextStripOpacity = nextOpacity;
+      this.pageTurnPrevStripOpacity = prevOpacity;
+    });
+  }
+
+  private stopSlideTeardownSync(): void {
+    if (this.slideTeardownSync === undefined) {
+      return;
+    }
+    try {
+      this.slideTeardownSync.off('frame', this.handleSlideTeardownFrame);
+      this.slideTeardownSync.stop();
+    } catch (_e) {
+    }
+    this.slideTeardownSync = undefined;
+    this.slideTeardownFramesLeft = 0;
+  }
+
+  private readonly handleSlideTeardownFrame = (_info: displaySync.IntervalInfo): void => {
+    const navToken = this.slideTeardownNavToken;
+    const gen = this.slideTeardownFadeGen;
+    if (gen !== this.slideNeighborAppearFadeGen || this.slideGotoCompletionToken !== navToken ||
+      this.isNewerSlideSessionActive()) {
+      this.stopSlideTeardownSync();
+      this.clearSlideGotoInFlightIfToken(navToken);
+      return;
+    }
+    this.slideTeardownFramesLeft--;
+    if (this.slideTeardownFramesLeft > 0) {
+      return;
+    }
+    this.stopSlideTeardownSync();
+    this.clearHorizontalSlidePreviewState();
+    this.finishSlideSessionIdle();
+    this.clearSlideGotoInFlightIfToken(navToken);
+  };
+
+  private startSlideTeardownAfterPaint(navToken: number, gen: number): void {
+    this.stopSlideTeardownSync();
+    this.slideTeardownNavToken = navToken;
+    this.slideTeardownFadeGen = gen;
+    this.slideTeardownFramesLeft = 2;
+    const sync = displaySync.create();
+    const range: ExpectedFrameRateRange = {
+      expected: 0,
+      min: 0,
+      max: 0
+    };
+    sync.setExpectedFrameRateRange(range);
+    sync.on('frame', this.handleSlideTeardownFrame);
+    this.slideTeardownSync = sync;
+    this.dependencies.getUIContext().runScopedTask(() => {
+      if (this.slideTeardownSync === sync) {
+        sync.start();
+      }
     });
   }
 
@@ -223,13 +293,18 @@ export class PDFPageTurnController {
       this.pendingSlideGotoTarget = undefined;
       const dir = this.pageTurnDirection;
       this.pageTurnCommitAnimating = false;
-      this.snapSlideVisualProperties(this.computeCommitSlideEndOffsetVp(dir), 1, 1);
+      this.snapSlideVisualProperties(this.computeCommitSlideEndOffsetVp(dir), 1, 1, 1);
       void this.dependencies.gotoPage(t, true, false);
       return;
     }
     this.pageTurnCommitAnimating = false;
     this.pendingSlideGotoTarget = undefined;
-    this.snapSlideVisualProperties(this.pageTurnOffsetVp, 0, this.pageTurnNeighborAppearOpacity);
+    this.snapSlideVisualProperties(
+      this.pageTurnOffsetVp,
+      0,
+      this.pageTurnNextStripOpacity,
+      this.pageTurnPrevStripOpacity
+    );
     if (this.slideGotoInFlight) {
       this.dependencies.bumpPageLoadVersion();
       this.slideGotoInFlight = false;
@@ -240,7 +315,7 @@ export class PDFPageTurnController {
     }
   }
 
-  /** defer goto 收尾：邻条淡出后再清条带并 resetViewToFit，避免视口与条带位移叠帧闪动 */
+  /** defer goto 收尾：预览层钉在中心盖住主层归零合成，再清条带并 resetViewToFit */
   fadeDeferSlideGotoTeardown(navToken: number): void {
     if (this.slideGotoCompletionToken !== navToken || this.isNewerSlideSessionActive()) {
       this.clearSlideGotoInFlightIfToken(navToken);
@@ -249,13 +324,13 @@ export class PDFPageTurnController {
     const hasStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
     if (!hasStrip) {
       this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
-      this.snapSlideVisualProperties(0, 0, 1);
+      this.snapSlideVisualProperties(0, 0, 1, 1);
       this.clearHorizontalSlidePreviewState();
       this.finishSlideSessionIdle();
       this.clearSlideGotoInFlightIfToken(navToken);
       return;
     }
-    // 先于淡出再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborPreviewFadeIn / assign
+    // 先于收尾再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborPreviewFadeIn / assign
     this.transitionNeighborGen++;
     this.slideNeighborAppearFadeGen++;
     const g = this.slideNeighborAppearFadeGen;
@@ -264,64 +339,81 @@ export class PDFPageTurnController {
     // 邻条常窄于双页主行全宽，恢复主层可见前强制对齐空槽，避免右侧仍一帧旧位图。
     this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
     this.pageTurnCommitAnimating = false;
-    this.snapSlideVisualProperties(0, 0, 1);
-    setTimeout(() => {
-      if (g !== this.slideNeighborAppearFadeGen || this.slideGotoCompletionToken !== navToken ||
-        this.isNewerSlideSessionActive()) {
-        this.clearSlideGotoInFlightIfToken(navToken);
-        return;
-      }
-      this.dependencies.getUIContext().animateTo({
-        duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
-        curve: Curve.EaseIn,
-        onFinish: () => {
-          if (g !== this.slideNeighborAppearFadeGen || this.isNewerSlideSessionActive()) {
-            this.clearSlideGotoInFlightIfToken(navToken);
-            return;
-          }
-          this.clearHorizontalSlidePreviewState();
-          this.finishSlideSessionIdle();
-          this.clearSlideGotoInFlightIfToken(navToken);
-        }
-      }, () => {
-        this.pageTurnNeighborAppearOpacity = 0;
-      });
-    }, 0);
+    this.snapSlideVisualProperties(0, 0, 1, 1);
+    this.startSlideTeardownAfterPaint(navToken, g);
   }
 
   /**
-   * 邻条挂载（占位或真实图）时立即显示为不透明。
-   * 不再做长淡入：连滑时反复 0→1 会与主条位移叠出「浮层脉冲」；与主条保持全不透明一起更接近连续拖动。
+   * 邻条先以 duration=0 钉在当前页左侧/右侧，再只对透明度做淡入。
+   * 若与占位尺寸、translate 同一帧 animateTo，ArkUI 会把「就位到当前页之前」也做成位移动画。
    */
-  private startSlideNeighborPreviewFadeIn(): void {
+  private startSlideNeighborPreviewFadeIn(kind: 'next' | 'prev'): void {
     if (this.dependencies.viewerViewModel.pageFlipMode !== 'horizontalSlide') {
       return;
     }
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 1;
+    const fadeGen = this.slideNeighborAppearFadeGen;
+    this.snapshotPageTurnGeometry();
+    this.snapSlideVisualProperties(
+      this.pageTurnOffsetVp,
+      this.pageTurnCrossfadeT,
+      kind === 'next' ? 0 : this.pageTurnNextStripOpacity,
+      kind === 'prev' ? 0 : this.pageTurnPrevStripOpacity
+    );
+    setTimeout(() => {
+      if (fadeGen !== this.slideNeighborAppearFadeGen) {
+        return;
+      }
+      this.dependencies.getUIContext().animateTo({
+        duration: SLIDE_NEIGHBOR_FADE_IN_MS,
+        curve: Curve.EaseOut
+      }, () => {
+        if (fadeGen !== this.slideNeighborAppearFadeGen) {
+          return;
+        }
+        if (kind === 'next') {
+          this.pageTurnNextStripOpacity = 1;
+        } else {
+          this.pageTurnPrevStripOpacity = 1;
+        }
+      });
+    }, 0);
   }
 
-  /** 左侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制 */
+  /** 左侧邻条：上一套预览透明度 */
   getSlidePrevStripOpacity(): number {
     if (this.transPrevIndices.length > 0) {
-      return this.pageTurnNeighborAppearOpacity;
+      return this.pageTurnPrevStripOpacity;
     }
     return 1;
   }
 
   /**
-   * 中间主条不透明度。
-   * 提交动画期间不再淡出主条：否则邻条叠在上层、主条渐隐，连滑时像「手指上飘着一块页、底下还在翻」；
-   * 仅靠位移与邻条即可衔接，观感更接近连续纸带。
+   * 离开页（主条）随滑动进度淡出。
+   * 提交后会 snap 卸掉预览层，无法再事后淡出；须在跟手 / 收尾位移期间完成。
+   * 预览层钉住后主条已是目标页，必须恢复不透明以免卸层后露空。
    */
   getSlideCurrentStripOpacity(): number {
-    return 1;
+    return 1 - this.getOutgoingPageFadeProgress();
   }
 
-  /** 右侧邻条：预览透明度由 pageTurnNeighborAppearOpacity 控制 */
+  private getOutgoingPageFadeProgress(): number {
+    if (this.pageTurnPreviewOffsetLocked) {
+      return 0;
+    }
+    const adv = this.pageTurnMainAdvanceVp > 0
+      ? this.pageTurnMainAdvanceVp
+      : this.getStripAdvanceForCommitVp();
+    if (adv < 1) {
+      return 0;
+    }
+    return Math.max(0, Math.min(1, Math.abs(this.pageTurnOffsetVp) / adv));
+  }
+
+  /** 右侧邻条：下一套预览透明度 */
   getSlideNextStripOpacity(): number {
     if (this.transNextIndices.length > 0) {
-      return this.pageTurnNeighborAppearOpacity;
+      return this.pageTurnNextStripOpacity;
     }
     return 1;
   }
@@ -526,10 +618,12 @@ export class PDFPageTurnController {
     this.pageTurnPreviewOffsetLocked = false;
     this.pageTurnPreviewOffsetVp = 0;
     this.dependencies.setSuppressSidePageFlipFromGesture(true);
+    const appearNext = direction < 0;
     this.snapSlideVisualProperties(
       this.applyElasticPageTurnOffset(firstHorizDeltaVp * this.getSlideDragGainEff(), viewportWvp),
       0,
-      1
+      appearNext ? 0 : 1,
+      appearNext ? 1 : 0
     );
     this.transitionNeighborGen++;
     const gen = this.transitionNeighborGen;
@@ -558,7 +652,9 @@ export class PDFPageTurnController {
       this.transPrevIndices = indices;
       this.applyTransitionPlaceholders('prev', indices);
     }
-    this.startSlideNeighborPreviewFadeIn();
+    // 先锁定邻条宽度对应的提前量，避免首帧 translate 从 0 插值到「当前页之前」。
+    this.snapshotPageTurnGeometry();
+    this.startSlideNeighborPreviewFadeIn(kind);
     const loadVersion = this.dependencies.getPageLoadVersion();
     const tasks: Array<Promise<void>> = [];
     for (let i = 0; i < indices.length; i++) {
@@ -705,7 +801,8 @@ export class PDFPageTurnController {
             this.dependencies.onSlideSessionIdle();
           }
         }, () => {
-          this.pageTurnNeighborAppearOpacity = 0;
+          this.pageTurnNextStripOpacity = 0;
+          this.pageTurnPrevStripOpacity = 0;
         });
       }
       return;
@@ -723,7 +820,8 @@ export class PDFPageTurnController {
     const dist = Math.abs(endOff - startOff);
     if (dist < 0.75) {
       this.slideNeighborAppearFadeGen++;
-      this.pageTurnNeighborAppearOpacity = 1;
+      this.pageTurnNextStripOpacity = 1;
+      this.pageTurnPrevStripOpacity = 1;
       this.pageTurnCommitAnimating = true;
       this.pageTurnCrossfadeT = 1;
       void this.dependencies.gotoPage(targetPage, true, false);
@@ -731,7 +829,8 @@ export class PDFPageTurnController {
     }
     const dur = Math.round(Math.min(520, Math.max(240, 220 + (dist / Math.max(1, viewportWvp)) * 320)));
     this.slideNeighborAppearFadeGen++;
-    this.pageTurnNeighborAppearOpacity = 1;
+    this.pageTurnNextStripOpacity = 1;
+    this.pageTurnPrevStripOpacity = 1;
     this.pageTurnCommitAnimating = true;
     this.pageTurnCrossfadeT = 0;
     const commitAnimGuard = this.slideCommitAnimGen;
