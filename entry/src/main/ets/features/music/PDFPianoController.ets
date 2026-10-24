@@ -28,7 +28,7 @@ export const PianoSoundProgramValues: number[] = [
   PianoSoundProgramOrgan,
   PianoSoundProgramSquare
 ];
-export const PianoSoundProgramLabels: string[] = ['钢琴', '风琴', '合成器'];
+export const PianoSoundProgramLabels: string[] = ['钢琴', '风琴', '方波'];
 
 export const PianoReferenceHzMin: number = 200;
 export const PianoReferenceHzMax: number = 600;
