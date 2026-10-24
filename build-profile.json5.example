@@ -16,7 +16,7 @@
       {
         "name": "default",
         "signingConfig": "debug",
-        "targetSdkVersion": "6.1.1(24)",
+        "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "6.0.2(22)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
@@ -29,7 +29,7 @@
       {
         "name": "release",
         "signingConfig": "release",
-        "targetSdkVersion": "6.1.1(24)",
+        "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "6.0.2(22)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
