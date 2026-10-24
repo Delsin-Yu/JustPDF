@@ -4060,10 +4060,13 @@ struct PDFView {
   private refreshPianoViewportFromWindow(): void {
     try {
       const rect = this.mainWindow.getWindowProperties().windowRect;
-      this.updateMetronomeViewport({
-        width: rect.width,
-        height: rect.height
-      });
+      this.updatePanelDocking(rect.width);
+      if (this.metronomeViewportWidthVp > 0 && this.metronomeViewportHeightVp > 0) {
+        return;
+      }
+      const windowHeightVp: number = this.getUIContext().px2vp(rect.height) as number;
+      this.metronomeViewportWidthVp = this.getUIContext().px2vp(rect.width) as number;
+      this.metronomeViewportHeightVp = Math.max(0, windowHeightVp - this.titleButtonHeightVp);
     } catch (error) {
       hilog.error(0, 'PDFView', `刷新钢琴视口出错: ${error}.`);
     }
