@@ -35,7 +35,7 @@ constexpr float kPeakLimitStart = 0.92f;
 constexpr float kOutputScale = 0.97f;
 constexpr float kVoicePeakTarget = 0.78f;
 constexpr float kCompThreshold = 0.64f;
-constexpr float kCompAttack = 0.0069f;
+constexpr float kCompAttack = 0.025f;
 constexpr float kCompRelease = 0.00030f;
 constexpr float kNormLoudness = 0.30f;
 constexpr float kNormAttack = 0.0012f;
@@ -208,7 +208,10 @@ float ProcessDynamics(float sample)
     float comp = 1.0f;
     if (g_engine.dynPeak > kCompThreshold) {
         const float over = g_engine.dynPeak / kCompThreshold;
-        comp = 1.0f / sqrtf(over);
+        comp = 1.0f / (1.0f + 0.85f * (over - 1.0f));
+        if (comp < 0.45f) {
+            comp = 0.45f;
+        }
     }
     g_engine.dynRms2 += 0.0018f * (sample * sample - g_engine.dynRms2);
     if (g_engine.dynRms2 < 0.0f) {
@@ -216,17 +219,17 @@ float ProcessDynamics(float sample)
     }
     const float rms = sqrtf(g_engine.dynRms2);
     float normTarget = 1.0f;
-    if (rms > 0.0030f) {
+    if (rms > kNormLoudness) {
         normTarget = kNormLoudness / rms;
-        if (normTarget > 3.20f) {
-            normTarget = 3.20f;
-        }
         if (normTarget < 0.70f) {
             normTarget = 0.70f;
         }
     }
-    const float normCoeff = rms > 0.0030f ? kNormAttack : kNormRelease;
+    const float normCoeff = rms > kNormLoudness ? kNormAttack : kNormRelease;
     g_engine.dynNorm += normCoeff * (normTarget - g_engine.dynNorm);
+    if (g_engine.dynNorm > 1.0f) {
+        g_engine.dynNorm = 1.0f;
+    }
     return sample * comp * g_engine.dynNorm * kMakeup;
 }
 
@@ -537,7 +540,11 @@ void MixIntoBufferLocked(int16_t* output, int32_t frames)
             ++liveCount;
         }
         const float mixTarget = 1.0f / sqrtf(static_cast<float>(liveCount > 0 ? liveCount : 1));
-        g_engine.mixScaleSmooth += 0.0020f * (mixTarget - g_engine.mixScaleSmooth);
+        if (mixTarget < g_engine.mixScaleSmooth) {
+            g_engine.mixScaleSmooth = mixTarget;
+        } else {
+            g_engine.mixScaleSmooth += 0.0020f * (mixTarget - g_engine.mixScaleSmooth);
+        }
         dry *= g_engine.mixScaleSmooth;
         const bool tunerLive = g_engine.tuner.amplitude > 0.00005f || g_engine.tuner.targetAmplitude > 0.00005f;
         if (tunerLive) {
