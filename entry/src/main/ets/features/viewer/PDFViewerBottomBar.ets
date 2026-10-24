@@ -11,20 +11,24 @@ export struct PDFViewerBottomBar {
   @Param annotateMode: 'drag' | 'draw' | 'erase' = 'drag';
   @Param currentPageIndex: number = 0;
   @Param totalPageCount: number = 0;
+  @Param halfPagePreviewActive: boolean = false;
   @Param onPrevPage: () => void = () => {};
   @Param onNextPage: () => void = () => {};
 
-  // 当前页左侧补零，位数与总页数一致（如 12 页时显示 03/12）。
+  // 当前页左侧补零，位数与总页数一致（如 12 页时显示 03/12）；半页预览为 03.5/12。
   private formatPageFraction(): string {
     const total: number = this.totalPageCount;
     const cur: number = this.currentPageIndex + 1;
     if (total <= 0) {
-      return `${cur}/0`;
+      return this.halfPagePreviewActive ? `${cur}.5/0` : `${cur}/0`;
     }
     const width: number = total.toString().length;
     let curStr: string = cur.toString();
     while (curStr.length < width) {
       curStr = '0' + curStr;
+    }
+    if (this.halfPagePreviewActive) {
+      return `${curStr}.5/${total}`;
     }
     return `${curStr}/${total}`;
   }
@@ -48,7 +52,7 @@ export struct PDFViewerBottomBar {
         .fontColor(Color.White)
         .textAlign(TextAlign.Center)
         .maxLines(1)
-        .constraintSize({ minWidth: 72 })
+        .constraintSize({ minWidth: 88 })
         .backgroundColor(ButtonColorSemiTransparent)
         .borderRadius(22)
         .alignSelf(ItemAlign.End)

@@ -19,6 +19,7 @@ import {
 import { ComponentContent, LengthMetricsUnit, OverlayManager, window } from '@kit.ArkUI';
 import { pdfService } from '@kit.PDFKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { displaySync } from '@kit.ArkGraphics2D';
 import { fromArea, mul, pxToVp, toSizePx, Vec2, Vector2 } from '../../common/ui/Numbers';
 import { readWindowSafeInsetsPx } from '../../common/ui/WindowSafeInsets';
 import { preferences, uniformTypeDescriptor as utd } from '@kit.ArkData';
@@ -57,6 +58,8 @@ import {
   PDFAnnotationPrepareUiBridge
 } from '../annotation/PDFAnnotationDependencies';
 import { PDFPageTurnController } from './PDFPageTurnController';
+import { PDFHalfPageController } from './PDFHalfPageController';
+import { PDFHalfPageOverlay } from './PDFHalfPageOverlay';
 import { PDFLinkController } from './PDFLinkController';
 import { PDFDocumentSession, PDFDocumentSessionPaths } from './PDFDocumentSession';
 import { PDFMetronomeController } from '../music/PDFMetronomeController';
@@ -92,7 +95,15 @@ import {
 } from '../panels/FloatingPanelOverlays';
 import { PDFViewerActionMenu } from './PDFViewerActionMenu';
 import { PDFViewerBottomBar } from './PDFViewerBottomBar';
-import { PDFAnnotateMode, PDFLinkVisualMode, PDFPageFlipMode, PDFViewerViewModel, ViewerMinRenderScale } from './PDFViewerViewModel';
+import {
+  HalfPageNavStep,
+  PDFAnnotateMode,
+  PDFLinkVisualMode,
+  PDFPageDisplayMode,
+  PDFPageFlipMode,
+  PDFViewerViewModel,
+  ViewerMinRenderScale
+} from './PDFViewerViewModel';
 import { AnnotateLongPressIndicator } from './AnnotateLongPressIndicator';
 import {
   AnnotationPaletteContentWidth,
@@ -265,12 +276,74 @@ struct PDFView {
     redrawStrokes: () => this.redrawStrokes(),
     onSlideSessionIdle: () => {
       this.endInteractiveMotionDemote();
-      this.flushPendingSlideMainLoad();
+      void this.flushPendingSlideMainLoad();
     },
+    flushPendingSlideMainLoad: () => this.flushPendingSlideMainLoad(),
     gotoPage: (targetIndex: number, deferSlideVisualReset: boolean, recordJumpHistory: boolean) =>
       this.gotoPage(targetIndex, deferSlideVisualReset, recordJumpHistory),
+    getMainSlotAt: (index: number) => this.mainSlotAt(index),
+    commitHalfPageSlide: (direction: number) => {
+      if (this.halfUnderlyingSwapped) {
+        const swapDir: number = this.halfSwapDirection;
+        this.halfUnderlyingSwapped = false;
+        this.halfSlideMovedMainBack = false;
+        void this.settleAfterMidSwap(swapDir).then(() => {
+          this.endInteractiveMotionDemote();
+          void this.flushPendingSlideMainLoad();
+        });
+        return;
+      }
+      const step: HalfPageNavStep = direction < 0
+        ? this.viewerViewModel.stepHalfPageNext()
+        : this.viewerViewModel.stepHalfPagePrev();
+      void this.applyHalfPageStep(step).then(() => {
+        this.endInteractiveMotionDemote();
+        void this.flushPendingSlideMainLoad();
+      });
+    },
+    beginHalfPageSlide: (direction: number) => {
+      this.beginHalfPageSlide(direction);
+    },
+    applyHalfPageSlideProgress: (direction: number, progress: number) => {
+      this.applyHalfPageSlideProgress(direction, progress);
+    },
+    cancelHalfPageSlide: () => {
+      void this.cancelHalfPageSlide().then(() => {
+        this.endInteractiveMotionDemote();
+        void this.flushPendingSlideMainLoad();
+      });
+    }
+  }, this.settings);
+  @Local halfPageController: PDFHalfPageController = new PDFHalfPageController({
+    viewerViewModel: this.viewerViewModel,
+    getPageCache: (targetIndex: number, renderScale: number, loadVersion: number) =>
+      this.getPageCache(targetIndex, renderScale, loadVersion),
+    peekPageCache: (targetIndex: number, renderScale: number) =>
+      this.pageDataSource.peekPageCache(targetIndex, renderScale),
+    getCurrentRenderScale: () => this.currentRenderScale,
+    getPageLoadVersion: () => this.pageLoadVersion,
+    getPlaceholderPixelMap: () => this.placeholderPixelMap,
+    getPageDisplaySize: (pageIndex: number) => this.getPageDisplaySize(pageIndex),
+    redrawOverlayStrokes: (pageIndex: number, slot: PageViewSlot) => {
+      slot.resetCanvases();
+      this.annotationController.loadPageStrokes(slot.annotateCtx, pageIndex);
+    },
     getMainSlotAt: (index: number) => this.mainSlotAt(index)
   }, this.settings);
+  private holdHalfPreviewAcrossGoto: boolean = false;
+  private halfSlideMovedMainBack: boolean = false;
+  private halfUnderlyingSwapped: boolean = false;
+  private halfSwapDirection: number = 0;
+  private pendingHideHalfOverlayOnMainPage: number = -1;
+  private mainSlotReadyPage: number = -1;
+  private halfOverlayHideSync: displaySync.DisplaySync | undefined = undefined;
+  private halfOverlayHideFramesLeft: number = 0;
+  private halfRevealHoldActive: boolean = false;
+  private halfRevealHoldPaintArmed: boolean = false;
+  private halfRevealHoldResolve: (() => void) | undefined = undefined;
+  private skipHalfSettleDemote: boolean = false;
+  private holdMainRasterAfterHalfBack: boolean = false;
+  private halfOverlayCoverReady: boolean = false;
   @Local linkController: PDFLinkController = new PDFLinkController({
     viewerViewModel: this.viewerViewModel,
     pageDataSource: this.pageDataSource,
@@ -1755,6 +1828,13 @@ struct PDFView {
         this.triggerPageFlipShadeIntro();
       }
     };
+    this.viewerViewModel.onPageDisplayModeChanged = (_mode: PDFPageDisplayMode) => {
+      if (this.viewerViewModel.isHalfPageMode()) {
+        this.halfPageController.parkInvisibleCoverFromMain();
+      } else {
+        this.halfPageController.clearPreview();
+      }
+    };
 
     // Register hotkeys
     this.hotkeys.push(new InputAction([KeyCode.KEYCODE_DPAD_UP, KeyCode.KEYCODE_DPAD_LEFT], false, false, () => this.navigatePrevPage()));
@@ -2253,6 +2333,11 @@ struct PDFView {
     }
     // 根据更新的 displaySizes 重新计算 viewSize
     this.updateViewerViewSize();
+    if (this.viewerViewModel.halfPagePreviewActive &&
+      this.halfPageController.overlayPageIndex >= 0 &&
+      this.halfPageController.overlaySlot.pixelMap === undefined) {
+      await this.halfPageController.loadOverlayPage(this.halfPageController.overlayPageIndex);
+    }
   }
 
   private readPixelMapWidth(pixelMap: PixelMap | undefined): number {
@@ -2277,11 +2362,21 @@ struct PDFView {
     const oversampleRatio: number = screenW > 0.001 ? bitmapW / screenW : 1;
     const preferLayout: boolean =
       this.interactiveMotionDemoted || oversampleRatio > 1.35;
-    if (preferLayout && cache.layoutPixelMap !== undefined) {
-      slot.applyDisplay(selectDisplayPixelMap(cache, true), cache.displaySize, false);
+    if (slot === this.mainSlots[0] && this.shouldHoldMainRasterUnderHalfOverlay()) {
       return;
     }
-    slot.applyCache(cache);
+    if (preferLayout && cache.layoutPixelMap !== undefined) {
+      slot.applyDisplay(selectDisplayPixelMap(cache, true), cache.displaySize, false);
+    } else {
+      slot.applyCache(cache);
+    }
+    if (slot === this.mainSlots[0]) {
+      this.mainSlotReadyPage = this.viewerViewModel.currentPageIndex;
+      this.armHalfRevealHoldPaintFrames();
+      if (this.halfSlideMovedMainBack) {
+        this.pageTurnController.syncHalfPageSlideProgress();
+      }
+    }
   }
 
   /** 拖拽/捏合/滑动开始：主条+邻条降到 layout，避免 HQ 纹理跟手变换 */
@@ -2308,6 +2403,14 @@ struct PDFView {
       return;
     }
     this.interactiveMotionDemoted = false;
+    if (this.skipHalfSettleDemote || this.holdMainRasterAfterHalfBack) {
+      this.skipHalfSettleDemote = false;
+      return;
+    }
+    if (this.viewerViewModel.isHalfPageMode() && this.halfPageController.shouldShowOverlay() &&
+      this.halfPageController.overlayReveal > 0.05) {
+      return;
+    }
     void this.updateDisplayedPagesAtScale(this.currentRenderScale);
   }
 
@@ -2392,6 +2495,9 @@ struct PDFView {
 
   // 根据页面原始大小计算显示大小（与光栅 Worker 中的 displaySize 计算一致）
   private getPageDisplaySize(pageIndex: number): Vector2 {
+    if (pageIndex < 0 || pageIndex >= this.pageDataSource.totalCount()) {
+      return Vec2(1, 1);
+    }
     const rawSize = this.pageDataSource.getPageRawSize(pageIndex);
     return mul(rawSize, 2);
   }
@@ -2424,7 +2530,11 @@ struct PDFView {
   }
 
   // 立即铺主槽占位（白色/透明），不等待 Worker
-  private applyMainSlotPlaceholders(indices: number[], seedFromActiveTransitionStrip: boolean = false): void {
+  private applyMainSlotPlaceholders(
+    indices: number[],
+    seedFromActiveTransitionStrip: boolean = false,
+    keepCoveredMain: boolean = false
+  ): void {
     this.mainSlotPagesBeingLoaded = indices.slice();
     for (let i = 0; i < this.mainSlots.length; i++) {
       this.mainSlots[i].clearLoading();
@@ -2436,6 +2546,12 @@ struct PDFView {
     const seeded: boolean[] = seedFromActiveTransitionStrip
       ? this.pageTurnController.trySeedMainViewsFromTransition(indices)
       : [false, false, false];
+    if (!seeded[0] && this.halfPageController.consumeSeedMainOnNextGoto()) {
+      seeded[0] = true;
+    }
+    if (!seeded[0] && keepCoveredMain) {
+      seeded[0] = true;
+    }
 
     for (let slot = 0; slot < PAGE_VIEW_SLOT_COUNT; slot++) {
       if (indices.length > slot) {
@@ -2492,6 +2608,12 @@ struct PDFView {
   }
 
   async gotoPage(targetIndex: number, deferSlideVisualReset: boolean = false, recordJumpHistory: boolean = true): Promise<void> {
+    const keepSeed: boolean = this.halfPageController.seedMainOnNextGoto;
+    const holdPreview: boolean = this.holdHalfPreviewAcrossGoto;
+    if (!holdPreview && !keepSeed) {
+      this.halfPageController.clearPreview();
+    }
+    this.holdHalfPreviewAcrossGoto = false;
     this.pageTurnController.clearPendingSlideGotoTarget();
     if (targetIndex < 0 || targetIndex >= this.viewerViewModel.totalPageCount) {
       if (deferSlideVisualReset) {
@@ -2514,7 +2636,7 @@ struct PDFView {
       this.prefetchDebounceId = undefined;
     }
 
-    if (!deferSlideVisualReset) {
+    if (!deferSlideVisualReset && !this.pageTurnController.pageTurnDragActive) {
       this.viewerViewModel.clearSlideNavEffectiveStartIndex();
       this.pageTurnController.resetHorizontalSlidePreview();
       this.pageTurnController.slideGotoInFlight = false;
@@ -2529,13 +2651,15 @@ struct PDFView {
     }
 
     // 导航到新页面时重置渲染缩放（先于 load，避免仍按旧缩放取缓存）
-    this.currentRenderScale = ViewerMinRenderScale;
+    if (!keepSeed && !holdPreview) {
+      this.currentRenderScale = ViewerMinRenderScale;
+    }
 
     // 丢掉已过期的排队光栅，避免滑块连跳后落地页排在中间页之后
     this.pageDataSource.cancelQueuedPendingExcept(indicesToLoad);
 
     // 先铺占位再 commit，滑块与页码跟上手指；位图仍按 navToken 异步填入
-    this.applyMainSlotPlaceholders(indicesToLoad, deferSlideVisualReset);
+    this.applyMainSlotPlaceholders(indicesToLoad, deferSlideVisualReset, holdPreview);
     this.viewerViewModel.commitPageTarget(clampedTarget);
     if (this.viewerViewModel.isAnnotatePaletteVisible) {
       this.noteAnnotationPageInteraction(clampedTarget);
@@ -2554,11 +2678,19 @@ struct PDFView {
     }
 
     await this.finishMainSlotLoadAndPrefetch(indicesToLoad, navToken, clampedTarget);
-    this.resetViewToFit();
+    if (keepSeed) {
+      this.pendingHideHalfOverlayOnMainPage = clampedTarget;
+      this.halfPageController.keepFullCoverVisible();
+    } else if (!holdPreview) {
+      this.resetViewToFit();
+      if (this.viewerViewModel.isHalfPageMode()) {
+        this.halfPageController.parkInvisibleCoverFromMain();
+      }
+    }
     this.redrawStrokes();
   }
 
-  private flushPendingSlideMainLoad(): void {
+  private async flushPendingSlideMainLoad(): Promise<void> {
     const token: number = this.pendingSlideMainLoadToken;
     const indices: number[] = this.pendingSlideMainLoadIndices;
     const center: number = this.pendingSlideMainLoadCenter;
@@ -2567,7 +2699,7 @@ struct PDFView {
     if (token < 0 || token !== this.pageLoadVersion || indices.length === 0) {
       return;
     }
-    void this.finishMainSlotLoadAndPrefetch(indices, token, center);
+    await this.finishMainSlotLoadAndPrefetch(indices, token, center);
   }
 
   private async finishMainSlotLoadAndPrefetch(indices: number[], navToken: number, centerIndex: number): Promise<void> {
@@ -2601,11 +2733,394 @@ struct PDFView {
   }
 
   navigatePrevPage(): void {
+    if (this.viewerViewModel.isHalfPageMode()) {
+      void this.applyHalfPageStep(this.viewerViewModel.stepHalfPagePrev());
+      return;
+    }
     this.gotoPage(this.viewerViewModel.navigateToPreviousPage(), false, false);
   }
 
   navigateNextPage(): void {
+    if (this.viewerViewModel.isHalfPageMode()) {
+      void this.applyHalfPageStep(this.viewerViewModel.stepHalfPageNext());
+      return;
+    }
     this.gotoPage(this.viewerViewModel.navigateToNextPage(), false, false);
+  }
+
+  private shouldAnimateHalfReveal(): boolean {
+    return this.viewerViewModel.pageFlipMode === 'horizontalSlide';
+  }
+
+  private async animateHalfReveal(target: number): Promise<void> {
+    if (!this.shouldAnimateHalfReveal()) {
+      this.halfPageController.overlayReveal = target;
+      return;
+    }
+    const start: number = this.halfPageController.overlayReveal;
+    if (Math.abs(start - target) < 0.012) {
+      this.halfPageController.overlayReveal = target;
+      return;
+    }
+    await new Promise<void>((resolve: () => void) => {
+      this.getUIContext().animateTo({
+        duration: 220,
+        curve: Curve.EaseOut,
+        onFinish: () => {
+          resolve();
+        }
+      }, () => {
+        this.halfPageController.overlayReveal = target;
+      });
+    });
+  }
+
+  private applyHalfPageSlideProgress(direction: number, progress: number): void {
+    if (this.shouldHoldFullCoverBeforeBackSwap(direction)) {
+      this.halfPageController.overlayReveal = 1;
+      this.halfPageController.overlayCoverOpacity = 1;
+      if (!this.halfOverlayCoverReady) {
+        return;
+      }
+      this.maybeSwapHalfUnderlying(direction, progress);
+      if (!this.halfUnderlyingSwapped) {
+        return;
+      }
+    }
+    this.halfPageController.applySlideReveal(direction, progress);
+    this.maybeSwapHalfUnderlying(direction, progress);
+    if (this.shouldClampHalfRevealUntilPainted() && this.halfPageController.overlayReveal < 0.85) {
+      this.halfPageController.overlayReveal = 0.85;
+    }
+  }
+
+  private shouldHoldFullCoverBeforeBackSwap(direction: number): boolean {
+    return direction > 0 &&
+      !this.halfPageController.slideStartedPreview &&
+      !this.halfUnderlyingSwapped;
+  }
+
+  private maybeSwapHalfUnderlying(direction: number, progress: number): void {
+    if (this.halfUnderlyingSwapped) {
+      return;
+    }
+    if (direction < 0 && this.halfPageController.slideStartedPreview && progress >= 0.7) {
+      this.halfUnderlyingSwapped = true;
+      this.halfSwapDirection = -1;
+      this.halfPageController.seedMainOnNextGoto = true;
+      const nextIndex: number = this.viewerViewModel.currentPageIndex + 1;
+      void this.gotoPage(nextIndex, false, false);
+      return;
+    }
+    if (direction > 0 && !this.halfPageController.slideStartedPreview && progress >= 0.1 &&
+      this.viewerViewModel.currentPageIndex > 0) {
+      this.halfUnderlyingSwapped = true;
+      this.halfSwapDirection = 1;
+      this.halfSlideMovedMainBack = true;
+      const prevIndex: number = this.viewerViewModel.currentPageIndex - 1;
+      if (!this.halfPageController.reviveFullCover(this.viewerViewModel.currentPageIndex)) {
+        this.halfPageController.preparePreviewFromMainSlot(this.viewerViewModel.currentPageIndex);
+      }
+      this.beginHalfRevealHold();
+      this.primeMainWithPage(prevIndex);
+      this.holdHalfPreviewAcrossGoto = true;
+      void this.gotoPage(prevIndex, false, false);
+    }
+  }
+
+  private tryHideHalfOverlayAfterMainReady(): void {
+    if (this.pendingHideHalfOverlayOnMainPage < 0) {
+      return;
+    }
+    if (this.halfPageController.overlayReveal < 0.99) {
+      return;
+    }
+    if (this.mainSlotReadyPage !== this.pendingHideHalfOverlayOnMainPage) {
+      return;
+    }
+    this.pendingHideHalfOverlayOnMainPage = -1;
+    this.halfPageController.settleFullPageCover();
+  }
+
+  private stopHalfOverlayHideSync(): void {
+    if (this.halfOverlayHideSync === undefined) {
+      return;
+    }
+    try {
+      this.halfOverlayHideSync.off('frame', this.handleHalfOverlayHideFrame);
+      this.halfOverlayHideSync.stop();
+    } catch (_e) {
+    }
+    this.halfOverlayHideSync = undefined;
+    this.halfOverlayHideFramesLeft = 0;
+  }
+
+  private readonly handleHalfOverlayHideFrame = (_info: displaySync.IntervalInfo): void => {
+    this.halfOverlayHideFramesLeft--;
+    if (this.halfOverlayHideFramesLeft > 0) {
+      return;
+    }
+    this.stopHalfOverlayHideSync();
+    this.tryHideHalfOverlayAfterMainReady();
+  };
+
+  private scheduleHalfOverlayHideAfterPaint(): void {
+    this.stopHalfOverlayHideSync();
+    this.halfOverlayHideFramesLeft = 2;
+    const sync = displaySync.create();
+    const range: ExpectedFrameRateRange = {
+      expected: 60,
+      min: 0,
+      max: 120
+    };
+    try {
+      sync.setExpectedFrameRateRange(range);
+    } catch (_rangeError) {
+    }
+    sync.on('frame', this.handleHalfOverlayHideFrame);
+    this.halfOverlayHideSync = sync;
+    this.getUIContext().runScopedTask(() => {
+      if (this.halfOverlayHideSync === sync) {
+        sync.start();
+      }
+    });
+  }
+
+  private shouldHoldMainRasterUnderHalfOverlay(): boolean {
+    if (this.mainSlots[0].pixelMap === undefined) {
+      return false;
+    }
+    if (this.holdMainRasterAfterHalfBack) {
+      return true;
+    }
+    if (!this.viewerViewModel.isHalfPageMode() || !this.halfPageController.shouldShowOverlay()) {
+      return false;
+    }
+    return this.halfPageController.overlayReveal < 0.85;
+  }
+
+  private shouldClampHalfRevealUntilPainted(): boolean {
+    if (this.halfRevealHoldActive) {
+      return true;
+    }
+    return this.halfSlideMovedMainBack &&
+      this.mainSlotReadyPage !== this.viewerViewModel.currentPageIndex;
+  }
+
+  private beginHalfRevealHold(): void {
+    this.halfRevealHoldActive = true;
+    this.halfRevealHoldPaintArmed = false;
+    this.halfRevealHoldResolve = undefined;
+  }
+
+  private releaseHalfRevealHold(): void {
+    if (!this.halfRevealHoldActive && this.halfRevealHoldResolve === undefined) {
+      return;
+    }
+    this.halfRevealHoldActive = false;
+    this.halfRevealHoldPaintArmed = false;
+    const resolve: (() => void) | undefined = this.halfRevealHoldResolve;
+    this.halfRevealHoldResolve = undefined;
+    if (resolve !== undefined) {
+      resolve();
+    }
+  }
+
+  private armHalfRevealHoldPaintFrames(): void {
+    if (!this.halfRevealHoldActive || this.halfRevealHoldPaintArmed) {
+      return;
+    }
+    this.halfRevealHoldPaintArmed = true;
+    void this.waitDisplaySyncFrames(2).then(() => {
+      this.releaseHalfRevealHold();
+    });
+  }
+
+  private async waitHalfRevealHold(): Promise<void> {
+    if (!this.halfRevealHoldActive) {
+      return;
+    }
+    await new Promise<void>((resolve: () => void) => {
+      this.halfRevealHoldResolve = resolve;
+    });
+  }
+
+  private async waitHalfRevealHoldOrArmFallback(): Promise<void> {
+    if (!this.halfRevealHoldActive) {
+      return;
+    }
+    if (!this.halfRevealHoldPaintArmed && this.mainSlots[0].pixelMap !== undefined) {
+      this.armHalfRevealHoldPaintFrames();
+    }
+    if (!this.halfRevealHoldPaintArmed) {
+      this.releaseHalfRevealHold();
+      return;
+    }
+    await this.waitHalfRevealHold();
+  }
+
+  private async waitDisplaySyncFrames(frameCount: number): Promise<void> {
+    if (frameCount <= 0) {
+      return;
+    }
+    await new Promise<void>((resolve: () => void) => {
+      const sync: displaySync.DisplaySync = displaySync.create();
+      let framesLeft: number = frameCount;
+      const onFrame = (_info: displaySync.IntervalInfo): void => {
+        framesLeft--;
+        if (framesLeft > 0) {
+          return;
+        }
+        try {
+          sync.off('frame', onFrame);
+          sync.stop();
+        } catch (_e) {
+        }
+        resolve();
+      };
+      const range: ExpectedFrameRateRange = {
+        expected: 60,
+        min: 0,
+        max: 120
+      };
+      try {
+        sync.setExpectedFrameRateRange(range);
+      } catch (_rangeError) {
+      }
+      sync.on('frame', onFrame);
+      this.getUIContext().runScopedTask(() => {
+        sync.start();
+      });
+    });
+  }
+
+  private beginHalfPageSlide(direction: number): void {
+    this.stopHalfOverlayHideSync();
+    this.releaseHalfRevealHold();
+    this.pendingHideHalfOverlayOnMainPage = -1;
+    this.halfUnderlyingSwapped = false;
+    this.halfSwapDirection = 0;
+    this.halfSlideMovedMainBack = false;
+    this.skipHalfSettleDemote = false;
+    this.holdMainRasterAfterHalfBack = false;
+    this.halfOverlayCoverReady = false;
+    this.halfPageController.slideStartedPreview = this.viewerViewModel.halfPagePreviewActive;
+    const base: number = this.viewerViewModel.currentPageIndex;
+    if (direction < 0 && !this.viewerViewModel.halfPagePreviewActive) {
+      void this.halfPageController.armOverlayForSlide(base + 1, 0);
+      return;
+    }
+    if (direction > 0 && !this.viewerViewModel.halfPagePreviewActive && base > 0) {
+      if (!this.halfPageController.reviveFullCover(base)) {
+        this.halfPageController.preparePreviewFromMainSlot(base);
+      }
+      this.armHalfOverlayCoverReady();
+    }
+  }
+
+  private armHalfOverlayCoverReady(): void {
+    this.halfOverlayCoverReady = false;
+    void this.waitDisplaySyncFrames(2).then(() => {
+      this.halfOverlayCoverReady = true;
+      if (this.pageTurnController.pageTurnDragActive) {
+        this.pageTurnController.syncHalfPageSlideProgress();
+      }
+    });
+  }
+
+  private async settleAfterMidSwap(swapDir: number): Promise<void> {
+    if (swapDir > 0) {
+      this.viewerViewModel.setHalfPagePreviewActive(true);
+      await this.waitHalfRevealHoldOrArmFallback();
+      await this.animateHalfReveal(0.5);
+      return;
+    }
+    await this.animateHalfReveal(1);
+    this.pendingHideHalfOverlayOnMainPage = this.viewerViewModel.currentPageIndex;
+    this.scheduleHalfOverlayHideAfterPaint();
+  }
+
+  private primeMainWithPage(pageIndex: number): void {
+    const slot: PageViewSlot | undefined = this.mainSlotAt(0);
+    const cache: PageCache | undefined = this.pageDataSource.peekPageCache(pageIndex, this.currentRenderScale);
+    if (slot === undefined || cache === undefined) {
+      return;
+    }
+    slot.applyCache(cache);
+  }
+
+  private async cancelHalfPageSlide(): Promise<void> {
+    const startedPreview: boolean = this.halfPageController.slideStartedPreview;
+    const swapped: boolean = this.halfUnderlyingSwapped;
+    const swapDir: number = this.halfSwapDirection;
+    this.halfUnderlyingSwapped = false;
+    this.halfSlideMovedMainBack = false;
+    this.releaseHalfRevealHold();
+    if (swapped && swapDir > 0) {
+      await this.animateHalfReveal(1);
+      this.halfPageController.seedMainOnNextGoto = true;
+      await this.gotoPage(this.viewerViewModel.currentPageIndex + 1, false, false);
+      return;
+    }
+    if (swapped && swapDir < 0) {
+      this.holdHalfPreviewAcrossGoto = true;
+      await this.gotoPage(this.viewerViewModel.currentPageIndex - 1, false, false);
+      this.viewerViewModel.setHalfPagePreviewActive(true);
+      await this.animateHalfReveal(0.5);
+      return;
+    }
+    await this.animateHalfReveal(startedPreview ? 0.5 : 0);
+    if (!startedPreview) {
+      this.halfPageController.parkInvisibleCoverFromMain();
+    }
+  }
+
+  private async applyHalfPageStep(step: HalfPageNavStep): Promise<void> {
+    const samePage: boolean = step.pageIndex === this.viewerViewModel.currentPageIndex;
+    if (!step.needsGoto && step.previewActive === this.viewerViewModel.halfPagePreviewActive && samePage) {
+      if (step.previewActive) {
+        await this.animateHalfReveal(0.5);
+      }
+      return;
+    }
+    try {
+      if (step.needsGoto && step.previewActive) {
+        this.holdMainRasterAfterHalfBack = false;
+        if (!this.halfPageController.reviveFullCover(this.viewerViewModel.currentPageIndex)) {
+          this.halfPageController.preparePreviewFromMainSlot(this.viewerViewModel.currentPageIndex);
+        }
+        await this.waitDisplaySyncFrames(2);
+        this.halfOverlayCoverReady = true;
+        this.beginHalfRevealHold();
+        this.primeMainWithPage(step.pageIndex);
+        this.holdHalfPreviewAcrossGoto = true;
+        await this.gotoPage(step.pageIndex, false, false);
+        await this.waitHalfRevealHoldOrArmFallback();
+        await this.animateHalfReveal(0.5);
+        return;
+      }
+      if (step.needsGoto && !step.previewActive) {
+        this.holdMainRasterAfterHalfBack = false;
+        this.halfPageController.seedMainOnNextGoto = true;
+        await this.gotoPage(step.pageIndex, false, false);
+        await this.animateHalfReveal(1);
+        this.pendingHideHalfOverlayOnMainPage = step.pageIndex;
+        this.scheduleHalfOverlayHideAfterPaint();
+        return;
+      }
+      if (step.previewActive) {
+        await this.halfPageController.showPreviewOfPage(step.pageIndex + 1);
+        await this.animateHalfReveal(0.5);
+        return;
+      }
+      await this.animateHalfReveal(0);
+      await this.waitDisplaySyncFrames(2);
+      this.halfPageController.parkInvisibleCoverFromMain();
+      this.skipHalfSettleDemote = true;
+      this.holdMainRasterAfterHalfBack = true;
+    } catch (error) {
+      hilog.error(0, 'PDFView', `半页翻页失败: ${error}.`);
+    }
   }
 
   private handlePageSliderChange(newValue: number, mode: SliderChangeMode): void {
@@ -2671,6 +3186,13 @@ struct PDFView {
         this.annotationController.loadPageStrokes(slot.annotateCtx, pageIndex);
       }
     }
+    if (this.viewerViewModel.halfPagePreviewActive && this.halfPageController.overlayPageIndex >= 0) {
+      this.halfPageController.overlaySlot.resetCanvases();
+      this.annotationController.loadPageStrokes(
+        this.halfPageController.overlaySlot.annotateCtx,
+        this.halfPageController.overlayPageIndex
+      );
+    }
   }
 
   executeShare(): void {
@@ -2714,6 +3236,22 @@ struct PDFView {
     return {
       x: scaleX,
       y: scaleY,
+      centerX: 0,
+      centerY: 0
+    };
+  }
+
+  private getHalfOverlayCanvasScale(): ScaleOptions {
+    const viewSize: Vector2 = this.halfPageController.overlaySlot.viewSize;
+    const pageIndex: number = this.halfPageController.overlayPageIndex >= 0
+      ? this.halfPageController.overlayPageIndex : 0;
+    const canvasSize: Vector2 = this.getCanvasSize(pageIndex);
+    if (canvasSize.x === 0 || canvasSize.y === 0) {
+      return { x: 1, y: 1, centerX: 0, centerY: 0 };
+    }
+    return {
+      x: viewSize.x / canvasSize.x,
+      y: viewSize.y / canvasSize.y,
       centerX: 0,
       centerY: 0
     };
@@ -3655,8 +4193,46 @@ struct PDFView {
           centerX: 0,
           centerY: 0
         })
-        .translate({ x: this.pageTurnController.pageTurnOffsetVp, y: 0 })
+        .translate({ x: this.pageTurnController.getMainStripTranslateVp(), y: 0 })
         .opacity(this.pageTurnController.getSlideCurrentStripOpacity())
+
+        PDFHalfPageOverlay({
+          pixelMap: this.halfPageController.overlaySlot.pixelMap,
+          loading: this.halfPageController.overlaySlot.loading,
+          pageViewSize: this.halfPageController.overlaySlot.viewSize,
+          clipSize: this.halfPageController.getOverlayClipSizePx(),
+          canvasSize: this.getCanvasSize(this.halfPageController.overlayPageIndex >= 0
+            ? this.halfPageController.overlayPageIndex : 0),
+          canvasScale: this.getHalfOverlayCanvasScale(),
+          overlayShown: this.halfPageController.overlayShown,
+          coverOpacity: this.halfPageController.overlayCoverOpacity,
+          dropShadow: this.halfPageController.getOverlayDropShadow(),
+          drawCanvasVisible: this.viewerViewModel.annotateMode !== 'drag' && !this.isDocumentReadOnly(),
+          annotateCtx: this.halfPageController.overlaySlot.annotateCtx,
+          drawCtx: this.halfPageController.overlaySlot.drawCtx,
+          onDrawTouch: (event: TouchEvent) => this.handleDrawTouch(
+            this.halfPageController.overlaySlot.drawCtx,
+            this.halfPageController.overlaySlot.annotateCtx,
+            this.halfPageController.overlayPageIndex >= 0 ? this.halfPageController.overlayPageIndex : 0,
+            event
+          ),
+          onDrawMouse: (event: MouseEvent) => this.handleDrawMouse(
+            this.halfPageController.overlaySlot.drawCtx,
+            this.halfPageController.overlaySlot.annotateCtx,
+            this.halfPageController.overlayPageIndex >= 0 ? this.halfPageController.overlayPageIndex : 0,
+            event
+          )
+        })
+          .alignRules(TopLeft)
+          .offset(this.viewerViewModel.viewPan)
+          .scale({
+            x: this.viewerViewModel.viewScale,
+            y: this.viewerViewModel.viewScale,
+            centerX: 0,
+            centerY: 0
+          })
+          .hitTestBehavior(this.halfPageController.shouldShowOverlay()
+            ? HitTestMode.Default : HitTestMode.None)
 
         // 左侧预览条始终挂在树上，用 visibility 显隐，避免 if 卸节点时牵动主层 Image 重挂载。
         Row(ContainerCfg) {
@@ -3963,6 +4539,7 @@ struct PDFView {
                 annotateMode: this.viewerViewModel.annotateMode,
                 currentPageIndex: this.viewerViewModel.currentPageIndex,
                 totalPageCount: this.viewerViewModel.totalPageCount,
+                halfPagePreviewActive: this.viewerViewModel.halfPagePreviewActive,
                 onPrevPage: () => this.navigatePrevPage(),
                 onNextPage: () => this.navigateNextPage()
               })

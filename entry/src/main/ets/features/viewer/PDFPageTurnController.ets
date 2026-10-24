@@ -34,8 +34,14 @@ export interface PDFPageTurnControllerDependencies {
   resetViewToFit: () => void;
   redrawStrokes: () => void;
   onSlideSessionIdle: () => void;
+  flushPendingSlideMainLoad: () => Promise<void>;
   gotoPage: (targetIndex: number, deferSlideVisualReset: boolean, recordJumpHistory: boolean) => Promise<void>;
   getMainSlotAt: (index: number) => PageViewSlot | undefined;
+  /** 半页模式滑动松手提交：-1 下一半步，+1 上一半步 */
+  commitHalfPageSlide: (direction: number) => void;
+  beginHalfPageSlide: (direction: number) => void;
+  applyHalfPageSlideProgress: (direction: number, progress: number) => void;
+  cancelHalfPageSlide: () => void;
 }
 
 @ObservedV2
@@ -98,6 +104,20 @@ export class PDFPageTurnController {
     this.dependencies = dependencies;
     this.transNextSlots = createPageViewSlots(settings);
     this.transPrevSlots = createPageViewSlots(settings);
+  }
+
+  syncHalfPageSlideProgress(): void {
+    const ui = this.dependencies.getUIContext();
+    const viewportWvp = this.dependencies.viewerViewModel.getPanClampBounds(ui).viewportSizeVp.x;
+    const slideProgress: number = Math.abs(this.pageTurnOffsetVp) / Math.max(1, viewportWvp);
+    this.dependencies.applyHalfPageSlideProgress(this.pageTurnDirection, slideProgress);
+  }
+
+  getMainStripTranslateVp(): number {
+    if (this.dependencies.viewerViewModel.isHalfPageMode()) {
+      return 0;
+    }
+    return this.pageTurnOffsetVp;
   }
 
   getPendingSlideGotoTarget(): number | undefined {
@@ -249,9 +269,7 @@ export class PDFPageTurnController {
       return;
     }
     this.stopSlideTeardownSync();
-    this.clearHorizontalSlidePreviewState();
-    this.finishSlideSessionIdle(false);
-    this.clearSlideGotoInFlightIfToken(navToken);
+    void this.uncoverAfterMainReady(navToken);
   };
 
   private startSlideTeardownAfterPaint(navToken: number, gen: number): void {
@@ -282,6 +300,17 @@ export class PDFPageTurnController {
   /** 新一次手指拖动或尚未 goto 的提交已接管画面，旧收尾不得再改偏移 / 缩放 */
   private isNewerSlideSessionActive(): boolean {
     return this.pageTurnDragActive || this.pendingSlideGotoTarget !== undefined;
+  }
+
+  private async uncoverAfterMainReady(navToken: number): Promise<void> {
+    await this.dependencies.flushPendingSlideMainLoad();
+    if (this.slideGotoCompletionToken !== navToken || this.isNewerSlideSessionActive()) {
+      this.clearSlideGotoInFlightIfToken(navToken);
+      return;
+    }
+    this.clearHorizontalSlidePreviewState();
+    this.finishSlideSessionIdle(false);
+    this.clearSlideGotoInFlightIfToken(navToken);
   }
 
   private finishSlideSessionIdle(applyFitReset: boolean = true): void {
@@ -349,9 +378,7 @@ export class PDFPageTurnController {
     if (!hasStrip) {
       this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
       this.snapSlideVisualProperties(0, 0, 1, 1);
-      this.clearHorizontalSlidePreviewState();
-      this.finishSlideSessionIdle();
-      this.clearSlideGotoInFlightIfToken(navToken);
+      void this.uncoverAfterMainReady(navToken);
       return;
     }
     // 先于收尾再 bump：否则仍挂着的 loadTransitionNeighbor 会在 await 结束后误触发 startSlideNeighborPreviewFadeIn / assign
@@ -699,6 +726,12 @@ export class PDFPageTurnController {
     const gen = this.transitionNeighborGen;
     this.slideVelocityVpPerMs = 0;
     this.lastSlideSampleTimeMs = Date.now();
+    if (this.dependencies.viewerViewModel.isHalfPageMode()) {
+      this.transNextIndices = [];
+      this.transPrevIndices = [];
+      this.dependencies.beginHalfPageSlide(direction);
+      return;
+    }
     if (direction < 0) {
       this.transPrevIndices = [];
       void this.loadTransitionNeighbor('next', gen);
@@ -785,6 +818,9 @@ export class PDFPageTurnController {
         this.pageTurnOffsetVp + dvp.x * this.getSlideDragGainEff(),
         viewportWvp
       );
+      if (vvm.isHalfPageMode()) {
+        this.syncHalfPageSlideProgress();
+      }
       const now = Date.now();
       if (this.lastSlideSampleTimeMs > 0) {
         const dtMs = Math.max(1, now - this.lastSlideSampleTimeMs);
@@ -792,12 +828,14 @@ export class PDFPageTurnController {
         this.slideVelocityVpPerMs = 0.42 * this.slideVelocityVpPerMs + 0.58 * instVpPerMs;
       }
       this.lastSlideSampleTimeMs = now;
-      if (this.pageTurnDirection === -1 && this.transNextIndices.length === 0) {
-        this.transitionNeighborGen++;
-        void this.loadTransitionNeighbor('next', this.transitionNeighborGen);
-      } else if (this.pageTurnDirection === 1 && this.transPrevIndices.length === 0) {
-        this.transitionNeighborGen++;
-        void this.loadTransitionNeighbor('prev', this.transitionNeighborGen);
+      if (!vvm.isHalfPageMode()) {
+        if (this.pageTurnDirection === -1 && this.transNextIndices.length === 0) {
+          this.transitionNeighborGen++;
+          void this.loadTransitionNeighbor('next', this.transitionNeighborGen);
+        } else if (this.pageTurnDirection === 1 && this.transPrevIndices.length === 0) {
+          this.transitionNeighborGen++;
+          void this.loadTransitionNeighbor('prev', this.transitionNeighborGen);
+        }
       }
       return;
     }
@@ -805,9 +843,11 @@ export class PDFPageTurnController {
     const canH = vvm.canPanHorizontally(ui);
     const nextIdx = vvm.peekNextSetIndices();
     const prevIdx = vvm.peekPrevSetIndices();
-    const startNext = dominantH && dvp.x < 0 && nextIdx.length > 0 &&
+    const canHalfNext = vvm.isHalfPageMode() && vvm.canHalfPageStepNext();
+    const canHalfPrev = vvm.isHalfPageMode() && vvm.canHalfPageStepPrev();
+    const startNext = dominantH && dvp.x < 0 && (nextIdx.length > 0 || canHalfNext) &&
       (!canH || vvm.isAtHorizontalScrollRightEnd(ui));
-    const startPrev = dominantH && dvp.x > 0 && prevIdx.length > 0 &&
+    const startPrev = dominantH && dvp.x > 0 && (prevIdx.length > 0 || canHalfPrev) &&
       (!canH || vvm.isAtHorizontalScrollLeftEnd(ui));
 
     if (startNext) {
@@ -842,6 +882,12 @@ export class PDFPageTurnController {
       this.pendingSlideGotoTarget = undefined;
       this.pageTurnCommitAnimating = false;
       this.pageTurnCrossfadeT = 0;
+      if (this.dependencies.viewerViewModel.isHalfPageMode()) {
+        this.snapSlideVisualProperties(0, 0, 1, 1);
+        this.clearHorizontalSlidePreviewState();
+        this.dependencies.cancelHalfPageSlide();
+        return;
+      }
       const hasPreviewStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
       this.slideNeighborAppearFadeGen++;
       const cancelAnimGen = this.slideNeighborAppearFadeGen;
@@ -867,6 +913,16 @@ export class PDFPageTurnController {
           this.pageTurnPrevStripOpacity = 0;
         });
       }
+      return;
+    }
+
+    if (this.dependencies.viewerViewModel.isHalfPageMode()) {
+      this.pendingSlideGotoTarget = undefined;
+      this.pageTurnCommitAnimating = false;
+      this.pageTurnCrossfadeT = 0;
+      this.snapSlideVisualProperties(0, 0, 1, 1);
+      this.clearHorizontalSlidePreviewState();
+      this.dependencies.commitHalfPageSlide(dir);
       return;
     }
 

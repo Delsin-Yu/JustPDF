@@ -8,9 +8,31 @@ export const ViewerRenderScaleLevels: number[] = [6, 8];
 export const ViewerMinRenderScale: number = 6;
 const ViewerScaleThresholds: number[] = [2.0];
 
-export type PDFPageDisplayMode = 'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous';
+export type PDFPageDisplayMode =
+  'single' | 'dual' | 'dualContinuous' | 'tri' | 'triContinuous' | 'halfVertical' | 'halfHorizontal';
 export type PDFPageFlipMode = 'side' | 'button' | 'extern' | 'horizontalSlide';
 export type PDFLinkVisualMode = 'hidden' | 'fadeOnPageEnter' | 'always';
+
+/** 半页模式一次下一页/上一页的落点（整数页 + 是否露出下一页前一半） */
+export class HalfPageNavStep {
+  pageIndex: number;
+  previewActive: boolean;
+  needsGoto: boolean;
+
+  constructor(pageIndex: number, previewActive: boolean, needsGoto: boolean) {
+    this.pageIndex = pageIndex;
+    this.previewActive = previewActive;
+    this.needsGoto = needsGoto;
+  }
+}
+
+function parsePageDisplayMode(raw: string): PDFPageDisplayMode {
+  if (raw === 'single' || raw === 'dual' || raw === 'dualContinuous' || raw === 'tri' ||
+    raw === 'triContinuous' || raw === 'halfVertical' || raw === 'halfHorizontal') {
+    return raw;
+  }
+  return 'single';
+}
 
 /** 与 clampViewPan 一致的视口与内容边界（单位 vp，与 viewPan 一致） */
 export interface PanClampBounds {
@@ -57,11 +79,14 @@ export class PDFViewerViewModel {
   @Trace public linkVisualMode: PDFLinkVisualMode = 'fadeOnPageEnter';
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
+  /** 半页模式：true 表示当前整页 A 上叠着 A+1 的前一半（页码为 A.5） */
+  @Trace public halfPagePreviewActive: boolean = false;
   @Trace public isAnnotatePaletteVisible: boolean = false;
   @Trace public isAnnotationLayerPanelVisible: boolean = false;
   @Trace public isBookmarkPanelVisible: boolean = false;
   private savedPageFlipMode: PDFPageFlipMode = 'horizontalSlide';
   public onPageFlipModeChanged: ((mode: PDFPageFlipMode) => void) | undefined = undefined;
+  public onPageDisplayModeChanged: ((mode: PDFPageDisplayMode) => void) | undefined = undefined;
   /**
    * 水平滑动已提交、目标页尚未完成 load 时，作为 peek / navigate 的「逻辑当前首页」，
    * 避免连滑第二次仍从旧 currentPageIndex 计算到同一套。
@@ -90,7 +115,9 @@ export class PDFViewerViewModel {
       } else {
         this.linkVisualMode = 'fadeOnPageEnter';
       }
-      this.pageDisplayMode = preferencesValue.getSync('pageDisplayMode', 'single') as PDFPageDisplayMode;
+      const displayRaw: string = preferencesValue.getSync('pageDisplayMode', 'single') as string;
+      this.pageDisplayMode = parsePageDisplayMode(displayRaw);
+      this.halfPagePreviewActive = false;
       const flipRaw: string = preferencesValue.getSync('pageFlipMode', 'horizontalSlide') as string;
       if (flipRaw === 'side' || flipRaw === 'button' || flipRaw === 'extern' || flipRaw === 'horizontalSlide') {
         this.pageFlipMode = flipRaw as PDFPageFlipMode;
@@ -124,6 +151,7 @@ export class PDFViewerViewModel {
     if (this.totalPageCount === 0) {
       this.currentPageIndex = 0;
       this.displayedPageIndices = [];
+      this.halfPagePreviewActive = false;
       return;
     }
     this.commitPageTarget(Math.min(this.currentPageIndex, this.totalPageCount - 1));
@@ -141,7 +169,75 @@ export class PDFViewerViewModel {
         return '三页';
       case 'triContinuous':
         return '三页连续';
+      case 'halfVertical':
+        return '半页(纵向)';
+      case 'halfHorizontal':
+        return '半页(横向)';
+      default:
+        return '单页';
     }
+  }
+
+  isHalfPageMode(): boolean {
+    return this.pageDisplayMode === 'halfVertical' || this.pageDisplayMode === 'halfHorizontal';
+  }
+
+  setHalfPagePreviewActive(active: boolean): void {
+    if (!this.isHalfPageMode()) {
+      this.halfPagePreviewActive = false;
+      return;
+    }
+    this.halfPagePreviewActive = active;
+  }
+
+  canHalfPageStepNext(): boolean {
+    if (!this.isHalfPageMode() || this.totalPageCount <= 0) {
+      return false;
+    }
+    return this.getSlideNavBaseIndex() < this.getLastNavigableIndex();
+  }
+
+  canHalfPageStepPrev(): boolean {
+    if (!this.isHalfPageMode() || this.totalPageCount <= 0) {
+      return false;
+    }
+    if (this.halfPagePreviewActive) {
+      return true;
+    }
+    return this.getSlideNavBaseIndex() > 0;
+  }
+
+  stepHalfPageNext(): HalfPageNavStep {
+    const base: number = this.getSlideNavBaseIndex();
+    const last: number = this.getLastNavigableIndex();
+    if (!this.isHalfPageMode() || this.totalPageCount <= 0) {
+      return new HalfPageNavStep(this.currentPageIndex, false, false);
+    }
+    if (this.halfPagePreviewActive) {
+      const nextIndex: number = Math.min(base + 1, last);
+      if (nextIndex === base) {
+        return new HalfPageNavStep(base, true, false);
+      }
+      return new HalfPageNavStep(nextIndex, false, true);
+    }
+    if (base >= last) {
+      return new HalfPageNavStep(base, false, false);
+    }
+    return new HalfPageNavStep(base, true, false);
+  }
+
+  stepHalfPagePrev(): HalfPageNavStep {
+    const base: number = this.getSlideNavBaseIndex();
+    if (!this.isHalfPageMode() || this.totalPageCount <= 0) {
+      return new HalfPageNavStep(this.currentPageIndex, false, false);
+    }
+    if (this.halfPagePreviewActive) {
+      return new HalfPageNavStep(base, false, false);
+    }
+    if (base <= 0) {
+      return new HalfPageNavStep(0, false, false);
+    }
+    return new HalfPageNavStep(base - 1, true, true);
   }
 
   getPageFlipModeText(): string {
@@ -224,7 +320,7 @@ export class PDFViewerViewModel {
   navigateToPreviousPage(): number {
     const base = this.getSlideNavBaseIndex();
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
-      this.pageDisplayMode === 'triContinuous') {
+      this.pageDisplayMode === 'triContinuous' || this.isHalfPageMode()) {
       return base - 1;
     }
     if (this.pageDisplayMode === 'dual') {
@@ -238,7 +334,7 @@ export class PDFViewerViewModel {
   navigateToNextPage(): number {
     const base = this.getSlideNavBaseIndex();
     if (this.pageDisplayMode === 'single' || this.pageDisplayMode === 'dualContinuous' ||
-      this.pageDisplayMode === 'triContinuous') {
+      this.pageDisplayMode === 'triContinuous' || this.isHalfPageMode()) {
       return Math.min(base + 1, this.getLastNavigableIndex());
     }
     if (this.pageDisplayMode === 'dual') {
@@ -250,8 +346,12 @@ export class PDFViewerViewModel {
   }
 
   setPageDisplayMode(value: PDFPageDisplayMode): void {
+    if (this.pageDisplayMode !== value) {
+      this.halfPagePreviewActive = false;
+    }
     this.pageDisplayMode = value;
     this.persistPreference('pageDisplayMode', value, '保存页面显示模式出错');
+    this.onPageDisplayModeChanged?.(value);
   }
 
   setPageFlipMode(value: PDFPageFlipMode): void {
@@ -532,6 +632,22 @@ export class PDFViewerViewModel {
           onApply();
         },
         symbolIcon: getCheckIcon(this.pageDisplayMode == 'triContinuous')
+      },
+      {
+        value: '半页(纵向)',
+        action: () => {
+          this.setPageDisplayMode('halfVertical');
+          onApply();
+        },
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'halfVertical')
+      },
+      {
+        value: '半页(横向)',
+        action: () => {
+          this.setPageDisplayMode('halfHorizontal');
+          onApply();
+        },
+        symbolIcon: getCheckIcon(this.pageDisplayMode == 'halfHorizontal')
       }
     ];
   }
@@ -580,7 +696,7 @@ export class PDFViewerViewModel {
 
   /** 水平滑动预览：下一页（跨页）索引；若无下一套则返回空数组 */
   peekNextSetIndices(): number[] {
-    if (this.totalPageCount <= 0) {
+    if (this.totalPageCount <= 0 || this.isHalfPageMode()) {
       return [];
     }
     const baseDisplayed: number[] = this.slideNavEffectiveStartIndex !== undefined
@@ -597,7 +713,7 @@ export class PDFViewerViewModel {
 
   /** 水平滑动预览：上一套页面索引；若无上一套则返回空数组 */
   peekPrevSetIndices(): number[] {
-    if (this.totalPageCount <= 0) {
+    if (this.totalPageCount <= 0 || this.isHalfPageMode()) {
       return [];
     }
     const baseDisplayed: number[] = this.slideNavEffectiveStartIndex !== undefined
@@ -664,6 +780,11 @@ export class PDFViewerViewModel {
         }
         return indices;
       }
+      case 'halfVertical':
+      case 'halfHorizontal':
+        return [targetIndex];
+      default:
+        return [targetIndex];
     }
   }
 
