@@ -290,3 +290,198 @@ function Test-HdcAvailable {
         return $false
     }
 }
+
+function Test-JustPdfIsAdministrator {
+    if (-not (Test-JustPdfIsWindowsHost)) {
+        return $false
+    }
+
+    $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $Principal = [Security.Principal.WindowsPrincipal]::new($Identity)
+    return $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-HdcTargetScriptPath {
+    if ($PSScriptRoot) {
+        $Candidate = Join-Path $PSScriptRoot 'hdc-target.ps1'
+        if (Test-Path -LiteralPath $Candidate) {
+            return (Resolve-Path -LiteralPath $Candidate).Path
+        }
+    }
+
+    throw '找不到 hdc-target.ps1'
+}
+
+function Get-HdcServerFirewallPort {
+    return 8710
+}
+
+function Get-HdcServerFirewallUdpPort {
+    return (Get-HdcServerFirewallPort)
+}
+
+function Get-HdcServerFirewallRuleName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('UDP', 'TCP')]
+        [string]$Protocol,
+        [int]$Port = (Get-HdcServerFirewallPort)
+    )
+
+    return ('JustPDF HDC Server {0} {1}' -f $Protocol, $Port)
+}
+
+function Get-HdcServerUdpFirewallRuleName {
+    param(
+        [int]$Port = (Get-HdcServerFirewallPort)
+    )
+
+    return (Get-HdcServerFirewallRuleName -Protocol 'UDP' -Port $Port)
+}
+
+function Get-HdcServerProgramFirewallRuleName {
+    return 'JustPDF HDC Server (hdc.exe)'
+}
+
+function Add-HdcServerInboundFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('UDP', 'TCP')]
+        [string]$Protocol,
+        [int]$Port = (Get-HdcServerFirewallPort)
+    )
+
+    if (-not (Test-JustPdfIsWindowsHost)) {
+        throw 'HDC 防火墙规则仅支持 Windows。'
+    }
+
+    $RuleName = Get-HdcServerFirewallRuleName -Protocol $Protocol -Port $Port
+    $Existing = @(Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)
+    if (@($Existing).Count -gt 0) {
+        Write-Host ('防火墙规则已存在: {0}' -f $RuleName) -ForegroundColor DarkGray
+        return $Existing[0]
+    }
+
+    try {
+        $Rule = New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Action Allow -Protocol $Protocol -LocalPort $Port -Profile Any -Enabled True -ErrorAction Stop
+    }
+    catch {
+        throw ('添加防火墙规则失败（需要管理员权限）: {0}' -f $_.Exception.Message)
+    }
+
+    Write-Host ('已添加入站规则: {0} ({1} {2})' -f $RuleName, $Protocol, $Port) -ForegroundColor Green
+    return $Rule
+}
+
+function Add-HdcServerProgramFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HdcPath
+    )
+
+    if (-not (Test-JustPdfIsWindowsHost)) {
+        throw 'HDC 防火墙规则仅支持 Windows。'
+    }
+
+    $Resolved = (Resolve-Path -LiteralPath $HdcPath).Path
+    $RuleName = Get-HdcServerProgramFirewallRuleName
+    $Existing = @(Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)
+    if (@($Existing).Count -gt 0) {
+        Write-Host ('防火墙规则已存在: {0}' -f $RuleName) -ForegroundColor DarkGray
+        return $Existing[0]
+    }
+
+    try {
+        $Rule = New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Action Allow -Program $Resolved -Profile Any -Enabled True -ErrorAction Stop
+    }
+    catch {
+        throw ('添加防火墙规则失败（需要管理员权限）: {0}' -f $_.Exception.Message)
+    }
+
+    Write-Host ('已添加入站规则: {0}' -f $RuleName) -ForegroundColor Green
+    return $Rule
+}
+
+function Add-HdcServerFirewallRules {
+    <#
+    .SYNOPSIS
+    Allow inbound TCP/UDP 8710 plus hdc.exe so LAN discover can auto-connect.
+    Elevates via UAC when the current process is not Administrator.
+    #>
+    param(
+        [int]$Port = (Get-HdcServerFirewallPort),
+        [string]$HdcPath
+    )
+
+    if (-not (Test-JustPdfIsWindowsHost)) {
+        throw 'HDC 防火墙规则仅支持 Windows。'
+    }
+
+    if (-not (Test-JustPdfIsAdministrator)) {
+        $Helper = Get-HdcTargetScriptPath
+        $HdcArg = ''
+        if ($HdcPath -and $HdcPath.Trim()) {
+            $HdcArg = $HdcPath.Trim()
+        }
+
+        $Command = @(
+            '$ErrorActionPreference = ''Stop'''
+            ('. ''{0}''' -f $Helper.Replace("'", "''"))
+            ('Add-HdcServerFirewallRules -Port {0} -HdcPath ''{1}''' -f $Port, $HdcArg.Replace("'", "''"))
+        ) -join '; '
+        $Encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
+        Write-Host '需要管理员权限，正在弹出 UAC...' -ForegroundColor DarkYellow
+        $Process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-EncodedCommand', $Encoded
+        )
+        if ($null -eq $Process -or $Process.ExitCode -ne 0) {
+            $ExitCode = if ($null -eq $Process) { 'unknown' } else { $Process.ExitCode }
+            throw ('添加防火墙规则失败（UAC 退出码 {0}）' -f $ExitCode)
+        }
+
+        if (-not (Test-HdcServerFirewallRulesReady -Port $Port)) {
+            throw 'UAC 已完成，但未检测到 TCP/UDP 入站规则。'
+        }
+
+        Write-Host ('已通过 UAC 添加 HDC 入站规则（TCP/UDP {0} + hdc.exe）' -f $Port) -ForegroundColor Green
+        return @()
+    }
+
+    $Rules = @()
+    $Rules += Add-HdcServerInboundFirewallRule -Protocol 'UDP' -Port $Port
+    $Rules += Add-HdcServerInboundFirewallRule -Protocol 'TCP' -Port $Port
+    if ($HdcPath -and $HdcPath.Trim() -and (Test-Path -LiteralPath $HdcPath.Trim())) {
+        $Rules += Add-HdcServerProgramFirewallRule -HdcPath $HdcPath.Trim()
+    }
+    return $Rules
+}
+
+function Add-HdcServerUdpInboundFirewallRule {
+    param(
+        [int]$Port = (Get-HdcServerFirewallPort),
+        [string]$HdcPath
+    )
+
+    return @(Add-HdcServerFirewallRules -Port $Port -HdcPath $HdcPath)
+}
+
+function Test-HdcServerFirewallRulesReady {
+    param(
+        [int]$Port = (Get-HdcServerFirewallPort)
+    )
+
+    if (-not (Test-JustPdfIsWindowsHost)) {
+        return $false
+    }
+
+    foreach ($Protocol in @('UDP', 'TCP')) {
+        $RuleName = Get-HdcServerFirewallRuleName -Protocol $Protocol -Port $Port
+        $Existing = @(Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)
+        if (@($Existing).Count -eq 0) {
+            return $false
+        }
+    }
+    return $true
+}
