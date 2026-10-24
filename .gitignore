@@ -10,7 +10,9 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
-certs
+/build-profile.json5
+certs/*
+!certs/README.md
 entry/patch.json
 .connect-wifi-history.txt
 .vscode/tasks.json

@@ -5,17 +5,52 @@ $script:JustPdfBundleName = 'deyu.just.pdf'
 $script:JustPdfAbilityName = 'EntryAbility'
 $script:JustPdfModuleName = 'entry'
 $script:JustPdfProductName = 'default'
-$script:JustPdfHapOutputDir = Join-Path $PSScriptRoot 'entry'
-$script:JustPdfHapOutputDir = Join-Path $script:JustPdfHapOutputDir 'build'
-$script:JustPdfHapOutputDir = Join-Path $script:JustPdfHapOutputDir 'default'
-$script:JustPdfHapOutputDir = Join-Path $script:JustPdfHapOutputDir 'outputs'
-$script:JustPdfHapOutputDir = Join-Path $script:JustPdfHapOutputDir 'default'
+$script:JustPdfLastProductName = 'default'
 
 function Get-JustPdfBundleName { return $script:JustPdfBundleName }
 function Get-JustPdfAbilityName { return $script:JustPdfAbilityName }
 function Get-JustPdfModuleName { return $script:JustPdfModuleName }
 function Get-JustPdfProductName { return $script:JustPdfProductName }
-function Get-JustPdfHapOutputDir { return $script:JustPdfHapOutputDir }
+
+function Resolve-JustPdfProductName {
+    param(
+        [string]$BuildMode = 'debug',
+        [string]$Product
+    )
+
+    if ($Product -and $Product.Trim()) {
+        return $Product.Trim()
+    }
+    if ($BuildMode -and $BuildMode.Trim().ToLowerInvariant() -eq 'release') {
+        return 'release'
+    }
+    return (Get-JustPdfProductName)
+}
+
+function Get-JustPdfHapOutputDir {
+    param(
+        [string]$Product = (Get-JustPdfProductName)
+    )
+
+    $OutputDir = Join-Path $PSScriptRoot 'entry'
+    $OutputDir = Join-Path $OutputDir 'build'
+    $OutputDir = Join-Path $OutputDir $Product
+    $OutputDir = Join-Path $OutputDir 'outputs'
+    return (Join-Path $OutputDir 'default')
+}
+
+function Assert-JustPdfLocalBuildProfile {
+    $ProfilePath = Join-Path $PSScriptRoot 'build-profile.json5'
+    $ExamplePath = Join-Path $PSScriptRoot 'build-profile.json5.example'
+    if (Test-Path -LiteralPath $ProfilePath) {
+        return
+    }
+    throw @"
+Missing local build-profile.json5 (gitignored signing profile).
+Copy `"$ExamplePath`" to `"$ProfilePath`", then add signingConfigs.material in DevEco.
+Do not commit build-profile.json5 or files under certs/.
+"@
+}
 
 function Get-DevEcoCliCommand {
     $Cmd = Get-Command 'devecocli' -ErrorAction SilentlyContinue
@@ -48,15 +83,34 @@ function Invoke-DevEcoCli {
 
 function Resolve-HapPath {
     param(
-        [string]$OutputDir = (Get-JustPdfHapOutputDir)
+        [string]$Product = $script:JustPdfLastProductName,
+        [string]$OutputDir
     )
 
-    $SignedHapPath = Join-Path $OutputDir 'entry-default-signed.hap'
-    $UnsignedHapPath = Join-Path $OutputDir 'entry-default-unsigned.hap'
-    if (Test-Path $SignedHapPath) {
-        return $SignedHapPath
+    if (-not $Product -or -not $Product.Trim()) {
+        $Product = Get-JustPdfProductName
     }
-    if (Test-Path $UnsignedHapPath) {
+    if (-not $OutputDir -or -not $OutputDir.Trim()) {
+        $OutputDir = Get-JustPdfHapOutputDir -Product $Product
+    }
+
+    $SignedCandidates = @(
+        (Join-Path $OutputDir 'entry-default-signed.hap'),
+        (Join-Path $OutputDir ('entry-{0}-signed.hap' -f $Product))
+    )
+    foreach ($SignedHapPath in $SignedCandidates) {
+        if (Test-Path -LiteralPath $SignedHapPath) {
+            return $SignedHapPath
+        }
+    }
+
+    $FoundSigned = @(Get-ChildItem -Path $OutputDir -Filter '*-signed.hap' -ErrorAction SilentlyContinue)
+    if (@($FoundSigned).Count -eq 1) {
+        return $FoundSigned[0].FullName
+    }
+
+    $UnsignedHapPath = Join-Path $OutputDir 'entry-default-unsigned.hap'
+    if (Test-Path -LiteralPath $UnsignedHapPath) {
         throw "Only unsigned HAP found: $UnsignedHapPath. Configure signing or sign manually before install."
     }
 
@@ -117,14 +171,17 @@ function Clear-DeviceHilogs {
 function Invoke-DevEcoCliBuild {
     param(
         [string]$BuildMode = 'debug',
-        [string]$Product = (Get-JustPdfProductName),
+        [string]$Product,
         [string]$Module = (Get-JustPdfModuleName)
     )
 
-    $ModuleSpec = $Module + '@' + $Product
+    Assert-JustPdfLocalBuildProfile
+    $ResolvedProduct = Resolve-JustPdfProductName -BuildMode $BuildMode -Product $Product
+    $script:JustPdfLastProductName = $ResolvedProduct
+    $ModuleSpec = $Module + '@' + $ResolvedProduct
     Invoke-DevEcoCli -Arguments @(
         'build',
-        '--product', $Product,
+        '--product', $ResolvedProduct,
         '--modules', $ModuleSpec,
         '--build-mode', $BuildMode
     ) | Out-Null
@@ -135,15 +192,18 @@ function Invoke-DevEcoCliRun {
         [string]$Device,
         [switch]$SkipBuild,
         [string]$BuildMode = 'debug',
-        [string]$Product = (Get-JustPdfProductName),
+        [string]$Product,
         [string]$Module = (Get-JustPdfModuleName),
         [string]$Ability = (Get-JustPdfAbilityName)
     )
 
+    Assert-JustPdfLocalBuildProfile
+    $ResolvedProduct = Resolve-JustPdfProductName -BuildMode $BuildMode -Product $Product
+    $script:JustPdfLastProductName = $ResolvedProduct
     $Args = @(
         'run',
         '--module', $Module,
-        '--product', $Product,
+        '--product', $ResolvedProduct,
         '--build-mode', $BuildMode,
         '--ability', $Ability
     )
@@ -280,15 +340,18 @@ function Invoke-DevEcoCliApply {
         [string]$ChangeFileName,
         [string]$Device,
         [string]$BuildMode = 'debug',
-        [string]$Product = (Get-JustPdfProductName),
+        [string]$Product,
         [string]$Module = (Get-JustPdfModuleName),
         [string]$Ability = (Get-JustPdfAbilityName)
     )
 
+    Assert-JustPdfLocalBuildProfile
+    $ResolvedProduct = Resolve-JustPdfProductName -BuildMode $BuildMode -Product $Product
+    $script:JustPdfLastProductName = $ResolvedProduct
     $Args = @(
         'run',
         '--module', $Module,
-        '--product', $Product,
+        '--product', $ResolvedProduct,
         '--build-mode', $BuildMode,
         '--ability', $Ability,
         '--apply', $ChangeFileName

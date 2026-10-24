@@ -18,9 +18,9 @@ Treat this rule as workspace-wide policy. When it conflicts with default agent h
 
 ## Builds, products, and signing
 
-`signingConfig` is on the **product**, not on `buildMode`. In `build-profile.json5`: product `default` → signingConfig `debug`; product `release` → signingConfig `release`. Scripts map `-BuildMode release` to product `release`, otherwise `default` (`Resolve-JustPdfProductName` in `deveco-cli.ps1`). Signed HAP: `entry/build/<product>/outputs/default/entry-default-signed.hap` or `entry-<product>-signed.hap`.
+`signingConfig` is on the **product**, not on `buildMode`. Public template: `build-profile.json5.example`. Local `build-profile.json5` is gitignored and holds DevEco `material` (encrypted store/key passwords). Product `default` → signingConfig `debug`; product `release` → signingConfig `release`. Scripts map `-BuildMode release` to product `release`, otherwise `default` (`Resolve-JustPdfProductName` in `deveco-cli.ps1`). Signed HAP: `entry/build/<product>/outputs/default/entry-default-signed.hap` or `entry-<product>-signed.hap`.
 
-Never commit `certs/` (gitignored). Installing debug over release (or the reverse) on the same device fails with `install provision type not same` (9568286) — uninstall first, then install.
+Never commit `build-profile.json5` or `certs/` (except `certs/README.md`). Those files can sign a HAP as this app; they cannot log into a Huawei developer account. After cloning: copy the example to `build-profile.json5`, add signing in DevEco, keep `.p12` / `.cer` / `.p7b` under `certs/`. Structural product/SDK edits belong in the example, then merge into the local file. Installing debug over release (or the reverse) on the same device fails with `install provision type not same` (9568286) — uninstall first, then install.
 
 Root entry scripts (use these; do not invent parallel wrappers):
 
