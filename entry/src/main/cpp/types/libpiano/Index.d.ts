@@ -1,0 +1,11 @@
+export const pianoPrepare: () => number;
+export const pianoStart: () => number;
+export const pianoStop: () => number;
+export const pianoRelease: () => number;
+export const pianoNoteOn: (midi: number, frequencyHz: number) => number;
+export const pianoNoteOff: (midi: number) => number;
+export const pianoAllNotesOff: (immediate: boolean) => number;
+export const pianoRetune: (midi: number, frequencyHz: number) => number;
+export const pianoSetProgram: (program: number) => number;
+export const pianoSetTunerTone: (frequencyHz: number, amplitude: number) => number;
+export const pianoIsRunning: () => number;

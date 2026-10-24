@@ -1,0 +1,6 @@
+{
+  "name": "libpiano.so",
+  "types": "./Index.d.ts",
+  "version": "1.0.0",
+  "description": "JustPDF modeled piano OHAudio FAST engine"
+}
