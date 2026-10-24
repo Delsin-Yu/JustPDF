@@ -140,7 +140,7 @@ Smoke these after each refactor round. Do not substitute the test scaffolds.
 4. Horizontal slide page-turn (commit + cancel) in 1/2/3-column modes; no settle blink of the previous page.
 5. Half-page next/prev: cover is visible before the main slot changes; no blink on 0.5↔1.
 6. Pan/zoom; stylus annotate draw/erase; undo/redo; save; leave with unsaved prompt.
-7. Bookmark panel + floating metronome/tuner/annotation palette dock/float/scale.
+7. Bookmark panel + floating metronome/tuner/piano keyboard/annotation palette dock/float/scale.
 8. Cross-device continuation migrate/restore (if hardware available).
 9. Memory pressure path does not crash (scroll far + background).
 10. Share / export from viewer still works.
