@@ -178,7 +178,8 @@ function Invoke-DevEcoCliBuild {
     Assert-JustPdfLocalBuildProfile
     $ResolvedProduct = Resolve-JustPdfProductName -BuildMode $BuildMode -Product $Product
     $script:JustPdfLastProductName = $ResolvedProduct
-    $ModuleSpec = $Module + '@' + $ResolvedProduct
+    # entry/build-profile.json5 的 target 名是 default，不是 product 名。
+    $ModuleSpec = $Module + '@default'
     Invoke-DevEcoCli -Arguments @(
         'build',
         '--product', $ResolvedProduct,
