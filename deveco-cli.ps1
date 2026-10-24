@@ -168,10 +168,14 @@ function Write-JustPdfFollowUpHints {
 
     Write-Host ''
     Write-Host 'Useful follow-up commands:' -ForegroundColor Cyan
+    Write-Host '  .\check.ps1' -ForegroundColor DarkGray
+    Write-Host '  .\apply.ps1' -ForegroundColor DarkGray
     if (@($Devices).Count -eq 0) {
         Write-Host '  .\deploy.ps1' -ForegroundColor DarkGray
         Write-Host '  .\build-deploy-run.ps1' -ForegroundColor DarkGray
         Write-Host ('  devecocli log --bundle-name {0} --follow' -f (Get-JustPdfBundleName)) -ForegroundColor DarkGray
+        Write-Host '  .\crash-log.ps1' -ForegroundColor DarkGray
+        Write-Host '  .\ui-inspect.ps1 -Action screenshot' -ForegroundColor DarkGray
         return
     }
 
@@ -180,8 +184,160 @@ function Write-JustPdfFollowUpHints {
             Write-Host ('  # {0}' -f $Device) -ForegroundColor DarkGray
         }
         Write-Host ('  .\deploy.ps1 -Target {0}' -f $Device) -ForegroundColor DarkGray
+        Write-Host ('  .\apply.ps1 -Target {0}' -f $Device) -ForegroundColor DarkGray
+        Write-Host ('  .\ui-inspect.ps1 -Action screenshot -Target {0}' -f $Device) -ForegroundColor DarkGray
+        Write-Host ('  .\ui-inspect.ps1 -Action layout -Target {0}' -f $Device) -ForegroundColor DarkGray
         Write-Host ('  devecocli log --device {0} --bundle-name {1} --follow' -f $Device, (Get-JustPdfBundleName)) -ForegroundColor DarkGray
+        Write-Host ('  .\crash-log.ps1 -Target {0}' -f $Device) -ForegroundColor DarkGray
     }
+}
+
+function Invoke-DevEcoCliLint {
+    param(
+        [string]$LintPath,
+        [switch]$Incremental,
+        [switch]$Fix,
+        [string]$Product = (Get-JustPdfProductName),
+        [string]$Format = 'default'
+    )
+
+    $Args = @('check', 'lint', '--product', $Product, '--format', $Format)
+    if ($Incremental) {
+        $Args += '--incremental'
+    }
+    if ($Fix) {
+        $Args += '--fix'
+    }
+    if ($LintPath -and $LintPath.Trim()) {
+        $Args += $LintPath.Trim()
+    }
+    Invoke-DevEcoCli -Arguments $Args | Out-Null
+}
+
+function Get-JustPdfApplyChangeFiles {
+    param(
+        [string[]]$Files
+    )
+
+    if ($Files -and @($Files).Count -gt 0) {
+        return @($Files | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Select-Object -Unique)
+    }
+
+    $Raw = @()
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $Raw += @(git diff --name-only HEAD 2>$null)
+        $Raw += @(git ls-files --others --exclude-standard 2>$null)
+    }
+
+    $Allowed = @('.ets', '.ts', '.cpp', '.c', '.json5', '.json')
+    $Ignored = @('oh_modules/', 'node_modules/', '/build/', '.hvigor/', '.test/')
+    return @(
+        $Raw |
+            Where-Object { $_ -and $_.Trim() } |
+            ForEach-Object { $_.Trim().Replace('\', '/') } |
+            Where-Object {
+                $Rel = $_
+                $Ext = [System.IO.Path]::GetExtension($Rel).ToLowerInvariant()
+                if ($Allowed -notcontains $Ext) {
+                    return $false
+                }
+                foreach ($Skip in $Ignored) {
+                    if ($Rel -like ('*{0}*' -f $Skip)) {
+                        return $false
+                    }
+                }
+                return $true
+            } |
+            Select-Object -Unique
+    )
+}
+
+function Write-JustPdfApplyChangeList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ChangeFileName,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Files
+    )
+
+    if ($ChangeFileName -match '[\\/]') {
+        throw 'Change list file name must not contain path separators.'
+    }
+
+    $HvigorDir = Join-Path $PSScriptRoot '.hvigor'
+    if (-not (Test-Path -LiteralPath $HvigorDir)) {
+        New-Item -ItemType Directory -Path $HvigorDir | Out-Null
+    }
+
+    $ChangeListPath = Join-Path $HvigorDir $ChangeFileName
+    Set-Content -Path $ChangeListPath -Value $Files -Encoding UTF8
+    return $ChangeListPath
+}
+
+function Invoke-DevEcoCliApply {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ChangeFileName,
+        [string]$Device,
+        [string]$BuildMode = 'debug',
+        [string]$Product = (Get-JustPdfProductName),
+        [string]$Module = (Get-JustPdfModuleName),
+        [string]$Ability = (Get-JustPdfAbilityName)
+    )
+
+    $Args = @(
+        'run',
+        '--module', $Module,
+        '--product', $Product,
+        '--build-mode', $BuildMode,
+        '--ability', $Ability,
+        '--apply', $ChangeFileName
+    )
+    if ($Device) {
+        $Args += @('--device', $Device)
+    }
+    Invoke-DevEcoCli -Arguments $Args | Out-Null
+}
+
+function Invoke-DevEcoCliCrashLog {
+    param(
+        [string]$Device,
+        [string]$Bundle = (Get-JustPdfBundleName)
+    )
+
+    $Args = @('log', '--crash', '--bundle-name', $Bundle)
+    if ($Device) {
+        $Args += @('--device', $Device)
+    }
+    Invoke-DevEcoCli -Arguments $Args | Out-Null
+}
+
+function Invoke-DevEcoCliUiScreenshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutPath,
+        [string]$Device
+    )
+
+    $Args = @('ui', 'screenshot', '--path', $OutPath)
+    if ($Device) {
+        $Args += @('--device', $Device)
+    }
+    Invoke-DevEcoCli -Arguments $Args | Out-Null
+}
+
+function Invoke-DevEcoCliUiLayout {
+    param(
+        [string]$Device,
+        [string]$Format = 'default',
+        [string]$Mode = 'simplified'
+    )
+
+    $Args = @('ui', 'layout', '--format', $Format, '--mode', $Mode)
+    if ($Device) {
+        $Args += @('--device', $Device)
+    }
+    Invoke-DevEcoCli -Arguments $Args | Out-Null
 }
 
 function Invoke-HdcDebugLaunch {

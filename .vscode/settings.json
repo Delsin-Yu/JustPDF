@@ -1,6 +1,17 @@
 {
+    "arkts.deveco.path": "C:\\Program Files\\Huawei\\DevEco Studio",
+    "files.associations": {
+        "*.ets": "arkts"
+    },
+    "terminal.integrated.env.windows": {
+        "DEVECO_HOME": "C:\\Program Files\\Huawei\\DevEco Studio",
+        "DEVECO_PATH": "C:\\Program Files\\Huawei\\DevEco Studio",
+        "DEVECO_SDK_HOME": "C:\\Program Files\\Huawei\\DevEco Studio\\sdk"
+    },
     "chat.tools.terminal.autoApprove": {
         ".\\build.ps1": true,
+        ".\\check.ps1": true,
+        ".\\apply.ps1": true,
         "/^hdc list targets -v$/": {
             "approve": true,
             "matchCommandLine": true

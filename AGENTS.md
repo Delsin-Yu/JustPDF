@@ -19,9 +19,11 @@ Treat this rule as workspace-wide policy. When it conflicts with default agent h
 
 ## Builds and diagnostics
 
-- To actually check for syntactical correctness and build errors, always use `.\build.ps1` to build the project.
-- Initial syntax diagnostics from OpenHarmony tooling may be false positives; prefer HarmonyOS and DevEco Studio behavior when they disagree.
-- **Runtime debug logs go through `hilog`, not localhost ingest.** The app runs on the HarmonyOS device. `fetch` / HTTP to `127.0.0.1` from the device does not reach the PC, so Cursor debug-ingest URLs will stay empty. Instrument with `hilog` (`import { hilog } from '@kit.PerformanceAnalysisKit'`), use a distinctive tag (for example `hilog.info(0, 'DBG-justpdf', 'location|message|data')`), deploy, then collect with `devecocli log --device <id> --bundle-name deyu.just.pdf --follow` and search that capture for the tag. Remove the temporary logs after the issue is confirmed.
+- **Fast ArkTS check**: prefer DevEco MCP `check` (project MCP: `.cursor/mcp.json`) or `.\check.ps1` (`devecocli check lint`). Use `--incremental` for uncommitted files. This is the HarmonyOS checker — do not treat generic TypeScript / OpenHarmony squiggles as source of truth.
+- **Full package**: `.\build.ps1` still owns HAP compile/sign. After a successful `.\build-deploy-run.ps1`, iterate with `.\apply.ps1` (`devecocli run --apply`) instead of a full rebuild.
+- **Editor LSP**: HarmonyOS-ArkTS (`huawei-developer.arkts-language-client`) with `arkts.deveco.path`. Workspace also keeps `.\lsp.ps1` (`devecocli serve lsp --arkts`) for stdio clients. Command: `ArkTS: Restart Language Server`.
+- **Runtime debug logs go through `hilog`, not localhost ingest.** The app runs on the HarmonyOS device. `fetch` / HTTP to `127.0.0.1` from the device does not reach the PC, so Cursor debug-ingest URLs will stay empty. Instrument with `hilog` (`import { hilog } from '@kit.PerformanceAnalysisKit'`), use a distinctive tag (for example `hilog.info(0, 'DBG-justpdf', 'location|message|data')`), deploy, then collect with `devecocli log --device <id> --bundle-name deyu.just.pdf --follow` (or `.\crash-log.ps1` for `log --crash`) and search that capture for the tag. Remove the temporary logs after the issue is confirmed.
+- **On-device UI**: `.\ui-inspect.ps1 -Action screenshot` / `-Action layout`, or `devecocli ui click|swipe|text`. Layout dump is the visible tree only — scroll the target on-screen first.
 
 ## HarmonyOS documentation
 
@@ -86,8 +88,14 @@ Router page URLs (must match `main_pages.json`): `product/pages/Index`, `feature
 4. **Controllers take narrow interfaces** (`StrokeStore`, `DocumentIO`, `PageNavigator`) — not large closure bags over `@Local`.
 5. **Inline** one-line / single-caller thin wrappers; keep real FSMs as named classes.
 6. **Side effects stay in one place per concern** (e.g. page-turn commit only in the page-turn controller).
-7. **Verify** with `.\build.ps1` after structural changes; for API questions use `devecocli docs search/read` or local docs.
-8. Naming: use `PageStore` (not `PageInfoDataSource`).
+7. **Verify** with `.\check.ps1` then `.\build.ps1` after structural changes; for API questions use `devecocli docs search/read` or local docs. For on-device UI use `.\ui-inspect.ps1` / `devecocli ui`.
+8. **Skills**: official HarmonyOS skills live in `.agents/skills`. Do not reinstall them under `.cursor/skills`. Keep JustPDF-only skills (`bump-app-version`, `commit-batcher`, `deveco-create-project`, `plan-*`) here too. Refresh with `devecocli skills add --skill <name> --path .agents/skills -f`.
+   - CLI / language / UI: `deveco-cli`, `hmos-arkui-develop-skill`, `hmos-arkui-knowledge-retriever`, `hmos-arkts-knowledge-retriever`, `hmos-arkts-syntax-checker`
+   - Runtime / memory: `hmos-runtime-fix-skill`, `hmos-jscrash-analysis`, `hmos-jsleak-analysis`, `hmos-memleak-analysis`
+   - Multi-device / stylus / orientation: `hmos-multidevice-scenario-entry`, `hmos-multidevice-screen-window-size`, `hmos-multidevice-avoid-areas`, `hmos-multidevice-fold-state`, `hmos-multidevice-natural-orientation`, `hmos-multidevice-hardware-access`, `hmos-multidevice-interaction-methods`
+   - App continuity / Kit APIs: `hmos-app-continuity-skill`, `hmos-one-sdk-skill`
+   - Tests: `hmos-local-test`, `hmos-instrument-test`
+9. Naming: use `PageStore` (not `PageInfoDataSource`).
 
 ## Manual regression checklist
 

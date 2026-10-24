@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "deveco-mcp": {
+      "type": "stdio",
+      "command": "devecocli",
+      "args": [
+        "serve",
+        "mcp"
+      ],
+      "env": {
+        "PROJECT_PATH": "d:\\Repos\\JustPDF",
+        "DEVECO_PATH": "C:\\Program Files\\Huawei\\DevEco Studio",
+        "NODE_MAX_OLD_SPACE_SIZE": "8192"
+      }
+    }
+  }
+}
