@@ -1,3 +1,4 @@
+import { bundleManager } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -53,6 +54,10 @@ const LAYOUT_ANIM_DURATION = 300;
 const HISTORY_TRANSITION: TransitionEffect = TransitionEffect.OPACITY
   .combine(TransitionEffect.translate({ y: 16 }))
   .animation({ duration: LAYOUT_ANIM_DURATION, curve: Curve.Friction });
+/** 版本水印字号；竖向布局时历史面板按此预留底部空间 */
+const VERSION_WATERMARK_FONT_SIZE = 14;
+/** 版本水印与历史面板底边之间的空隙 */
+const VERSION_WATERMARK_GAP = 8;
 
 @Entry
 @Component
@@ -75,6 +80,8 @@ struct Index {
   @State heroTint: string = HERO_TINT_BRIGHT;
   /** 页面可见时为 true，隐藏时暂停背景动画 */
   @State backgroundActive: boolean = true;
+  /** 首页左下角水印：app.json5 的 versionName */
+  private appVersionName: string = readAppVersionName();
   private preferences: preferences.Preferences | undefined = getSessionPreferences();
   private mainWindow: window.Window | undefined = undefined;
   private windowSizeCallback: (size: window.Size) => void = (size: window.Size) => {
@@ -314,6 +321,22 @@ struct Index {
   /** 历史面板与窗口边缘之间保留少量海洋背景 */
   private historyPanelOuterInset(): number {
     return this.isWide() ? 24 : 12;
+  }
+
+  /** 竖向布局时为左下角版本水印抬高历史面板 */
+  private versionWatermarkReserve(): number {
+    if (this.appVersionName.length === 0) {
+      return 0;
+    }
+    return VERSION_WATERMARK_FONT_SIZE + VERSION_WATERMARK_GAP;
+  }
+
+  /** 历史面板底边距：分栏时只留外沿；竖向时额外避开版本号 */
+  private historyPanelBottomInset(): number {
+    if (this.useSideBySide()) {
+      return this.historyPanelOuterInset();
+    }
+    return this.historyPanelOuterInset() + this.versionWatermarkReserve();
   }
 
   /** 主视觉块左右内边距，为外发光留出空间避免贴边裁切 */
@@ -639,6 +662,31 @@ struct Index {
     .clip(true)
   }
 
+  /** 首页左下角版本水印：跟眉题同一套字距/色调，不抢主视觉 */
+  @Builder
+  buildVersionWatermark() {
+    if (this.appVersionName.length > 0) {
+      Column() {
+        Text(this.appVersionName)
+          .fontSize(VERSION_WATERMARK_FONT_SIZE)
+          .fontWeight(FontWeight.Bolder)
+          .letterSpacing(0.6)
+          .fontColor(this.eyebrowTint())
+      }
+      .width('100%')
+      .height('100%')
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.End)
+      .padding({
+        left: this.getUIContext().px2vp(this.avoidAreaLeftPx) + this.historyPanelOuterInset(),
+        right: this.getUIContext().px2vp(this.avoidAreaRightPx),
+        top: this.getUIContext().px2vp(this.avoidAreaTopPx),
+        bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx) + this.historyPanelOuterInset()
+      })
+      .hitTestBehavior(HitTestMode.Transparent)
+    }
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 全屏海洋渐变背景，铺满整个窗口（含状态栏之下）
@@ -673,7 +721,7 @@ struct Index {
             .padding({
               right: this.historyPanelOuterInset(),
               top: this.historyPanelOuterInset(),
-              bottom: this.historyPanelOuterInset()
+              bottom: this.historyPanelBottomInset()
             })
             .transition(HISTORY_TRANSITION)
           }
@@ -701,7 +749,7 @@ struct Index {
               .padding({
                 left: this.historyPanelOuterInset(),
                 right: this.historyPanelOuterInset(),
-                bottom: this.historyPanelOuterInset()
+                bottom: this.historyPanelBottomInset()
               })
               .transition(HISTORY_TRANSITION)
             } else {
@@ -727,10 +775,25 @@ struct Index {
         left: this.getUIContext().px2vp(this.avoidAreaLeftPx),
         right: this.getUIContext().px2vp(this.avoidAreaRightPx)
       })
+
+      this.buildVersionWatermark()
     }
     .width('100%')
     .height('100%')
     .clip(true)
+  }
+}
+
+/** 读取当前包的 versionName，失败时返回空串以免水印显示残缺前缀 */
+function readAppVersionName(): string {
+  try {
+    const info: bundleManager.BundleInfo =
+      bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+    return info.versionName;
+  } catch (error) {
+    const bizErr = error as BusinessError;
+    hilog.warn(0x0000, TAG, `读取版本号失败: code=${bizErr.code}`);
+    return '';
   }
 }
 
