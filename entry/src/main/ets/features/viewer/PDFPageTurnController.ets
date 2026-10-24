@@ -1022,9 +1022,8 @@ export class PDFPageTurnController {
 
   /** 供链接层判断当前是否处于横向翻页忙碌态 */
   getBusyDisabledReason(): string {
-    if (this.slideHoldPreviewForNextTouch) {
-      return 'slideHoldPreviewForNextTouch';
-    }
+    // slideHoldPreviewForNextTouch 只是按下时暂扣预览层收尾，不是提交/拖动忙碌。
+    // 透明层 Down 会先于热区把它置 true，若当作忙碌态会拦掉所有手指点链接。
     if (this.pageTurnDragActive) {
       return 'pageTurnDragActive';
     }
