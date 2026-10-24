@@ -209,6 +209,14 @@ export class PDFHalfPageController {
     }
   }
 
+  applyOverlayCache(cache: PageCache): void {
+    if (this.overlayPageIndex < 0) {
+      return;
+    }
+    this.overlaySlot.applyCache(cache);
+    this.dependencies.redrawOverlayStrokes(this.overlayPageIndex, this.overlaySlot);
+  }
+
   async loadOverlayPage(pageIndex: number): Promise<void> {
     this.loadGen++;
     const gen: number = this.loadGen;

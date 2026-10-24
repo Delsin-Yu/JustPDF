@@ -2449,9 +2449,7 @@ struct PDFView {
     }
     // 根据更新的 displaySizes 重新计算 viewSize
     this.updateViewerViewSize();
-    if (this.viewerViewModel.halfPagePreviewActive &&
-      this.halfPageController.overlayPageIndex >= 0 &&
-      this.halfPageController.overlaySlot.pixelMap === undefined) {
+    if (this.halfPageController.overlayPageIndex >= 0) {
       await this.halfPageController.loadOverlayPage(this.halfPageController.overlayPageIndex);
     }
   }
@@ -2587,6 +2585,9 @@ struct PDFView {
           this.applyRasterCacheToSlot(mainSlot, highResCache);
         }
         this.pageTurnController.applyTransitionHighResIfNeeded(targetIndex, highResCache);
+        if (targetIndex === this.halfPageController.overlayPageIndex) {
+          this.halfPageController.applyOverlayCache(highResCache);
+        }
       }
     );
   }
