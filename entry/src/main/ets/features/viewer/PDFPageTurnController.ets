@@ -88,6 +88,11 @@ export class PDFPageTurnController {
   private slideTeardownFramesLeft: number = 0;
   private slideTeardownNavToken: number = 0;
   private slideTeardownFadeGen: number = 0;
+  /**
+   * 新按下打断了上一轮 goto/收尾：预览层继续盖住主层，等新滑动接管或松手后再拆。
+   * 避免 inFlight 时拆层 + fadeDefer 归零造成主层与滑动层错位。
+   */
+  private slideHoldPreviewForNextTouch: boolean = false;
 
   constructor(dependencies: PDFPageTurnControllerDependencies, settings: RenderingContextSettings) {
     this.dependencies = dependencies;
@@ -116,7 +121,8 @@ export class PDFPageTurnController {
 
   shouldDeferViewportFitReset(): boolean {
     return this.dependencies.viewerViewModel.pageFlipMode === 'horizontalSlide' &&
-      (this.pageTurnDragActive || this.pageTurnCommitAnimating || this.slideGotoInFlight);
+      (this.pageTurnDragActive || this.pageTurnCommitAnimating || this.slideGotoInFlight ||
+        this.slideHoldPreviewForNextTouch);
   }
 
   private transitionSlots(kind: 'next' | 'prev'): PageViewSlot[] {
@@ -173,6 +179,7 @@ export class PDFPageTurnController {
   /** 立即清除横向滑动预览条带（无淡出） */
   clearHorizontalSlidePreviewState(): void {
     this.stopSlideTeardownSync();
+    this.slideHoldPreviewForNextTouch = false;
     this.pendingSlideGotoTarget = undefined;
     // 使尚未完成的 loadTransitionNeighbor 回调全部失效，避免收尾后仍 assign / 再触发淡入造成邻条 Next/Prev 闪跳
     this.transitionNeighborGen++;
@@ -288,6 +295,8 @@ export class PDFPageTurnController {
     }
     this.slideCommitAnimGen++;
     this.slideNeighborAppearFadeGen++;
+    this.stopSlideTeardownSync();
+    this.slideHoldPreviewForNextTouch = true;
     if (this.pageTurnCommitAnimating && this.pendingSlideGotoTarget !== undefined) {
       const t = this.pendingSlideGotoTarget;
       this.pendingSlideGotoTarget = undefined;
@@ -306,18 +315,20 @@ export class PDFPageTurnController {
       this.pageTurnPrevStripOpacity
     );
     if (this.slideGotoInFlight) {
-      this.dependencies.bumpPageLoadVersion();
-      this.slideGotoInFlight = false;
-      this.slideGotoCompletionToken = 0;
-      this.clearHorizontalSlidePreviewState();
-    } else {
-      this.resetHorizontalSlidePreview();
+      // 主层可能已 commit 但预览层仍在盖住；拆层会让底层与滑动层错位。
+      // 只停收尾，等新滑动接管或松手后再卸预览层。
+      return;
     }
+    // 可能仍有上一轮未卸的预览层；空闲按下也先保住画面，由 beginSession / 松手收尾。
   }
 
   /** defer goto 收尾：预览层钉在中心盖住主层归零合成，再清条带并 resetViewToFit */
   fadeDeferSlideGotoTeardown(navToken: number): void {
     if (this.slideGotoCompletionToken !== navToken || this.isNewerSlideSessionActive()) {
+      this.clearSlideGotoInFlightIfToken(navToken);
+      return;
+    }
+    if (this.slideHoldPreviewForNextTouch) {
       this.clearSlideGotoInFlightIfToken(navToken);
       return;
     }
@@ -610,7 +621,53 @@ export class PDFPageTurnController {
     return sign * Math.min(damp, hard);
   }
 
+  /**
+   * 上一轮提交把偏移停在 ±advance、预览条盖在当前页上。
+   * 先归零再卸旧邻条，主层已是提交页，画面不变；再开始新的跟手位移。
+   */
+  private handoffCommittedSlideVisualToNewSession(): void {
+    this.slideHoldPreviewForNextTouch = false;
+    this.stopSlideTeardownSync();
+    if (Math.abs(this.pageTurnOffsetVp) < 1 && !this.pageTurnPreviewOffsetLocked) {
+      return;
+    }
+    this.pageTurnPreviewOffsetLocked = false;
+    this.pageTurnPreviewOffsetVp = 0;
+    this.snapSlideVisualProperties(0, 0, 1, 1);
+    this.transNextIndices = [];
+    this.transPrevIndices = [];
+    this.clearTransitionPixelMaps();
+    this.pageTurnMainAdvanceVp = 0;
+    this.pageTurnPrevAdvanceVp = 0;
+  }
+
+  /** 按下后未形成新拖动就抬起：补做被 skip 的 idle 收尾 */
+  private settleHeldSlidePreviewIfIdle(): void {
+    if (!this.slideHoldPreviewForNextTouch) {
+      return;
+    }
+    this.slideHoldPreviewForNextTouch = false;
+    if (this.pageTurnDragActive || this.pendingSlideGotoTarget !== undefined || this.pageTurnCommitAnimating) {
+      return;
+    }
+    if (this.slideGotoInFlight) {
+      return;
+    }
+    const hasStrip = this.transPrevIndices.length > 0 || this.transNextIndices.length > 0;
+    if (!hasStrip && Math.abs(this.pageTurnOffsetVp) < 0.001) {
+      return;
+    }
+    this.transitionNeighborGen++;
+    this.slideNeighborAppearFadeGen++;
+    const g = this.slideNeighborAppearFadeGen;
+    this.lockCommittedPreviewAtCenter();
+    this.dependencies.ensureMainRowEmptySlotsMatchDisplayed();
+    this.snapSlideVisualProperties(0, 0, 1, 1);
+    this.startSlideTeardownAfterPaint(this.slideGotoCompletionToken, g);
+  }
+
   private beginPageTurnSession(direction: number, firstHorizDeltaVp: number, viewportWvp: number): void {
+    this.handoffCommittedSlideVisualToNewSession();
     this.slideCommitAnimGen++;
     this.slideNeighborAppearFadeGen++;
     this.pageTurnDragActive = true;
@@ -757,6 +814,7 @@ export class PDFPageTurnController {
   finalizeHorizontalSlideOnUp(): void {
     const ui = this.dependencies.getUIContext();
     if (!this.pageTurnDragActive) {
+      this.settleHeldSlidePreviewIfIdle();
       return;
     }
     const viewportWvp = this.dependencies.viewerViewModel.getPanClampBounds(ui).viewportSizeVp.x;
@@ -908,6 +966,9 @@ export class PDFPageTurnController {
 
   /** 供链接层判断当前是否处于横向翻页忙碌态 */
   getBusyDisabledReason(): string {
+    if (this.slideHoldPreviewForNextTouch) {
+      return 'slideHoldPreviewForNextTouch';
+    }
     if (this.pageTurnDragActive) {
       return 'pageTurnDragActive';
     }
