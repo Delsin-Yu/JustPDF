@@ -25,6 +25,7 @@ export struct PDFViewerActionMenu {
   @Param onShare: () => void = () => {};
   @Param onToggleMetronome: () => void = () => {};
   @Param onToggleTuner: () => void = () => {};
+  @Param onTogglePiano: () => void = () => {};
   @Param onAnnotate: () => void = () => {};
   @Param onBookmarks: () => void = () => {};
   @Param showBookmarkShortcut: boolean = false;
@@ -48,6 +49,7 @@ export struct PDFViewerActionMenu {
   private readonly shareIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.share')).fontSize('20vp');
   private readonly metronomeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.clock')).fontSize('20vp');
   private readonly tunerIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.mic')).fontSize('20vp');
+  private readonly pianoIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.music')).fontSize('20vp');
   private readonly displayModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')).fontSize('20vp');
   private readonly flipModeIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.rectangle_rotate')).fontSize('20vp');
   private readonly jumpIcon: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.arrow_right')).fontSize('20vp');
@@ -135,6 +137,12 @@ export struct PDFViewerActionMenu {
           symbolStartIcon: this.tunerIcon
         })
           .onClick(() => this.onToggleTuner())
+
+        MenuItem({
+          content: '键盘',
+          symbolStartIcon: this.pianoIcon
+        })
+          .onClick(() => this.onTogglePiano())
 
         MenuItem({
           content: '批注',

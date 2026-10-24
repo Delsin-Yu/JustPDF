@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { nativePianoSetTunerTone, prepareNativePiano } from './PDFPianoNative';
 
 const TunerReferenceHzPreferenceKey: string = 'tunerReferenceHz';
 /** 参考音「A4」频率可调范围（Hz），与界面 ScrollSpinBox 一致。 */
@@ -207,6 +208,7 @@ export class PDFTunerController {
   private oscillatorTargetFrequencyHz: number = 440;
   private oscillatorAmplitude: number = 0;
   private oscillatorTargetAmplitude: number = 0;
+  private useNativeTone: boolean = false;
   private smoothedPitchHz: number = 0;
   private pitchSilenceFrameCount: number = 0;
   private displayCentsSmoothed: number = 0;
@@ -403,9 +405,8 @@ export class PDFTunerController {
     this.savePreferences();
   }
 
-  private getTriangleWaveSample(phase: number): number {
-    const normalizedPhase: number = phase / (2 * Math.PI);
-    return 1 - 4 * Math.abs(normalizedPhase - 0.5);
+  private getSquareWaveSample(phase: number): number {
+    return phase < Math.PI ? 1 : -1;
   }
 
   /**
@@ -458,7 +459,7 @@ export class PDFTunerController {
         this.oscillatorPhase -= 2 * Math.PI;
       }
       const loudnessComp: number = this.getReferenceTonePitchLoudnessCompensation(this.oscillatorFrequencyHz);
-      const sample: number = this.getTriangleWaveSample(this.oscillatorPhase) * this.oscillatorAmplitude * loudnessComp;
+      const sample: number = this.getSquareWaveSample(this.oscillatorPhase) * this.oscillatorAmplitude * loudnessComp;
       output[sampleIndex] = this.clampPcmSample(Math.round(sample * TunerReferenceToneMaxAmplitude));
     }
 
@@ -467,6 +468,10 @@ export class PDFTunerController {
 
   private startReferenceTonePlayback(): void {
     this.playbackStartRequested = true;
+    if (this.useNativeTone) {
+      this.updateReferenceToneSynthesisTargets();
+      return;
+    }
     this.updateReferenceToneSynthesisTargets();
     this.startAudioRendererPlayback(++this.audioPlaybackSessionToken);
   }
@@ -475,6 +480,9 @@ export class PDFTunerController {
     this.playbackStartRequested = false;
     this.audioPlaybackSessionToken += 1;
     this.updateReferenceToneSynthesisTargets();
+    if (this.useNativeTone) {
+      return;
+    }
     const stopPromise: Promise<void> = this.stopAudioRendererPlayback();
     this.pendingRendererStop = stopPromise;
     void stopPromise.finally(() => {
@@ -490,6 +498,9 @@ export class PDFTunerController {
     this.oscillatorTargetAmplitude = (this.referenceToneEnabled && this.playbackStartRequested)
       ? TunerReferenceToneAmplitudeRatio
       : 0;
+    if (this.useNativeTone) {
+      nativePianoSetTunerTone(this.oscillatorTargetFrequencyHz, this.oscillatorTargetAmplitude);
+    }
   }
 
   private getReferenceToneFrequencyHz(): number {
@@ -533,7 +544,12 @@ export class PDFTunerController {
   }
 
   private initializeAudio(): void {
-    if (this.audioRendererLoading || this.audioRenderer) {
+    if (this.useNativeTone || this.audioRendererLoading || this.audioRenderer) {
+      return;
+    }
+    if (prepareNativePiano()) {
+      this.useNativeTone = true;
+      hilog.info(0, 'PDFTunerController', '调音器参考音使用共享方波引擎');
       return;
     }
 
@@ -583,6 +599,11 @@ export class PDFTunerController {
   private releaseAudio(): void {
     this.audioRequestToken += 1;
     this.audioRendererLoading = false;
+    if (this.useNativeTone) {
+      nativePianoSetTunerTone(this.getReferenceToneFrequencyHz(), 0);
+      this.useNativeTone = false;
+      return;
+    }
     const audioRenderer: audio.AudioRenderer | undefined = this.audioRenderer;
     this.audioRenderer = undefined;
     this.oscillatorAmplitude = 0;

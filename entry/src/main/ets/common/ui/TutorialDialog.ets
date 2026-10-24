@@ -34,7 +34,7 @@ export struct TutorialDialogBuilder {
   tabBasics() {
     Scroll() {
       Text() {
-        Span('Just PDF 面向音乐演奏与练习：读谱、书签与批注、PDF 内链跳转，并支持外接翻谱设备；同屏提供节拍器与调音器。\n\n')
+        Span('Just PDF 面向音乐演奏与练习：读谱、书签与批注、PDF 内链跳转，并支持外接翻谱设备；同屏提供节拍器、调音器与键盘。\n\n')
 
         Span('左下角「更多」菜单\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
@@ -62,6 +62,8 @@ export struct TutorialDialogBuilder {
         Span('节拍器').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' / ')
         Span('调音器').fontWeight(FontWeight.Bold).fontColor(highlight)
+        Span(' / ')
+        Span('键盘').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' — 显示或隐藏对应悬浮面板（详见「乐谱工具」）\n')
         Span('• ')
         Span('批注').fontWeight(FontWeight.Bold).fontColor(highlight)
@@ -263,7 +265,7 @@ export struct TutorialDialogBuilder {
   tabMusicTools() {
     Scroll() {
       Text() {
-        Span('节拍器与调音器为悬浮面板，与乐谱同屏使用；在面板上拖动、缩放时，手势不会作用到 PDF 阅读区域。\n\n')
+        Span('节拍器、调音器与键盘为悬浮面板，与乐谱同屏使用；在面板上拖动、缩放时，手势不会作用到 PDF 阅读区域。窄屏上这些面板会停靠到顶栏标签。\n\n')
 
         Span('节拍器\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
 
@@ -281,7 +283,14 @@ export struct TutorialDialogBuilder {
         Span('麦克风').fontWeight(FontWeight.Bold).fontColor(highlight)
         Span(' 权限\n')
         Span('• 面板内可切换唱名、A4 频率、移调、乐器预设、自动增益、参考音等\n')
-        Span('• 与节拍器相同，支持拖动与缩放\n')
+        Span('• 与节拍器相同，支持拖动与缩放\n\n')
+
+        Span('键盘\n\n').fontSize(22).fontWeight(FontWeight.Bold).fontColor(h2)
+
+        Span('• 「更多」→「键盘」显示或隐藏；宽屏首次出现在画面底部居中，窄屏停靠到顶栏\n')
+        Span('• 左右拖边可增减可见琴键；八度按钮平移音域；A4 与调音器相互独立\n')
+        Span('• 打开「自动保持」后，点按琴键门锁发声，再点同一键停止\n')
+        Span('• 合成钢琴音带可听见的起音，按下期间持续发声\n')
       }.fontSize(bodySize).lineSpacing(lineGap).padding(20)
     }.layoutWeight(1).width('100%')
   }

@@ -64,6 +64,12 @@ import { PDFLinkController } from './PDFLinkController';
 import { PDFDocumentSession, PDFDocumentSessionPaths } from './PDFDocumentSession';
 import { PDFMetronomeController } from '../music/PDFMetronomeController';
 import { PDFTunerController } from '../music/PDFTunerController';
+import { PDFPianoController, PianoResizeSide } from '../music/PDFPianoController';
+import { PDFPianoHost, PDFPianoHostViewport } from '../music/PDFPianoHost';
+import {
+  getFloatingPianoTotalWidth,
+  PDFPianoPanelContent
+} from '../music/PDFPianoPanel';
 import { PDFLinkDisplayHitArea, PDFPageSlot } from './PDFPageSlot';
 import {
   FloatingMetronomeDefaultScale,
@@ -89,8 +95,10 @@ import {
   BuildAnnotationPaletteOverlay,
   BuildBookmarkOverlay,
   BuildMetronomeOverlay,
+  BuildPianoOverlay,
   BuildTunerOverlay,
   MetronomeOverlayParams,
+  PianoOverlayParams,
   TunerOverlayParams
 } from '../panels/FloatingPanelOverlays';
 import { PDFViewerActionMenu } from './PDFViewerActionMenu';
@@ -168,7 +176,7 @@ const MetronomeMaxScale: number = 1.5;
 const TunerMinScale: number = 0.4;
 const TunerMaxScale: number = 1.6;
 
-type OverlayPanelKey = 'metronome' | 'tuner' | 'bookmark';
+type OverlayPanelKey = 'metronome' | 'tuner' | 'bookmark' | 'piano';
 
 @Entry
 @ComponentV2
@@ -426,6 +434,11 @@ struct PDFView {
     onTreeChanged: () => this.syncPanelOverlays()
   });
   @Local tunerController: PDFTunerController = new PDFTunerController();
+  @Local pianoController: PDFPianoController = new PDFPianoController({
+    getUIContext: () => this.getUIContext(),
+    onVisualStateChanged: () => this.syncPanelOverlays()
+  });
+  private pianoHost: PDFPianoHost = new PDFPianoHost();
   @Local showTunerPanel: boolean = false;
   @Local useDockedMetronomePanel: boolean = false;
   private metronomeChrome: FloatingPanelChrome = new FloatingPanelChrome({
@@ -440,6 +453,7 @@ struct PDFView {
   @Local metronomePanelHeightVp: number = 0;
   @Local useDockedTunerPanel: boolean = false;
   @Local useDockedBookmarkPanel: boolean = false;
+  @Local useDockedPianoPanel: boolean = false;
   private tunerChrome: FloatingPanelChrome = new FloatingPanelChrome({
     initialOffsetX: DefaultTunerOffsetX,
     initialOffsetY: DefaultTunerOffsetY,
@@ -499,6 +513,7 @@ struct PDFView {
   private tunerOverlayContent: ComponentContent<TunerOverlayParams> | undefined = undefined;
   private paletteOverlayContent: ComponentContent<AnnotationPaletteOverlayParams> | undefined = undefined;
   private bookmarkOverlayContent: ComponentContent<BookmarkOverlayParams> | undefined = undefined;
+  private pianoOverlayContent: ComponentContent<PianoOverlayParams> | undefined = undefined;
   private lastWindowWidthPx: number = 0;
   // 每次 gotoPage 调用时递增；用于忽略在页面切换后才完成的过期异步加载回调，
   // 避免快速翻页后显示内容与当前页码不符。
@@ -811,6 +826,7 @@ struct PDFView {
     this.cancelAnnotatePrepareSession();
     this.metronomeController.closeWindow();
     this.setTunerPanelVisible(false);
+    this.pianoController.closeWindow();
     this.viewerViewModel.closeAnnotatePalette();
     this.viewerViewModel.closeBookmarkPanel();
     this.syncPanelOverlays();
@@ -876,12 +892,20 @@ struct PDFView {
     const metronomeTotalWidthPx = this.getUIContext().vp2px(getFloatingMetronomeTotalWidth(this.metronomeChrome.scale));
     const tunerTotalWidthPx = this.getUIContext().vp2px(getFloatingTunerTotalWidth(this.tunerChrome.scale));
     const bookmarkTotalWidthPx = this.getUIContext().vp2px(getFloatingBookmarkTotalWidth(this.bookmarkChrome.scale));
+    const pianoTotalWidthPx = this.getUIContext().vp2px(
+      getFloatingPianoTotalWidth(this.pianoController.whiteKeyCount, this.pianoHost.chrome.scale)
+    );
     const shouldDockPanels = windowWidthPx <= metronomeTotalWidthPx
       || windowWidthPx <= tunerTotalWidthPx
-      || windowWidthPx <= bookmarkTotalWidthPx;
+      || windowWidthPx <= bookmarkTotalWidthPx
+      || windowWidthPx <= pianoTotalWidthPx;
     this.useDockedMetronomePanel = shouldDockPanels;
     this.useDockedTunerPanel = shouldDockPanels;
     this.useDockedBookmarkPanel = shouldDockPanels;
+    this.useDockedPianoPanel = shouldDockPanels;
+    if (shouldDockPanels && this.pianoController.showWindow) {
+      this.fitPianoKeysForDock();
+    }
   }
 
   private isMetronomeDockedVisible(): boolean {
@@ -900,8 +924,17 @@ struct PDFView {
     return this.useDockedBookmarkPanel && this.isBookmarkPanelVisible();
   }
 
+  private isPianoPanelVisible(): boolean {
+    return this.pianoController.showWindow;
+  }
+
+  private isPianoDockedVisible(): boolean {
+    return this.useDockedPianoPanel && this.isPianoPanelVisible();
+  }
+
   private hasAnyDockedVisiblePanel(): boolean {
-    return this.isMetronomeDockedVisible() || this.isTunerDockedVisible() || this.isBookmarkDockedVisible();
+    return this.isMetronomeDockedVisible() || this.isTunerDockedVisible() ||
+      this.isBookmarkDockedVisible() || this.isPianoDockedVisible();
   }
 
   private getVisibleDockedPanelCount(): number {
@@ -913,6 +946,9 @@ struct PDFView {
       count += 1;
     }
     if (this.isBookmarkDockedVisible()) {
+      count += 1;
+    }
+    if (this.isPianoDockedVisible()) {
       count += 1;
     }
     return count;
@@ -932,13 +968,19 @@ struct PDFView {
     if (this.activePanel === 'bookmark' && this.isBookmarkDockedVisible()) {
       return 'bookmark';
     }
+    if (this.activePanel === 'piano' && this.isPianoDockedVisible()) {
+      return 'piano';
+    }
     if (this.isMetronomeDockedVisible()) {
       return 'metronome';
     }
     if (this.isTunerDockedVisible()) {
       return 'tuner';
     }
-    return 'bookmark';
+    if (this.isBookmarkDockedVisible()) {
+      return 'bookmark';
+    }
+    return 'piano';
   }
 
   private isDockedPanelTabActive(panel: OverlayPanelKey): boolean {
@@ -1221,6 +1263,7 @@ struct PDFView {
     this.tunerChrome.syncOffsetToBounds(this.getTunerClampParams());
     this.bookmarkChrome.syncOffsetToBounds(this.getBookmarkClampParams());
     this.paletteChrome.syncOffsetToBounds(this.getPaletteClampParams());
+    this.pianoHost.chrome.syncOffsetToBounds(this.pianoHost.getClampParams(this.getPianoViewport(), this.pianoController));
   }
 
   private beginPanelGesture(panel: OverlayPanelKey): void {
@@ -1269,6 +1312,17 @@ struct PDFView {
       () => this.handlePaletteHostPinchStart(),
       (event: GestureEvent) => this.handlePaletteHostPinchUpdate(event),
       () => this.handlePaletteHostPinchEnd()
+    );
+  }
+
+  private createPianoHostGestures(): FloatingPanelHostGestures {
+    return this.pianoHost.createHostGestures(
+      () => this.handlePianoHostDragStart(),
+      (event: GestureEvent) => this.handlePianoHostDragUpdate(event),
+      () => this.handlePianoHostDragEnd(),
+      () => this.handlePianoHostPinchStart(),
+      (event: GestureEvent) => this.handlePianoHostPinchUpdate(event),
+      () => this.handlePianoHostPinchEnd()
     );
   }
 
@@ -1470,6 +1524,13 @@ struct PDFView {
           this.createBookmarkOverlayParams()
         );
       }
+      if (!this.pianoOverlayContent) {
+        this.pianoOverlayContent = new ComponentContent(
+          this.getUIContext(),
+          wrapBuilder<[PianoOverlayParams]>(BuildPianoOverlay),
+          this.createPianoOverlayParams()
+        );
+      }
       this.syncPanelOverlays();
     } catch (error) {
       hilog.error(0, 'PDFView', `初始化浮层管理器出错: ${error}.`);
@@ -1502,6 +1563,10 @@ struct PDFView {
       if (this.bookmarkOverlayContent) {
         this.bookmarkOverlayContent.update(this.createBookmarkOverlayParams());
         this.overlayManager.addComponentContent(this.bookmarkOverlayContent, 3);
+      }
+      if (this.pianoOverlayContent) {
+        this.pianoOverlayContent.update(this.createPianoOverlayParams());
+        this.overlayManager.addComponentContent(this.pianoOverlayContent, 4);
       }
     } catch (error) {
       hilog.error(0, 'PDFView', `同步浮层状态出错: ${error}.`);
@@ -1537,6 +1602,11 @@ struct PDFView {
         this.overlayManager.removeComponentContent(this.bookmarkOverlayContent);
         this.bookmarkOverlayContent.dispose();
         this.bookmarkOverlayContent = undefined;
+      }
+      if (this.pianoOverlayContent) {
+        this.overlayManager.removeComponentContent(this.pianoOverlayContent);
+        this.pianoOverlayContent.dispose();
+        this.pianoOverlayContent = undefined;
       }
     } catch (error) {
       hilog.error(0, 'PDFView', `销毁浮层出错: ${error}.`);
@@ -1575,6 +1645,9 @@ struct PDFView {
               }
               if (this.isBookmarkDockedVisible()) {
                 this.buildDockedPanelTab('书签', 'bookmark')
+              }
+              if (this.isPianoDockedVisible()) {
+                this.buildDockedPanelTab('键盘', 'piano')
               }
             }
             .width('100%')
@@ -1638,7 +1711,7 @@ struct PDFView {
                     this.syncPanelOverlays();
                   }
                 })
-              } else if (this.isBookmarkDockedVisible()) {
+              } else if (this.getActiveDockedPanel() === 'bookmark' && this.isBookmarkDockedVisible()) {
                 PDFBookmarkPanelContent({
                   entries: this.bookmarkController.entries,
                   selectedId: this.bookmarkController.selectedId,
@@ -1694,6 +1767,40 @@ struct PDFView {
                   onHostPinchStart: () => this.handleBookmarkHostPinchStart(),
                   onHostPinchUpdate: (event: GestureEvent) => this.handleBookmarkHostPinchUpdate(event),
                   onHostPinchEnd: () => this.handleBookmarkHostPinchEnd()
+                })
+              } else if (this.getActiveDockedPanel() === 'piano' && this.isPianoDockedVisible()) {
+                PDFPianoPanelContent({
+                  controller: this.pianoController,
+                  useDocked: true,
+                  dockedTopOffsetVp: 0,
+                  hostScale: 1,
+                  hostOffset: { x: 0, y: 0 },
+                  showDragHandle: false,
+                  onInteraction: () => this.focusPanel('piano'),
+                  onTouchStateChanged: (active: boolean) => {
+                    this.isPanelGestureActive = active;
+                  },
+                  onWindowAreaHeightChanged: (heightVp: number) => {
+                    this.pianoHost.onPanelHeightChanged(heightVp, this.getPianoViewport(), this.pianoController);
+                  },
+                  onContentWidthChanged: (_side: PianoResizeSide) => {
+                  },
+                  onHostDragStart: () => {
+                  },
+                  onHostDragUpdate: (_event: GestureEvent) => {
+                  },
+                  onHostDragEnd: () => {
+                  },
+                  onHostPinchStart: () => {
+                  },
+                  onHostPinchUpdate: (_event: GestureEvent) => {
+                  },
+                  onHostPinchEnd: () => {
+                  },
+                  onClose: () => {
+                    this.pianoController.closeWindow();
+                    this.syncPanelOverlays();
+                  }
                 })
               }
             }
@@ -1772,6 +1879,8 @@ struct PDFView {
       this.metronomeController.initialize(this.preferences);
       this.tunerController.initialize(this.preferences);
       this.tunerController.setPanelVisible(this.showTunerPanel);
+      this.pianoController.initialize(this.preferences);
+      this.pianoHost.syncWidthFromController(this.pianoController);
     } catch (e) {
       hilog.error(0, 'PDFView', `加载用户偏好出错: ${e}.`);
     }
@@ -1786,11 +1895,16 @@ struct PDFView {
       this.isInFreeWindowMode = this.mainWindow.isInFreeWindowMode();
       this.useDockedMetronomePanel = false;
       this.useDockedTunerPanel = false;
+      this.useDockedBookmarkPanel = false;
+      this.useDockedPianoPanel = false;
       this.windowSizeChangeCallback = (_windowSize: window.Size) => {
         this.syncAvoidAreasFromMainWindow();
         this.updateMetronomeViewport(_windowSize);
         this.updateTunerViewport(_windowSize);
         this.updateBookmarkViewport(_windowSize);
+        if (this.pianoController.showWindow) {
+          this.pianoHost.initBottomCenterIfNeeded(this.getPianoViewport(), this.pianoController);
+        }
         this.syncPanelOffsetsToBounds();
         this.syncPanelOverlays();
       };
@@ -1986,6 +2100,7 @@ struct PDFView {
     this.disposePanelOverlays();
     this.metronomeController.cleanup();
     this.tunerController.cleanup();
+    this.pianoController.cleanup();
     this.immersiveDisablingListening();
     this.unregisterStylusDoubleTapListening();
     setPdfViewerActive(false);
@@ -2084,6 +2199,7 @@ struct PDFView {
 
   onBackGround = () => {
     this.metronomeController.stopPlayback();
+    this.pianoController.silenceForBackground();
     this.immersiveDisablingListening();
   }
 
@@ -3897,6 +4013,126 @@ struct PDFView {
     });
   }
 
+  private getPianoViewport(): PDFPianoHostViewport {
+    let viewportWidthVp: number = this.metronomeViewportWidthVp;
+    let viewportHeightVp: number = this.metronomeViewportHeightVp;
+    if (viewportWidthVp <= 0 || viewportHeightVp <= 0) {
+      viewportWidthVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.x);
+      viewportHeightVp = this.getUIContext().px2vp(this.viewerViewModel.viewportSize.y);
+    }
+    const viewport: PDFPianoHostViewport = {
+      viewportWidthVp: viewportWidthVp,
+      viewportHeightVp: viewportHeightVp,
+      safeLeftVp: this.getSafeLeftVp(),
+      safeTopVp: this.getSafeTopVp(),
+      safeRightVp: this.getSafeRightVp(),
+      safeBottomVp: this.getSafeBottomVp(),
+      titleWidthVp: this.titleButtonWidthVp,
+      titleHeightVp: this.titleButtonHeightVp
+    };
+    return viewport;
+  }
+
+  private fitPianoKeysForDock(): void {
+    const viewport: PDFPianoHostViewport = this.getPianoViewport();
+    const availableWidth: number = Math.max(
+      0,
+      viewport.viewportWidthVp - viewport.safeLeftVp - viewport.safeRightVp
+    );
+    this.pianoController.fitToAvailableWidth(availableWidth);
+    this.pianoHost.syncWidthFromController(this.pianoController);
+  }
+
+  private togglePianoPanel(): void {
+    this.pianoController.toggleWindow();
+    if (this.pianoController.showWindow) {
+      this.focusPanel('piano');
+      this.refreshPianoViewportFromWindow();
+      if (this.useDockedPianoPanel) {
+        this.fitPianoKeysForDock();
+      } else {
+        this.pianoHost.initBottomCenterIfNeeded(this.getPianoViewport(), this.pianoController);
+      }
+    }
+    this.syncPanelOverlays();
+  }
+
+  private refreshPianoViewportFromWindow(): void {
+    try {
+      const rect = this.mainWindow.getWindowProperties().windowRect;
+      this.updateMetronomeViewport({
+        width: rect.width,
+        height: rect.height
+      });
+    } catch (error) {
+      hilog.error(0, 'PDFView', `刷新钢琴视口出错: ${error}.`);
+    }
+  }
+
+  private handlePianoHostDragStart(): void {
+    this.beginPaletteGesture();
+    this.pianoHost.chrome.beginDrag(this.pianoHost.getClampParams(this.getPianoViewport(), this.pianoController));
+    this.syncPanelOverlays();
+  }
+
+  private handlePianoHostDragUpdate(event: GestureEvent): void {
+    this.pianoHost.chrome.updateDrag(event, this.pianoHost.getClampParams(this.getPianoViewport(), this.pianoController));
+    this.syncPanelOverlays();
+  }
+
+  private handlePianoHostDragEnd(): void {
+    this.endPanelGesture();
+  }
+
+  private handlePianoHostPinchStart(): void {
+    this.beginPaletteGesture();
+    this.pianoHost.chrome.beginPinch();
+  }
+
+  private handlePianoHostPinchUpdate(event: GestureEvent): void {
+    this.pianoHost.chrome.updatePinch(event);
+    this.pianoHost.chrome.offset = this.pianoHost.getClampedOffset(this.getPianoViewport(), this.pianoController);
+    this.syncPanelOverlays();
+  }
+
+  private handlePianoHostPinchEnd(): void {
+    this.pianoHost.chrome.endPinch();
+    this.endPanelGesture();
+  }
+
+  private createPianoOverlayParams(): PianoOverlayParams {
+    const hostGestures: FloatingPanelHostGestures = this.createPianoHostGestures();
+    const pianoOffset: FloatingPanelOffset = this.pianoHost.getClampedOffset(this.getPianoViewport(), this.pianoController);
+    return new PianoOverlayParams({
+      controller: this.pianoController,
+      showWindow: this.pianoController.showWindow,
+      useDocked: this.useDockedPianoPanel,
+      hostScale: this.useDockedPianoPanel ? 1 : this.pianoHost.chrome.scale,
+      hostOffset: pianoOffset,
+      onTouchStateChanged: (active: boolean) => {
+        this.isPanelGestureActive = active;
+      },
+      onWindowAreaHeightChanged: (heightVp: number) => {
+        this.pianoHost.onPanelHeightChanged(heightVp, this.getPianoViewport(), this.pianoController);
+        this.syncPanelOverlays();
+      },
+      onContentWidthChanged: (side: PianoResizeSide) => {
+        this.pianoHost.applyResize(side, this.getPianoViewport(), this.pianoController);
+        this.syncPanelOverlays();
+      },
+      onHostDragStart: hostGestures.onHostDragStart,
+      onHostDragUpdate: hostGestures.onHostDragUpdate,
+      onHostDragEnd: hostGestures.onHostDragEnd,
+      onHostPinchStart: hostGestures.onHostPinchStart,
+      onHostPinchUpdate: hostGestures.onHostPinchUpdate,
+      onHostPinchEnd: hostGestures.onHostPinchEnd,
+      onClose: () => {
+        this.pianoController.closeWindow();
+        this.syncPanelOverlays();
+      }
+    });
+  }
+
   private openBookmarkRenameDialog(): void {
     if (this.isDocumentReadOnly()) {
       return;
@@ -4367,6 +4603,9 @@ struct PDFView {
             this.updateMetronomeViewportFromArea(newVal);
             this.updateTunerViewportFromArea(newVal);
             this.updateBookmarkViewportFromArea(newVal);
+            if (this.pianoController.showWindow) {
+              this.pianoHost.initBottomCenterIfNeeded(this.getPianoViewport(), this.pianoController);
+            }
             this.syncPanelOverlays();
             this.viewerViewModel.setViewportSize(fromArea(newVal, this.getUIContext()));
             if (!this.pageTurnController.shouldDeferViewportFitReset()) {
@@ -4508,6 +4747,9 @@ struct PDFView {
                   this.focusPanel('tuner');
                   this.setTunerPanelVisible(!this.showTunerPanel);
                   this.syncPanelOverlays();
+                },
+                onTogglePiano: () => {
+                  this.togglePianoPanel();
                 },
                 onAnnotate: () => {
                   this.enterAnnotateMode();

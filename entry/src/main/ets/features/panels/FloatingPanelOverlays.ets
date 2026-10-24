@@ -1,5 +1,5 @@
 /**
- * 浮动面板 Overlay 参数与 @Builder：节拍器 / 调音器 / 批注色板 / 书签。
+ * 浮动面板 Overlay 参数与 @Builder：节拍器 / 调音器 / 批注色板 / 书签 / 钢琴。
  * 图层列表嵌在批注色板内展开，不再单独占一个浮层。
  * 拖拽钳制状态见 FloatingPanelChrome；PDFView 只负责可见性与参数填充。
  */
@@ -9,6 +9,8 @@ import { PDFMetronomePanelContent } from '../music/PDFMetronomePanel';
 import { PDFMetronomeController } from '../music/PDFMetronomeController';
 import { PDFTunerPanelContent } from '../music/PDFTunerPanel';
 import { PDFTunerController } from '../music/PDFTunerController';
+import { PDFPianoPanelContent } from '../music/PDFPianoPanel';
+import { PDFPianoController, PianoResizeSide } from '../music/PDFPianoController';
 import { PDFAnnotationPalette } from '../annotation/PDFAnnotationPalette';
 import { AnnotationLayerListItem } from '../../common/page/AnnotationLayer';
 import { AnnotationColor } from '../annotation/PDFAnnotationColors';
@@ -333,6 +335,60 @@ export class BookmarkOverlayParams {
   }
 }
 
+interface PianoOverlayOptions {
+  controller: PDFPianoController | undefined;
+  showWindow: boolean;
+  useDocked: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onTouchStateChanged: (active: boolean) => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onContentWidthChanged: (side: PianoResizeSide) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onClose: () => void;
+}
+
+export class PianoOverlayParams {
+  controller: PDFPianoController | undefined;
+  showWindow: boolean;
+  useDocked: boolean;
+  hostScale: number;
+  hostOffset: FloatingPanelOffset;
+  onTouchStateChanged: (active: boolean) => void;
+  onWindowAreaHeightChanged: (heightVp: number) => void;
+  onContentWidthChanged: (side: PianoResizeSide) => void;
+  onHostDragStart: () => void;
+  onHostDragUpdate: (event: GestureEvent) => void;
+  onHostDragEnd: () => void;
+  onHostPinchStart: () => void;
+  onHostPinchUpdate: (event: GestureEvent) => void;
+  onHostPinchEnd: () => void;
+  onClose: () => void;
+
+  constructor(options: PianoOverlayOptions) {
+    this.controller = options.controller;
+    this.showWindow = options.showWindow;
+    this.useDocked = options.useDocked;
+    this.hostScale = options.hostScale;
+    this.hostOffset = options.hostOffset;
+    this.onTouchStateChanged = options.onTouchStateChanged;
+    this.onWindowAreaHeightChanged = options.onWindowAreaHeightChanged;
+    this.onContentWidthChanged = options.onContentWidthChanged;
+    this.onHostDragStart = options.onHostDragStart;
+    this.onHostDragUpdate = options.onHostDragUpdate;
+    this.onHostDragEnd = options.onHostDragEnd;
+    this.onHostPinchStart = options.onHostPinchStart;
+    this.onHostPinchUpdate = options.onHostPinchUpdate;
+    this.onHostPinchEnd = options.onHostPinchEnd;
+    this.onClose = options.onClose;
+  }
+}
+
 @Builder
 export function BuildMetronomeOverlay(params: MetronomeOverlayParams) {
   Stack() {
@@ -498,6 +554,36 @@ export function BuildBookmarkOverlay(params: BookmarkOverlayParams) {
         onHostPinchStart: params.onHostPinchStart,
         onHostPinchUpdate: params.onHostPinchUpdate,
         onHostPinchEnd: params.onHostPinchEnd
+      })
+    }
+  }
+  .width('100%')
+  .height('100%')
+  .alignContent(Alignment.TopStart)
+  .hitTestBehavior(HitTestMode.Transparent)
+}
+
+@Builder
+export function BuildPianoOverlay(params: PianoOverlayParams) {
+  Stack() {
+    if (params.showWindow && !params.useDocked) {
+      PDFPianoPanelContent({
+        controller: params.controller,
+        useDocked: false,
+        dockedTopOffsetVp: 0,
+        hostScale: params.hostScale,
+        hostOffset: params.hostOffset,
+        showDragHandle: true,
+        onTouchStateChanged: params.onTouchStateChanged,
+        onWindowAreaHeightChanged: params.onWindowAreaHeightChanged,
+        onContentWidthChanged: params.onContentWidthChanged,
+        onHostDragStart: params.onHostDragStart,
+        onHostDragUpdate: params.onHostDragUpdate,
+        onHostDragEnd: params.onHostDragEnd,
+        onHostPinchStart: params.onHostPinchStart,
+        onHostPinchUpdate: params.onHostPinchUpdate,
+        onHostPinchEnd: params.onHostPinchEnd,
+        onClose: params.onClose
       })
     }
   }
