@@ -174,6 +174,10 @@ struct PDFView {
   currentRenderScale: number = ViewerMinRenderScale;
   /** 拖拽/捏合/滑动中：主槽强制 layout 代理，避免 HQ 大纹理每帧变换 */
   private interactiveMotionDemoted: boolean = false;
+  /** 滑动 overlay 卸层后再灌主槽光栅，避免揭开时 seed 已被换成另一套图 */
+  private pendingSlideMainLoadIndices: number[] = [];
+  private pendingSlideMainLoadToken: number = -1;
+  private pendingSlideMainLoadCenter: number = 0;
   settings: RenderingContextSettings = new RenderingContextSettings(true);
   /** 主文档条三槽（@ObservedV2 + @Trace，变异槽字段即可刷新 UI） */
   @Local mainSlots: PageViewSlot[] = createPageViewSlots(this.settings);
@@ -259,7 +263,10 @@ struct PDFView {
     ensureMainRowEmptySlotsMatchDisplayed: () => this.ensureMainRowEmptySlotsMatchDisplayed(),
     resetViewToFit: () => this.resetViewToFit(),
     redrawStrokes: () => this.redrawStrokes(),
-    onSlideSessionIdle: () => this.endInteractiveMotionDemote(),
+    onSlideSessionIdle: () => {
+      this.endInteractiveMotionDemote();
+      this.flushPendingSlideMainLoad();
+    },
     gotoPage: (targetIndex: number, deferSlideVisualReset: boolean, recordJumpHistory: boolean) =>
       this.gotoPage(targetIndex, deferSlideVisualReset, recordJumpHistory),
     getMainSlotAt: (index: number) => this.mainSlotAt(index)
@@ -2538,26 +2545,45 @@ struct PDFView {
     // displayed 已切换：须立刻按新 indices 重绘笔画层，否则透明 Image 下仍会叠上一套槽位的旧画布（双页末槽尤其明显）。
     this.redrawStrokes();
 
-    await this.loadCachesIntoMainSlots(indicesToLoad, navToken);
-
-    if (navToken !== this.pageLoadVersion) {
-      this.mainSlotPagesBeingLoaded = [];
-      if (deferSlideVisualReset) {
-        this.pageTurnController.clearSlideGotoInFlightIfToken(navToken);
-      }
+    if (deferSlideVisualReset) {
+      this.pendingSlideMainLoadIndices = indicesToLoad.slice();
+      this.pendingSlideMainLoadToken = navToken;
+      this.pendingSlideMainLoadCenter = clampedTarget;
+      this.pageTurnController.fadeDeferSlideGotoTeardown(navToken);
       return;
     }
 
-    this.mainSlotPagesBeingLoaded = [];
+    await this.finishMainSlotLoadAndPrefetch(indicesToLoad, navToken, clampedTarget);
+    this.resetViewToFit();
+    this.redrawStrokes();
+  }
 
-    // Debounce prefetch/eviction to avoid cache churn during rapid scrolling
+  private flushPendingSlideMainLoad(): void {
+    const token: number = this.pendingSlideMainLoadToken;
+    const indices: number[] = this.pendingSlideMainLoadIndices;
+    const center: number = this.pendingSlideMainLoadCenter;
+    this.pendingSlideMainLoadToken = -1;
+    this.pendingSlideMainLoadIndices = [];
+    if (token < 0 || token !== this.pageLoadVersion || indices.length === 0) {
+      return;
+    }
+    void this.finishMainSlotLoadAndPrefetch(indices, token, center);
+  }
+
+  private async finishMainSlotLoadAndPrefetch(indices: number[], navToken: number, centerIndex: number): Promise<void> {
+    await this.loadCachesIntoMainSlots(indices, navToken);
+    if (navToken !== this.pageLoadVersion) {
+      this.mainSlotPagesBeingLoaded = [];
+      return;
+    }
+    this.mainSlotPagesBeingLoaded = [];
     if (this.prefetchDebounceId !== undefined) {
       clearTimeout(this.prefetchDebounceId);
     }
     this.prefetchDebounceId = setTimeout(() => {
       this.prefetchDebounceId = undefined;
       this.pageDataSource.prefetchPagesAround(
-        clampedTarget,
+        centerIndex,
         5,
         15,
         this.viewerViewModel.displayedPageIndices,
@@ -2565,13 +2591,6 @@ struct PDFView {
         1
       );
     }, 300);
-
-    if (deferSlideVisualReset) {
-      this.pageTurnController.fadeDeferSlideGotoTeardown(navToken);
-    } else {
-      this.resetViewToFit();
-      this.redrawStrokes();
-    }
   }
 
   resetViewToFit(): void {
