@@ -3147,6 +3147,7 @@ struct PDFView {
   private async settleAfterMidSwap(swapDir: number): Promise<void> {
     if (swapDir > 0) {
       this.viewerViewModel.setHalfPagePreviewActive(true);
+      this.linkController.triggerPdfLinkVisualPageEnter();
       await this.waitHalfRevealHoldOrArmFallback();
       await this.animateHalfReveal(0.5);
       return;
@@ -3226,6 +3227,7 @@ struct PDFView {
       }
       if (step.previewActive) {
         await this.halfPageController.showPreviewOfPage(step.pageIndex + 1);
+        this.linkController.triggerPdfLinkVisualPageEnter();
         await this.animateHalfReveal(0.5);
         return;
       }
@@ -4460,7 +4462,18 @@ struct PDFView {
             this.halfPageController.overlaySlot.annotateCtx,
             this.halfPageController.overlayPageIndex >= 0 ? this.halfPageController.overlayPageIndex : 0,
             event
-          )
+          ),
+          linkHitAreas: this.linkController.getLinkHitAreasForOverlay(
+            this.halfPageController.overlayPageIndex,
+            this.halfPageController.overlaySlot.viewSize,
+            this.halfPageController.shouldShowOverlay()
+          ),
+          linkOverlayEnabled: this.halfPageController.shouldShowOverlay() &&
+            this.linkController.isLinkOverlayEnabled(),
+          linkVisualOpacity: this.linkController.pdfLinkVisualOpacity,
+          onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.linkController.handlePdfLinkPressStart(hitArea),
+          onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.linkController.handlePdfLinkPressCancel(hitArea),
+          onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.linkController.activatePdfLink(hitArea)
         })
           .alignRules(TopLeft)
           .offset(this.viewerViewModel.viewPan)

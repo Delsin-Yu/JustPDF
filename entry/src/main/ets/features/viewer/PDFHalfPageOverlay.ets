@@ -1,6 +1,6 @@
 import { LengthMetricsUnit } from '@kit.ArkUI';
 import { toSizePx, Vector2 } from '../../common/ui/Numbers';
-import { PDFPageSlot } from './PDFPageSlot';
+import { PDFLinkDisplayHitArea, PDFPageSlot } from './PDFPageSlot';
 
 @ComponentV2
 export struct PDFHalfPageOverlay {
@@ -20,6 +20,12 @@ export struct PDFHalfPageOverlay {
     new CanvasRenderingContext2D(new RenderingContextSettings(true), LengthMetricsUnit.PX);
   @Param onDrawTouch: (event: TouchEvent) => void = () => {};
   @Param onDrawMouse: (event: MouseEvent) => void = () => {};
+  @Param linkHitAreas: PDFLinkDisplayHitArea[] = [];
+  @Param linkOverlayEnabled: boolean = false;
+  @Param linkVisualOpacity: number = 0;
+  @Param onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
+  @Param onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
+  @Param onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => void = () => {};
 
   build() {
     Stack() {
@@ -34,7 +40,13 @@ export struct PDFHalfPageOverlay {
         annotateCtx: this.annotateCtx,
         drawCtx: this.drawCtx,
         onDrawTouch: (event: TouchEvent) => this.onDrawTouch(event),
-        onDrawMouse: (event: MouseEvent) => this.onDrawMouse(event)
+        onDrawMouse: (event: MouseEvent) => this.onDrawMouse(event),
+        linkHitAreas: this.linkHitAreas,
+        linkOverlayEnabled: this.linkOverlayEnabled,
+        linkVisualOpacity: this.linkVisualOpacity,
+        onLinkPressStart: (hitArea: PDFLinkDisplayHitArea) => this.onLinkPressStart(hitArea),
+        onLinkPressCancel: (hitArea: PDFLinkDisplayHitArea) => this.onLinkPressCancel(hitArea),
+        onLinkActivated: (hitArea: PDFLinkDisplayHitArea) => this.onLinkActivated(hitArea)
       })
     }
     .alignContent(Alignment.TopStart)

@@ -207,17 +207,14 @@ export class PDFLinkController {
     return slot.viewSize;
   }
 
-  getLinkHitAreasForSlot(viewIndex: number): PDFLinkDisplayHitArea[] {
-    if (!this.isMainSlotCommittedVisible(viewIndex)) {
+  getLinkHitAreasForPage(pageIndex: number, viewSize: Vector2, debugKey: string): PDFLinkDisplayHitArea[] {
+    if (pageIndex < 0 || pageIndex >= this.dependencies.pageDataSource.totalPageCount()) {
+      return [];
+    }
+    if (viewSize.x <= 0 || viewSize.y <= 0) {
       return [];
     }
 
-    const pageIndex = this.dependencies.viewerViewModel.displayedPageIndices[viewIndex];
-    if (pageIndex === undefined || pageIndex < 0 || pageIndex >= this.dependencies.pageDataSource.totalPageCount()) {
-      return [];
-    }
-
-    const viewSize = this.getMainSlotViewSize(viewIndex);
     const rawPageSize = this.dependencies.pageDataSource.getPageRawSize(pageIndex);
     const links = this.dependencies.pageDataSource.getPageLinks(pageIndex);
     const hitAreas: PDFLinkDisplayHitArea[] = [];
@@ -226,7 +223,7 @@ export class PDFLinkController {
       const slotRect = this.pdfRectToSlotRect(link.rect, rawPageSize, viewSize);
       if (slotRect === undefined) {
         this.logPdfLinkDebug(
-          'slot-' + viewIndex.toString() + '-link-' + i.toString(),
+          debugKey + '-link-' + i.toString(),
           'skip invalid display rect: page=' + pageIndex.toString() +
             ', raw=(' + rawPageSize.x.toString() + ',' + rawPageSize.y.toString() +
             '), view=(' + viewSize.x.toString() + ',' + viewSize.y.toString() +
@@ -249,7 +246,7 @@ export class PDFLinkController {
     }
     const overlayReason = this.getLinkOverlayRenderDisabledReason();
     this.logPdfLinkDebug(
-      'slot-' + viewIndex.toString(),
+      debugKey,
       'page=' + pageIndex.toString() +
         ', raw=(' + rawPageSize.x.toString() + ',' + rawPageSize.y.toString() +
         '), view=(' + viewSize.x.toString() + ',' + viewSize.y.toString() +
@@ -258,6 +255,25 @@ export class PDFLinkController {
         ', overlay=' + (overlayReason.length === 0 ? 'enabled' : ('disabled:' + overlayReason))
     );
     return hitAreas;
+  }
+
+  getLinkHitAreasForSlot(viewIndex: number): PDFLinkDisplayHitArea[] {
+    if (!this.isMainSlotCommittedVisible(viewIndex)) {
+      return [];
+    }
+
+    const pageIndex = this.dependencies.viewerViewModel.displayedPageIndices[viewIndex];
+    if (pageIndex === undefined) {
+      return [];
+    }
+    return this.getLinkHitAreasForPage(pageIndex, this.getMainSlotViewSize(viewIndex), 'slot-' + viewIndex.toString());
+  }
+
+  getLinkHitAreasForOverlay(pageIndex: number, viewSize: Vector2, overlayVisible: boolean): PDFLinkDisplayHitArea[] {
+    if (!overlayVisible) {
+      return [];
+    }
+    return this.getLinkHitAreasForPage(pageIndex, viewSize, 'overlay');
   }
 
   isLinkOverlayEnabled(): boolean {
