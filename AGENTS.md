@@ -108,6 +108,10 @@ Paths above are under `entry/src/main/ets/`. Router page URLs (must match `main_
 - Use `prefetchPagesAround(centerIndex, prefetchRange, evictionRange, displayedPageIndices)` for smart caching.
 - Honor `onMemoryLevel` → `PageStore.applyMemoryPressure`.
 
+### Page-turn covers (blink)
+
+Half-page overlay and horizontal-slide neighbor strips are **covers over the main `Image`**. Confirmed blinks come from uncovering (or swapping the main slot) before that `Image` has painted, or from `Visibility.Hidden`/`None` remounting the cover. Required order: mount/show same-content cover → paint → change main → paint → then hide. Hide with opacity 0 while `pixelMap` exists (`settleFullPageCover` / `parkInvisibleCoverFromMain`); do not `Hidden`-teardown and remount. Full playbook: `.agents/skills/page-turn-blink/SKILL.md`.
+
 ## Agent-friendly coding rules
 
 1. **Ownership**: change files inside the owning folder. Put new viewer logic in a controller or sibling under `features/viewer/`, not into `PDFView.ets`. Extract from `PDFView.ets` only when the current change already has to touch it — do not split it in unrelated PRs.
@@ -117,9 +121,10 @@ Paths above are under `entry/src/main/ets/`. Router page URLs (must match `main_
 5. **Inline** one-line / single-caller thin wrappers; keep real FSMs as named classes.
 6. **Side effects stay in one place per concern** (e.g. page-turn commit only in the page-turn controller).
 7. **Verify** with `.\check.ps1` then `.\build.ps1` after structural changes; for API questions use `devecocli docs search/read` or local docs. For on-device UI use `.\ui-inspect.ps1` / `devecocli ui`.
-8. **Skills**: official HarmonyOS skills live in `.agents/skills`. Do not reinstall them under `.cursor/skills`. Keep JustPDF-only skills (`bump-app-version`, `commit-batcher`, `deveco-create-project`, `plan-*`) here too. Refresh with `devecocli skills add --skill <name> --path .agents/skills -f`.
+8. **Skills**: official HarmonyOS skills live in `.agents/skills`. Do not reinstall them under `.cursor/skills`. Keep JustPDF-only skills (`bump-app-version`, `commit-batcher`, `deveco-create-project`, `page-turn-blink`, `plan-*`) here too. Refresh with `devecocli skills add --skill <name> --path .agents/skills -f`.
    - CLI / language / UI: `deveco-cli`, `hmos-arkui-develop-skill`, `hmos-arkui-knowledge-retriever`, `hmos-arkts-knowledge-retriever`, `hmos-arkts-syntax-checker`
    - Runtime / memory: `hmos-runtime-fix-skill`, `hmos-jscrash-analysis`, `hmos-jsleak-analysis`, `hmos-memleak-analysis`
+   - Viewer blinks / page-turn covers: `page-turn-blink`
    - Multi-device / stylus / orientation: `hmos-multidevice-scenario-entry`, `hmos-multidevice-screen-window-size`, `hmos-multidevice-avoid-areas`, `hmos-multidevice-fold-state`, `hmos-multidevice-natural-orientation`, `hmos-multidevice-hardware-access`, `hmos-multidevice-interaction-methods`
    - App continuity / Kit APIs: `hmos-app-continuity-skill`, `hmos-one-sdk-skill`
    - Tests: `hmos-local-test`, `hmos-instrument-test`
@@ -132,10 +137,11 @@ Smoke these after each refactor round. Do not substitute the test scaffolds.
 1. Open PDF from Index picker and from recent list.
 2. Open PDF via system Want / share into the app (cold and warm while viewer active).
 3. Password-protected PDF: correct password loads; cancel leaves cleanly.
-4. Horizontal slide page-turn (commit + cancel) in 1/2/3-column modes.
-5. Pan/zoom; stylus annotate draw/erase; undo/redo; save; leave with unsaved prompt.
-6. Bookmark panel + floating metronome/tuner/annotation palette dock/float/scale.
-7. Cross-device continuation migrate/restore (if hardware available).
-8. Memory pressure path does not crash (scroll far + background).
-9. Share / export from viewer still works.
-10. Switching a device from debug to release (or the reverse): uninstall first, then install.
+4. Horizontal slide page-turn (commit + cancel) in 1/2/3-column modes; no settle blink of the previous page.
+5. Half-page next/prev: cover is visible before the main slot changes; no blink on 0.5↔1.
+6. Pan/zoom; stylus annotate draw/erase; undo/redo; save; leave with unsaved prompt.
+7. Bookmark panel + floating metronome/tuner/annotation palette dock/float/scale.
+8. Cross-device continuation migrate/restore (if hardware available).
+9. Memory pressure path does not crash (scroll far + background).
+10. Share / export from viewer still works.
+11. Switching a device from debug to release (or the reverse): uninstall first, then install.
