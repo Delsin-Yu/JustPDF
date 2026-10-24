@@ -35,7 +35,6 @@ constexpr float kPeakLimitStart = 0.92f;
 constexpr float kOutputScale = 0.97f;
 constexpr float kVoicePeakTarget = 0.78f;
 constexpr float kCompThreshold = 0.64f;
-constexpr float kCompRatio = 2.1f;
 constexpr float kCompAttack = 0.0069f;
 constexpr float kCompRelease = 0.00030f;
 constexpr float kNormLoudness = 0.30f;
@@ -53,8 +52,8 @@ enum VoiceState {
 
 // 稳幅相位器模态：Bank 分音衰减，不用高 Q 双二阶（避免低音自激失真）。
 struct ModalPartial {
-    float phase = 0.0f;
-    float increment = 0.0f;
+    uint32_t phaseU = 0;
+    uint32_t incrementU = 0;
     float amp = 0.0f;
     float level = 0.0f;
     float decay = 1.0f;
@@ -63,14 +62,14 @@ struct ModalPartial {
 struct PianoVoice {
     int32_t midi = 60;
     float frequencyHz = 261.63f;
-    float phase[kMaxPartials] = {};
-    float increment[kMaxPartials] = {};
+    uint32_t phaseU[kMaxPartials] = {};
+    uint32_t incrementU[kMaxPartials] = {};
     float partialAmp[kMaxPartials] = {};
     float partialLevel[kMaxPartials] = {};
     float partialDecay[kMaxPartials] = {};
     int32_t partialCount = 0;
     float envLevel = 0.0f;
-    float releaseStartEnv = 1.0f;
+    float releaseDecay = 1.0f;
     float loudness = 1.0f;
     float hammerLevel = 0.0f;
     float hammerDecay = 0.0f;
@@ -88,8 +87,8 @@ struct PianoVoice {
 };
 
 struct TunerTone {
-    float phase = 0.0f;
-    float increment = 0.0f;
+    uint32_t phaseU = 0;
+    uint32_t incrementU = 0;
     float amplitude = 0.0f;
     float targetAmplitude = 0.0f;
     float frequencyHz = 440.0f;
@@ -106,6 +105,7 @@ struct PianoEngineState {
     float dynPeak = 0.0f;
     float dynRms2 = 0.0f;
     float dynNorm = 1.0f;
+    float mixScaleSmooth = 1.0f;
     int32_t program = kProgramPiano;
     bool pianoClientActive = false;
     bool running = false;
@@ -114,20 +114,21 @@ struct PianoEngineState {
 
 PianoEngineState g_engine;
 
-float FastSine(float phase)
+float FastSineU(uint32_t phaseU)
 {
-    const int32_t index = static_cast<int32_t>(phase) & kSineTableMask;
-    return g_engine.sineTable[index];
+    return g_engine.sineTable[phaseU >> 21];
 }
 
-void WrapPhase(float& phase)
+uint32_t FrequencyToIncrement(float frequencyHz)
 {
-    while (phase >= static_cast<float>(kSineTableSize)) {
-        phase -= static_cast<float>(kSineTableSize);
+    if (frequencyHz <= 0.0f) {
+        return 0;
     }
-    while (phase < 0.0f) {
-        phase += static_cast<float>(kSineTableSize);
+    const double ratio = static_cast<double>(frequencyHz) / static_cast<double>(kSampleRateHz);
+    if (ratio >= 1.0) {
+        return 0;
     }
+    return static_cast<uint32_t>(ratio * 4294967296.0);
 }
 
 float NextNoise()
@@ -159,20 +160,23 @@ void SetupPartial(ModalPartial& partial, float frequencyHz, float tauSeconds, fl
     if (safeTau > 8.0f) {
         safeTau = 8.0f;
     }
-    partial.increment = static_cast<float>(kSineTableSize) * frequencyHz / static_cast<float>(kSampleRateHz);
+    partial.incrementU = FrequencyToIncrement(frequencyHz);
     partial.amp = amp;
     partial.decay = expf(-1.0f / (safeTau * static_cast<float>(kSampleRateHz)));
     if (resetState) {
         partial.level = 1.0f;
-        partial.phase = (NextNoise() * 0.5f + 0.5f) * static_cast<float>(kSineTableSize);
+        const float unit = NextNoise() * 0.5f + 0.5f;
+        partial.phaseU = static_cast<uint32_t>(unit * 4294967296.0);
     }
 }
 
 float TickPartial(ModalPartial& partial)
 {
-    const float sample = FastSine(partial.phase) * partial.amp * partial.level;
-    partial.phase += partial.increment;
-    WrapPhase(partial.phase);
+    if (partial.level < 0.00001f) {
+        return 0.0f;
+    }
+    const float sample = FastSineU(partial.phaseU) * partial.amp * partial.level;
+    partial.phaseU += partial.incrementU;
     partial.level *= partial.decay;
     return sample;
 }
@@ -204,7 +208,7 @@ float ProcessDynamics(float sample)
     float comp = 1.0f;
     if (g_engine.dynPeak > kCompThreshold) {
         const float over = g_engine.dynPeak / kCompThreshold;
-        comp = powf(over, (1.0f / kCompRatio) - 1.0f);
+        comp = 1.0f / sqrtf(over);
     }
     g_engine.dynRms2 += 0.0018f * (sample * sample - g_engine.dynRms2);
     if (g_engine.dynRms2 < 0.0f) {
@@ -231,6 +235,7 @@ void ResetDynamics()
     g_engine.dynPeak = 0.0f;
     g_engine.dynRms2 = 0.0f;
     g_engine.dynNorm = 1.0f;
+    g_engine.mixScaleSmooth = 1.0f;
 }
 
 void EnsureSineTable()
@@ -242,17 +247,6 @@ void EnsureSineTable()
         g_engine.sineTable[index] = sinf(kTwoPi * static_cast<float>(index) / static_cast<float>(kSineTableSize));
     }
     g_engine.tableReady = true;
-}
-
-int32_t CountInUseVoicesLocked()
-{
-    int32_t count = 0;
-    for (int32_t index = 0; index < kMaxVoices; ++index) {
-        if (g_engine.voices[index].inUse) {
-            ++count;
-        }
-    }
-    return count;
 }
 
 int32_t FindActiveVoiceLocked(int32_t midi)
@@ -290,8 +284,8 @@ void ConfigureVoiceLocked(PianoVoice& voice, int32_t midi, float frequencyHz, bo
     const int32_t program = g_engine.program;
     if (program == kProgramOrgan) {
         voice.partialCount = 2;
-        voice.increment[0] = static_cast<float>(kSineTableSize) * safeHz / static_cast<float>(kSampleRateHz);
-        voice.increment[1] = voice.increment[0] * 2.003f;
+        voice.incrementU[0] = FrequencyToIncrement(safeHz);
+        voice.incrementU[1] = FrequencyToIncrement(safeHz * 2.003f);
         voice.partialAmp[0] = 0.70f;
         voice.partialAmp[1] = 0.22f;
         voice.partialDecay[0] = 1.0f;
@@ -303,13 +297,12 @@ void ConfigureVoiceLocked(PianoVoice& voice, int32_t midi, float frequencyHz, bo
         voice.hammerDecay = expf(-1.0f / (0.0060f * static_cast<float>(kSampleRateHz)));
         voice.modal = false;
     } else if (program == kProgramSquare) {
-        const float fundIncrement = static_cast<float>(kSineTableSize) * safeHz / static_cast<float>(kSampleRateHz);
         int32_t count = 0;
         for (int32_t harmonic = 1; harmonic <= 11 && count < kMaxPartials; harmonic += 2) {
             if (safeHz * static_cast<float>(harmonic) >= kNyquistLimitHz) {
                 break;
             }
-            voice.increment[count] = fundIncrement * static_cast<float>(harmonic);
+            voice.incrementU[count] = FrequencyToIncrement(safeHz * static_cast<float>(harmonic));
             voice.partialAmp[count] = (1.0f / static_cast<float>(harmonic)) * 0.52f;
             voice.partialDecay[count] = 1.0f;
             voice.partialLevel[count] = 1.0f;
@@ -386,9 +379,9 @@ void ConfigureVoiceLocked(PianoVoice& voice, int32_t midi, float frequencyHz, bo
     }
     if (resetEnvelope) {
         for (int32_t index = 0; index < kMaxPartials; ++index) {
-            voice.phase[index] = 0.0f;
+            voice.phaseU[index] = 0;
         }
-        voice.releaseStartEnv = 1.0f;
+        voice.releaseDecay = 1.0f;
         voice.framesInState = 0;
         voice.framesSinceOn = 0;
         if (program == kProgramSquare) {
@@ -410,7 +403,9 @@ void BeginReleaseLocked(PianoVoice& voice)
     if (voice.state == VOICE_RELEASE) {
         return;
     }
-    voice.releaseStartEnv = voice.envLevel > 0.0001f ? voice.envLevel : 0.0001f;
+    voice.envLevel = voice.envLevel > 0.0001f ? voice.envLevel : 0.0001f;
+    const float damperTau = voice.modal ? 0.13f : 0.04f;
+    voice.releaseDecay = expf(-1.0f / (damperTau * static_cast<float>(kSampleRateHz)));
     voice.state = VOICE_RELEASE;
     voice.framesInState = 0;
 }
@@ -438,9 +433,7 @@ float AdvanceEnvelopeLocked(PianoVoice& voice)
     }
     ++voice.framesInState;
     ++voice.framesSinceOn;
-    const float damperTau = voice.modal ? 0.13f : 0.04f;
-    const float damperDecay = expf(-1.0f / (damperTau * static_cast<float>(kSampleRateHz)));
-    voice.envLevel = voice.releaseStartEnv * powf(damperDecay, static_cast<float>(voice.framesInState));
+    voice.envLevel *= voice.releaseDecay;
     if (voice.envLevel < 0.0004f) {
         voice.envLevel = 0.0f;
     }
@@ -478,9 +471,8 @@ float RenderVoiceSampleLocked(PianoVoice& voice, float envelope)
     }
     float mixed = 0.0f;
     for (int32_t index = 0; index < voice.partialCount; ++index) {
-        mixed += FastSine(voice.phase[index]) * voice.partialAmp[index] * voice.partialLevel[index];
-        voice.phase[index] += voice.increment[index];
-        WrapPhase(voice.phase[index]);
+        mixed += FastSineU(voice.phaseU[index]) * voice.partialAmp[index] * voice.partialLevel[index];
+        voice.phaseU[index] += voice.incrementU[index];
         voice.partialLevel[index] *= voice.partialDecay[index];
     }
     float hammer = 0.0f;
@@ -491,15 +483,15 @@ float RenderVoiceSampleLocked(PianoVoice& voice, float envelope)
     return (mixed + hammer) * envelope * voice.loudness * voice.voiceGain;
 }
 
-float RenderBandLimitedSquare(float phase, float fundIncrement)
+float RenderBandLimitedSquare(uint32_t phaseU, uint32_t fundIncrementU)
 {
     float mixed = 0.0f;
+    const uint32_t nyquistIncrement = FrequencyToIncrement(kNyquistLimitHz);
     for (int32_t harmonic = 1; harmonic <= 11; harmonic += 2) {
-        if (fundIncrement * static_cast<float>(harmonic) >=
-            static_cast<float>(kSineTableSize) * kNyquistLimitHz / static_cast<float>(kSampleRateHz)) {
+        if (fundIncrementU > 0 && fundIncrementU * static_cast<uint32_t>(harmonic) >= nyquistIncrement) {
             break;
         }
-        mixed += FastSine(phase * static_cast<float>(harmonic)) / static_cast<float>(harmonic);
+        mixed += FastSineU(phaseU * static_cast<uint32_t>(harmonic)) / static_cast<float>(harmonic);
     }
     return mixed * 0.62f;
 }
@@ -527,11 +519,10 @@ int16_t ClampPcm(float sample)
 
 void MixIntoBufferLocked(int16_t* output, int32_t frames)
 {
-    const int32_t activeCount = CountInUseVoicesLocked();
-    const float mixScale = 1.0f / sqrtf(static_cast<float>(activeCount > 0 ? activeCount : 1));
     const float outputAmplitude = static_cast<float>(kMaxAmplitude) * kOutputScale;
     for (int32_t frame = 0; frame < frames; ++frame) {
         float dry = 0.0f;
+        int32_t liveCount = 0;
         for (int32_t voiceIndex = 0; voiceIndex < kMaxVoices; ++voiceIndex) {
             PianoVoice& voice = g_engine.voices[voiceIndex];
             if (!voice.inUse) {
@@ -542,22 +533,29 @@ void MixIntoBufferLocked(int16_t* output, int32_t frames)
                 voice.inUse = false;
                 continue;
             }
-            dry += RenderVoiceSampleLocked(voice, envelope) * mixScale;
+            dry += RenderVoiceSampleLocked(voice, envelope);
+            ++liveCount;
         }
-        g_engine.tuner.amplitude += (g_engine.tuner.targetAmplitude - g_engine.tuner.amplitude) * kTunerFade;
-        g_engine.tuner.frequencyHz += (g_engine.tuner.targetFrequencyHz - g_engine.tuner.frequencyHz) * kTunerFade;
-        if (g_engine.tuner.frequencyHz < 20.0f) {
-            g_engine.tuner.frequencyHz = 20.0f;
+        const float mixTarget = 1.0f / sqrtf(static_cast<float>(liveCount > 0 ? liveCount : 1));
+        g_engine.mixScaleSmooth += 0.0020f * (mixTarget - g_engine.mixScaleSmooth);
+        dry *= g_engine.mixScaleSmooth;
+        const bool tunerLive = g_engine.tuner.amplitude > 0.00005f || g_engine.tuner.targetAmplitude > 0.00005f;
+        if (tunerLive) {
+            g_engine.tuner.amplitude += (g_engine.tuner.targetAmplitude - g_engine.tuner.amplitude) * kTunerFade;
+            g_engine.tuner.frequencyHz +=
+                (g_engine.tuner.targetFrequencyHz - g_engine.tuner.frequencyHz) * kTunerFade;
+            if (g_engine.tuner.frequencyHz < 20.0f) {
+                g_engine.tuner.frequencyHz = 20.0f;
+            }
+            g_engine.tuner.incrementU = FrequencyToIncrement(g_engine.tuner.frequencyHz);
+            if (g_engine.tuner.amplitude > 0.00005f) {
+                dry += RenderBandLimitedSquare(g_engine.tuner.phaseU, g_engine.tuner.incrementU) *
+                    g_engine.tuner.amplitude * LoudnessCompensation(g_engine.tuner.frequencyHz);
+                g_engine.tuner.phaseU += g_engine.tuner.incrementU;
+            }
         }
-        g_engine.tuner.increment =
-            static_cast<float>(kSineTableSize) * g_engine.tuner.frequencyHz / static_cast<float>(kSampleRateHz);
-        if (g_engine.tuner.amplitude > 0.00005f) {
-            dry += RenderBandLimitedSquare(g_engine.tuner.phase, g_engine.tuner.increment) * g_engine.tuner.amplitude *
-                LoudnessCompensation(g_engine.tuner.frequencyHz);
-            g_engine.tuner.phase += g_engine.tuner.increment;
-            WrapPhase(g_engine.tuner.phase);
-        }
-        const int16_t pcm = ClampPcm(PeakLimit(ProcessDynamics(dry)) * outputAmplitude);
+        const float limited = PeakLimit(ProcessDynamics(dry));
+        const int16_t pcm = ClampPcm(limited * outputAmplitude);
         output[frame * kChannelCount] = pcm;
         output[frame * kChannelCount + 1] = pcm;
     }
@@ -576,8 +574,10 @@ OH_AudioData_Callback_Result OnWriteData(OH_AudioRenderer* renderer, void* userD
     if (frames <= 0) {
         return AUDIO_DATA_CALLBACK_RESULT_VALID;
     }
-    std::lock_guard<std::mutex> lock(g_engine.mutex);
-    MixIntoBufferLocked(static_cast<int16_t*>(audioData), frames);
+    {
+        std::lock_guard<std::mutex> lock(g_engine.mutex);
+        MixIntoBufferLocked(static_cast<int16_t*>(audioData), frames);
+    }
     return AUDIO_DATA_CALLBACK_RESULT_VALID;
 }
 
