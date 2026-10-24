@@ -259,12 +259,16 @@ export class PDFPageTurnController {
     this.slideTeardownFadeGen = gen;
     this.slideTeardownFramesLeft = 2;
     const sync = displaySync.create();
+    // 文档示例用 min=0 / expected>0 / max<=设备上限；{0,0,0} 在部分设备会抛 401 ExpectedFrameRateRange Error。
     const range: ExpectedFrameRateRange = {
-      expected: 0,
+      expected: 60,
       min: 0,
-      max: 0
+      max: 120
     };
-    sync.setExpectedFrameRateRange(range);
+    try {
+      sync.setExpectedFrameRateRange(range);
+    } catch (_rangeError) {
+    }
     sync.on('frame', this.handleSlideTeardownFrame);
     this.slideTeardownSync = sync;
     this.dependencies.getUIContext().runScopedTask(() => {
