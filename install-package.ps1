@@ -2,8 +2,10 @@
 # Does not compile. Drop files onto install-package.cmd, or pass paths here.
 # Default: every connected device. Use -Target <serial> for one device.
 
+[CmdletBinding()]
 param(
-    [Parameter(ValueFromRemainingArguments = $true)]
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [Alias('Path')]
     [string[]]$Package,
     [string]$Target,
     [switch]$Grant
@@ -83,7 +85,18 @@ function Invoke-HdcInstallPackage {
     Invoke-HdcRaw -Hdc $Hdc -Arguments $Args.ToArray() -Target $Device | Out-Null
 }
 
-if (-not $Package -or $Package.Count -eq 0) {
+$CollectedPackages = [System.Collections.Generic.List[string]]::new()
+foreach ($Item in @($Package)) {
+    if ($null -eq $Item) {
+        continue
+    }
+    $Text = "$Item".Trim().Trim('"')
+    if ($Text) {
+        $CollectedPackages.Add($Text)
+    }
+}
+$Package = @($CollectedPackages)
+if ($Package.Count -eq 0) {
     Write-Host 'Usage:' -ForegroundColor Yellow
     Write-Host '  Drag .hap / .app / .hsp (or a folder) onto install-package.cmd'
     Write-Host '  .\install-package.ps1 <path> [<path>...] [-Target <serial>] [-Grant]'

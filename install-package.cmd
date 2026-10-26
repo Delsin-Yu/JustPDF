@@ -10,7 +10,17 @@ if "%~1"=="" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-package.ps1" %*
+rem Explorer drop-target: pass each path as a named -Package so powershell -File
+rem does not drop positional arguments.
+set "PSARGS="
+:collect
+if "%~1"=="" goto run
+set PSARGS=%PSARGS% -Package "%~1"
+shift
+goto collect
+
+:run
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-package.ps1" %PSARGS%
 set EXITCODE=%ERRORLEVEL%
 echo.
 echo Exit %EXITCODE%
