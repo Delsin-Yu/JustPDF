@@ -29,6 +29,7 @@ Root entry scripts (use these; do not invent parallel wrappers):
 - `.\build-deploy-run.ps1` — build, install, launch on connected devices.
 - `.\build-deploy-debug.ps1` — same, then `aa start -D` (may wait at splash until a debugger attaches).
 - `.\deploy.ps1` — install an existing HAP and launch (no build).
+- `.\install-package.ps1` / `install-package.cmd` — install an arbitrary `.hap` / `.app` / `.hsp` (or a folder) onto connected devices; no build, no launch. Drop the package onto the `.cmd` (Windows Explorer will not run a dropped `.ps1`).
 - `.\apply.ps1` — after a successful full deploy, iterate with `devecocli run --apply`.
 - `.\lsp.ps1` — `devecocli serve lsp --arkts` for stdio clients.
 - `.\crash-log.ps1` — `devecocli log --crash`.
