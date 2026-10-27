@@ -1,0 +1,102 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R /Annots [7 0 R 9 0 R 11 0 R] >>
+endobj
+5 0 obj
+<< /Length 139 >>
+stream
+BT
+/F1 22 Tf
+72 720 Td
+(Polyline widths 1 / 3 / 6 pt) Tj
+0 -32 Td
+(Import annotate mode, save, reopen. Lines should keep thickness.) Tj
+ET
+
+endstream
+endobj
+6 0 obj
+<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 284.00 64.00] /Resources << /ProcSet [/PDF] >> /Length 84 >>
+stream
+q
+0.900 0.200 0.200 RG
+1.00 w
+1 J
+1 j
+2.00 22.00 m
+142.00 62.00 l
+282.00 2.00 l
+S
+Q
+
+endstream
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /PolyLine /P 4 0 R /F 4 /CA 1 /NM <FEFF00770069006400740068002D0031> /T <FEFF005700690064007400680020003100700074> /Subj <FEFF004A007500730074005000440046002D004C0061007900650072> /Contents <FEFF00690064003D00770031003B006F0072006400650072003D0030003B00760069007300690062006C0065003D0031> /C [0.900 0.200 0.200] /Vertices [80.00 560.00 220.00 600.00 360.00 540.00] /Rect [78.00 538.00 362.00 602.00] /LE [/None /None] /Border [0 0 1.00] /BS << /Type /Border /W 1.00 /S /S >> /AP << /N 6 0 R >> /CreationDate (D:20200101120000) /M (D:20200102120000) >>
+endobj
+8 0 obj
+<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 288.00 68.00] /Resources << /ProcSet [/PDF] >> /Length 84 >>
+stream
+q
+0.200 0.500 0.900 RG
+3.00 w
+1 J
+1 j
+4.00 24.00 m
+144.00 64.00 l
+284.00 4.00 l
+S
+Q
+
+endstream
+endobj
+9 0 obj
+<< /Type /Annot /Subtype /PolyLine /P 4 0 R /F 4 /CA 1 /NM <FEFF00770069006400740068002D0033> /T <FEFF005700690064007400680020003300700074> /Subj <FEFF004A007500730074005000440046002D004C0061007900650072> /Contents <FEFF00690064003D00770033003B006F0072006400650072003D0030003B00760069007300690062006C0065003D0031> /C [0.200 0.500 0.900] /Vertices [80.00 440.00 220.00 480.00 360.00 420.00] /Rect [76.00 416.00 364.00 484.00] /LE [/None /None] /Border [0 0 3.00] /BS << /Type /Border /W 3.00 /S /S >> /AP << /N 8 0 R >> /CreationDate (D:20240615153000) /M (D:20240616153000) >>
+endobj
+10 0 obj
+<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 294.00 74.00] /Resources << /ProcSet [/PDF] >> /Length 84 >>
+stream
+q
+0.100 0.700 0.300 RG
+6.00 w
+1 J
+1 j
+7.00 27.00 m
+147.00 67.00 l
+287.00 7.00 l
+S
+Q
+
+endstream
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /PolyLine /P 4 0 R /F 4 /CA 1 /NM <FEFF00770069006400740068002D0036> /T <FEFF005700690064007400680020003600700074> /Subj <FEFF004A007500730074005000440046002D004C0061007900650072> /Contents <FEFF00690064003D00770036003B006F0072006400650072003D0030003B00760069007300690062006C0065003D0031> /C [0.100 0.700 0.300] /Vertices [80.00 320.00 220.00 360.00 360.00 300.00] /Rect [73.00 293.00 367.00 367.00] /LE [/None /None] /Border [0 0 6.00] /BS << /Type /Border /W 6.00 /S /S >> /AP << /N 10 0 R >> /CreationDate (D:20261027120000) /M (D:20261027123000) >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000185 00000 n 
+0000000340 00000 n 
+0000000530 00000 n 
+0000000764 00000 n 
+0000001356 00000 n 
+0000001590 00000 n 
+0000002182 00000 n 
+0000002417 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+3011
+%%EOF

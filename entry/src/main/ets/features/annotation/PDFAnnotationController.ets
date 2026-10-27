@@ -31,9 +31,16 @@ import {
 import {
   NativeAnnotErrEncrypt,
   NativeAnnotOk,
+  NativeBookmarkWriteItem,
   NativePolylineWriteItem,
   writeNativePolylines
 } from './PDFAnnotationNative';
+import {
+  encryptPdfWithPassword,
+  exportDecryptedPdf,
+  isAsciiPdfPassword,
+  pdfFileIsEncrypted
+} from './PDFAnnotationEncrypt';
 
 export { AnnotatePreparePhaseOptions } from './PDFAnnotationDependencies';
 
@@ -841,7 +848,7 @@ export class PDFAnnotationController {
       hilog.info(0, 'PDFView',
         '保存批注 page=' + pageIndex.toString() +
           ' strokes=' + this.dependencies.strokes.getPageStrokesCount(pageIndex).toString());
-      // 不再调用 PDFKit addAnnotation：saveDocument 会把同一批注写进每一页。
+      // 不调用 PDFKit addAnnotation：书签走 saveDocument，新批注由 native 按页补写。
       affectedPage.set(pageIndex, []);
     }
 
@@ -921,6 +928,15 @@ export class PDFAnnotationController {
         item.title = info.title !== undefined ? info.title : '';
         item.content = info.content !== undefined ? info.content : '';
         item.subject = info.subject !== undefined ? info.subject : '';
+        if (info.border !== undefined) {
+          item.borderWidth = info.border.borderWidth;
+          item.borderStyle = info.border.borderStyle;
+        } else {
+          item.borderWidth = 1;
+          item.borderStyle = pdfService.BorderStyle.SOLID;
+        }
+        item.creationTimeMs = info.creationDate !== undefined ? info.creationDate.getTime() : Date.now();
+        item.modifiedTimeMs = info.modifiedTime !== undefined ? info.modifiedTime.getTime() : Date.now();
         if (info.vertexes !== undefined) {
           for (let i = 0; i < info.vertexes.length; i++) {
             item.xs.push(info.vertexes[i].x);
@@ -933,49 +949,149 @@ export class PDFAnnotationController {
     return items;
   }
 
-  private async saveDocumentToTemp(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
-    await this.cleanupTempSaveFile();
-    await yieldToUi();
-
-    const nativeItems: NativePolylineWriteItem[] = this.collectNativePolylines();
-    const dumpPath: string = this.dependencies.documentIO.getSaveTempPath();
-    const nativePath: string = dumpPath + '.native.pdf';
-    const dumped = this.dependencies.documentIO.getDocument().saveDocument(dumpPath);
-    await yieldToUi();
-    if (!dumped) {
-      hilog.error(0, 'PDFView', '保存 PDF 文件到临时路径时出错');
-      return false;
+  private collectNativeStripPageIndices(items: NativePolylineWriteItem[]): number[] {
+    const pageIndices: number[] = [];
+    const importedPageIndices = this.dependencies.strokes.getImportedPdfPolylinePageIndices();
+    for (let i = 0; i < importedPageIndices.length; i++) {
+      pageIndices.push(importedPageIndices[i]);
     }
-
-    if (nativeItems.length === 0) {
-      return true;
-    }
-    const nativeStatus: number = writeNativePolylines(dumpPath, nativePath, nativeItems);
-    if (nativeStatus !== NativeAnnotOk) {
-      try {
-        await fs.unlink(nativePath);
-      } catch (_error) {
-        // 忽略尚未生成的本地写入产物
+    for (let i = 0; i < items.length; i++) {
+      const pageIndex = items[i].pageIndex;
+      if (!pageIndices.includes(pageIndex)) {
+        pageIndices.push(pageIndex);
       }
-      if (nativeStatus === NativeAnnotErrEncrypt) {
-        await showAlertDialog('保存失败', '加密 PDF 暂不支持按页写入批注。', this.dependencies.documentIO.getUIContext());
-      } else {
-        await showAlertDialog('保存失败', '无法将批注写入 PDF 文件。', this.dependencies.documentIO.getUIContext());
-      }
-      return false;
     }
+    return pageIndices;
+  }
+
+  private async unlinkQuietly(path: string): Promise<void> {
     try {
-      await fs.unlink(dumpPath);
+      await fs.unlink(path);
     } catch (_error) {
-      // 用本地写入结果覆盖 dump
+      // 中间文件可能尚未生成
     }
+  }
+
+  private async writeNativePdfToPath(
+    outputPath: string,
+    items: NativePolylineWriteItem[],
+    showErrorDialog: boolean,
+    persistEncryption: boolean,
+    sourcePath: string
+  ): Promise<boolean> {
+    const nativePath: string = outputPath + '.native.pdf';
+    const plainPath: string = outputPath + '.plain.pdf';
+    const encryptedPath: string = outputPath + '.enc.pdf';
+    const stripPageIndices: number[] = this.collectNativeStripPageIndices(items);
+    const emptyBookmarks: NativeBookmarkWriteItem[] = [];
+    const password: string = this.dependencies.documentIO.getOpenPassword();
+    const sourceEncrypted: boolean = pdfFileIsEncrypted(sourcePath);
+    const sandboxEncrypted: boolean = pdfFileIsEncrypted(this.dependencies.documentIO.getSandBoxPath());
+    let nativeInputPath: string = sourcePath;
+
+    if (sourceEncrypted) {
+      if (!exportDecryptedPdf(sourcePath, plainPath, password)) {
+        await this.unlinkQuietly(plainPath);
+        if (showErrorDialog) {
+          await showAlertDialog('保存失败', '无法解密该 PDF 以写入批注。', this.dependencies.documentIO.getUIContext());
+        }
+        hilog.error(0, 'PDFView', '加密 PDF 解密导出失败');
+        return false;
+      }
+      nativeInputPath = plainPath;
+      await yieldToUi();
+    }
+
+    const nativeStatus: number =
+      writeNativePolylines(nativeInputPath, nativePath, items, stripPageIndices, emptyBookmarks, false);
+    await this.unlinkQuietly(plainPath);
+    if (nativeStatus !== NativeAnnotOk) {
+      await this.unlinkQuietly(nativePath);
+      if (showErrorDialog) {
+        if (nativeStatus === NativeAnnotErrEncrypt) {
+          await showAlertDialog('保存失败', '无法写入仍带加密保护的 PDF。', this.dependencies.documentIO.getUIContext());
+        } else {
+          await showAlertDialog('保存失败', '无法将批注写入 PDF 文件。', this.dependencies.documentIO.getUIContext());
+        }
+      }
+      hilog.error(0, 'PDFView', '本地写入 PDF 失败 status=' + nativeStatus.toString());
+      return false;
+    }
+
+    let resultPath: string = nativePath;
+    if ((sourceEncrypted || sandboxEncrypted) && persistEncryption) {
+      if (password.length === 0 || !isAsciiPdfPassword(password)) {
+        await this.unlinkQuietly(nativePath);
+        if (showErrorDialog) {
+          await showAlertDialog(
+            '保存失败',
+            '重新加密需要打开该文件时使用的 ASCII 密码。',
+            this.dependencies.documentIO.getUIContext()
+          );
+        }
+        return false;
+      }
+      if (!encryptPdfWithPassword(nativePath, encryptedPath, password)) {
+        await this.unlinkQuietly(nativePath);
+        await this.unlinkQuietly(encryptedPath);
+        if (showErrorDialog) {
+          await showAlertDialog('保存失败', '批注已写入，但无法用原密码重新加密。', this.dependencies.documentIO.getUIContext());
+        }
+        return false;
+      }
+      await this.unlinkQuietly(nativePath);
+      resultPath = encryptedPath;
+      await yieldToUi();
+    }
+
+    await this.unlinkQuietly(outputPath);
     try {
-      await fs.rename(nativePath, dumpPath);
+      await fs.rename(resultPath, outputPath);
     } catch (error) {
       hilog.error(0, 'PDFView', `替换本地写入结果时出错: ${error}`);
+      await this.unlinkQuietly(resultPath);
       return false;
     }
     return true;
+  }
+
+  private async saveDocumentToTemp(
+    _affectedPage: Map<number, pdfService.PdfAnnotation[]>
+  ): Promise<boolean> {
+    await this.cleanupTempSaveFile();
+    await yieldToUi();
+    const outputPath: string = this.dependencies.documentIO.getSaveTempPath();
+    const kitPath: string = outputPath + '.kit.pdf';
+    await this.unlinkQuietly(kitPath);
+    let kitSaved = false;
+    try {
+      kitSaved = this.dependencies.documentIO.getDocument().saveDocument(kitPath);
+    } catch (error) {
+      hilog.error(0, 'PDFView', `PDFKit saveDocument 失败: ${error}`);
+      kitSaved = false;
+    }
+    if (!kitSaved) {
+      await this.unlinkQuietly(kitPath);
+      await showAlertDialog('保存失败', '无法保存 PDF 文档。', this.dependencies.documentIO.getUIContext());
+      return false;
+    }
+    await yieldToUi();
+    const nativeItems: NativePolylineWriteItem[] = this.collectNativePolylines();
+    const stripPageIndices: number[] = this.collectNativeStripPageIndices(nativeItems);
+    if (nativeItems.length === 0 && stripPageIndices.length === 0) {
+      await this.unlinkQuietly(outputPath);
+      try {
+        await fs.rename(kitPath, outputPath);
+      } catch (error) {
+        hilog.error(0, 'PDFView', `替换 PDFKit 保存结果时出错: ${error}`);
+        await this.unlinkQuietly(kitPath);
+        return false;
+      }
+      return true;
+    }
+    const written = await this.writeNativePdfToPath(outputPath, nativeItems, true, true, kitPath);
+    await this.unlinkQuietly(kitPath);
+    return written;
   }
 
   private async copyTempToSaveUri(saveUri: string, affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
@@ -1051,29 +1167,18 @@ export class PDFAnnotationController {
 
   private async revertChanges(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<void> {
     this.removeAddedAnnotations(affectedPage);
-
-    const success = this.dependencies.documentIO.getDocument().saveDocument(this.dependencies.documentIO.getSaveTempPath());
-    if (!success) {
-      hilog.error(0, 'PDFView', '保存回退 PDF 文件时出错');
-      return;
-    }
-
-    try {
-      await fs.rename(this.dependencies.documentIO.getSaveTempPath(), this.dependencies.documentIO.getSandBoxPath());
-    } catch (error) {
-      hilog.error(0, 'PDFView', `重命名回退文件时出错: ${error}`);
-      try {
-        await fs.unlink(this.dependencies.documentIO.getSaveTempPath());
-      } catch (unlinkError) {
-        hilog.error(0, 'PDFView', `删除临时回退文件时出错: ${unlinkError}`);
-      }
-    }
   }
 
   private async writeEditRenderDocument(): Promise<boolean> {
     await this.cleanupTempSaveFile();
-    const success = this.dependencies.documentIO.getDocument().saveDocument(this.dependencies.documentIO.getSaveTempPath());
-    if (!success) {
+    const previewItems: NativePolylineWriteItem[] = [];
+    if (!await this.writeNativePdfToPath(
+      this.dependencies.documentIO.getSaveTempPath(),
+      previewItems,
+      false,
+      false,
+      this.dependencies.documentIO.getSandBoxPath()
+    )) {
       hilog.error(0, 'PDFView', '保存编辑预览 PDF 文件时出错');
       return false;
     }

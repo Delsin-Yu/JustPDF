@@ -26,6 +26,30 @@ struct JustPdfPolylineStroke {
     std::string title;
     std::string content;
     std::string subject;
+    float borderWidth = 1.0f;
+    int borderStyle = 1;
+    long long creationTimeMs = 0;
+    long long modifiedTimeMs = 0;
+};
+
+struct JustPdfBookmarkItem {
+    std::string title;
+    int pageIndex = 0;
+    int depth = 0;
+    uint32_t titleColor = 0;
+    bool isBold = false;
+    bool isItalic = false;
+    int fitMode = 1;
+    double left = 0;
+    double top = 0;
+    double right = 0;
+    double bottom = 0;
+    double zoom = 0;
+    bool hasLeft = false;
+    bool hasTop = false;
+    bool hasRight = false;
+    bool hasBottom = false;
+    bool hasZoom = false;
 };
 
 struct JustPdfAnnotWriteResult {
@@ -38,6 +62,9 @@ struct JustPdfAnnotWriteResult {
 JustPdfAnnotWriteResult JustPdf_WritePolylines(
     const std::string& inputPath,
     const std::string& outputPath,
-    const std::vector<JustPdfPolylineStroke>& strokes);
+    const std::vector<JustPdfPolylineStroke>& strokes,
+    const std::vector<int>& stripPageIndices,
+    const std::vector<JustPdfBookmarkItem>& bookmarks,
+    bool writeBookmarks);
 
 #endif

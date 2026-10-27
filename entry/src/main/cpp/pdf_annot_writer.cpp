@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
+#include <ios>
 #include <map>
 #include <ostream>
 #include <sstream>
@@ -129,6 +131,26 @@ public:
             }
         }
         return maxObj + 1;
+    }
+
+    bool isPolylineAnnot(const Value& item)
+    {
+        Value resolved = item;
+        if (!resolveValue(resolved) || resolved.kind != Kind::Dict) {
+            return false;
+        }
+        const Value* subtype = dictGet(resolved, "Subtype");
+        return subtype != nullptr && subtype->kind == Kind::Name && subtype->text == "PolyLine";
+    }
+
+    bool getCatalogRef(Ref& out) const
+    {
+        const Value* root = dictGet(trailer, "Root");
+        if (root == nullptr || root->kind != Kind::Ref) {
+            return false;
+        }
+        out = root->ref;
+        return true;
     }
 
 private:
@@ -867,15 +889,49 @@ private:
     }
 };
 
+void appendUtf16BeUnit(std::ostream& out, unsigned int unit)
+{
+    char hex[8];
+    std::snprintf(hex, sizeof(hex), "%04X", unit);
+    out << hex;
+}
+
 void writePdfString(std::ostream& out, const std::string& text)
 {
-    out << '<';
-    out << "FEFF";
-    for (unsigned char ch : text) {
-        // 窄字符串按 Latin-1 升到 UTF-16BE；中文层内容目前是 ASCII 编码的图层元数据。
-        char hex[8];
-        std::snprintf(hex, sizeof(hex), "00%02X", ch);
-        out << hex;
+    out << "<FEFF";
+    size_t i = 0;
+    while (i < text.size()) {
+        const unsigned char lead = static_cast<unsigned char>(text[i]);
+        unsigned int cp = 0;
+        size_t used = 1;
+        if (lead < 0x80) {
+            cp = lead;
+        } else if ((lead & 0xE0) == 0xC0 && i + 1 < text.size()) {
+            cp = ((lead & 0x1F) << 6) | (static_cast<unsigned char>(text[i + 1]) & 0x3F);
+            used = 2;
+        } else if ((lead & 0xF0) == 0xE0 && i + 2 < text.size()) {
+            cp = ((lead & 0x0F) << 12) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6) |
+                (static_cast<unsigned char>(text[i + 2]) & 0x3F);
+            used = 3;
+        } else if ((lead & 0xF8) == 0xF0 && i + 3 < text.size()) {
+            cp = ((lead & 0x07) << 18) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12) |
+                ((static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6) |
+                (static_cast<unsigned char>(text[i + 3]) & 0x3F);
+            used = 4;
+        } else {
+            i += 1;
+            continue;
+        }
+        i += used;
+        if (cp >= 0x10000) {
+            cp -= 0x10000;
+            appendUtf16BeUnit(out, 0xD800 + (cp >> 10));
+            appendUtf16BeUnit(out, 0xDC00 + (cp & 0x3FF));
+        } else {
+            appendUtf16BeUnit(out, cp);
+        }
     }
     out << '>';
 }
@@ -980,6 +1036,18 @@ void dictSet(Value& dict, const std::string& name, const Value& value)
     dict.fields.push_back({ name, value });
 }
 
+void dictRemove(Value& dict, const std::string& name)
+{
+    std::vector<std::pair<std::string, Value>> kept;
+    kept.reserve(dict.fields.size());
+    for (const auto& field : dict.fields) {
+        if (field.first != name) {
+            kept.push_back(field);
+        }
+    }
+    dict.fields.swap(kept);
+}
+
 struct StrokeGeom {
     double minX = 0;
     double minY = 0;
@@ -1021,13 +1089,57 @@ void appendPdfNumber(std::ostream& out, double number)
     out << buf;
 }
 
+std::string pdfDateFromMs(long long ms)
+{
+    if (ms <= 0) {
+        return "";
+    }
+    const time_t seconds = static_cast<time_t>(ms / 1000);
+    std::tm utc;
+#if defined(_WIN32)
+    if (gmtime_s(&utc, &seconds) != 0) {
+        return "";
+    }
+#else
+    if (gmtime_r(&seconds, &utc) == nullptr) {
+        return "";
+    }
+#endif
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "D:%04d%02d%02d%02d%02d%02d",
+        utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+        utc.tm_hour, utc.tm_min, utc.tm_sec);
+    return buf;
+}
+
+const char* borderStyleName(int style)
+{
+    switch (style) {
+        case 2:
+            return "B";
+        case 3:
+            return "I";
+        case 4:
+            return "U";
+        case 5:
+            return "D";
+        default:
+            return "S";
+    }
+}
+
+double effectiveBorderWidth(const JustPdfPolylineStroke& stroke)
+{
+    return stroke.borderWidth > 0 ? stroke.borderWidth : 1.0;
+}
+
 void writeAppearanceForm(
     std::ostream& out,
     int formObj,
     const JustPdfPolylineStroke& stroke,
     const StrokeGeom& geom)
 {
-    const double pad = 2.0;
+    const double pad = (stroke.borderWidth > 0 ? stroke.borderWidth : 1.0) + 1.0;
     const double x0 = geom.minX - pad;
     const double y0 = geom.minY - pad;
     const double width = (geom.maxX + pad) - x0;
@@ -1039,7 +1151,9 @@ void writeAppearanceForm(
     appendPdfNumber(content, geom.g);
     content << ' ';
     appendPdfNumber(content, geom.b);
-    content << " RG\n1 w\n1 J\n1 j\n";
+    content << " RG\n";
+    appendPdfNumber(content, stroke.borderWidth > 0 ? stroke.borderWidth : 1.0);
+    content << " w\n1 J\n1 j\n";
     const size_t n = std::min(stroke.xs.size(), stroke.ys.size());
     for (size_t i = 0; i < n; i++) {
         appendPdfNumber(content, stroke.xs[i] - x0);
@@ -1080,6 +1194,12 @@ Value makePolylineAnnot(const JustPdfPolylineStroke& stroke, int pageObj, int fo
     if (!stroke.content.empty()) {
         dictSet(annot, "Contents", makeString(stroke.content));
     }
+    if (stroke.creationTimeMs > 0) {
+        dictSet(annot, "CreationDate", makeString(pdfDateFromMs(stroke.creationTimeMs)));
+    }
+    if (stroke.modifiedTimeMs > 0) {
+        dictSet(annot, "M", makeString(pdfDateFromMs(stroke.modifiedTimeMs)));
+    }
 
     Value color;
     color.kind = Kind::Array;
@@ -1113,13 +1233,13 @@ Value makePolylineAnnot(const JustPdfPolylineStroke& stroke, int pageObj, int fo
     border.kind = Kind::Array;
     border.items.push_back(makeInt(0));
     border.items.push_back(makeInt(0));
-    border.items.push_back(makeInt(1));
+    border.items.push_back(makeReal(effectiveBorderWidth(stroke)));
     dictSet(annot, "Border", border);
     Value borderStyle;
     borderStyle.kind = Kind::Dict;
     dictSet(borderStyle, "Type", makeName("Border"));
-    dictSet(borderStyle, "W", makeReal(1));
-    dictSet(borderStyle, "S", makeName("S"));
+    dictSet(borderStyle, "W", makeReal(effectiveBorderWidth(stroke)));
+    dictSet(borderStyle, "S", makeName(borderStyleName(stroke.borderStyle)));
     dictSet(annot, "BS", borderStyle);
     Value appearance;
     appearance.kind = Kind::Dict;
@@ -1139,15 +1259,230 @@ bool copyFile(const std::string& from, const std::string& to)
     return static_cast<bool>(out);
 }
 
+Value makeNull()
+{
+    Value value;
+    value.kind = Kind::Null;
+    return value;
+}
+
+Value destCoord(bool has, double number)
+{
+    return has ? makeReal(number) : makeNull();
+}
+
+Value makeBookmarkDest(Parser& parser, const JustPdfBookmarkItem& item)
+{
+    Value dest;
+    dest.kind = Kind::Array;
+    Ref pageRef;
+    if (!parser.getPageRef(item.pageIndex, pageRef)) {
+        return dest;
+    }
+    dest.items.push_back(makeRef(pageRef.obj));
+    if (item.fitMode == 2) {
+        dest.items.push_back(makeName("FitH"));
+        dest.items.push_back(destCoord(item.hasTop, item.top));
+    } else if (item.fitMode == 3) {
+        dest.items.push_back(makeName("FitV"));
+        dest.items.push_back(destCoord(item.hasLeft, item.left));
+    } else if (item.fitMode == 4) {
+        dest.items.push_back(makeName("FitR"));
+        dest.items.push_back(makeReal(item.left));
+        dest.items.push_back(makeReal(item.bottom));
+        dest.items.push_back(makeReal(item.right));
+        dest.items.push_back(makeReal(item.top));
+    } else {
+        dest.items.push_back(makeName("XYZ"));
+        dest.items.push_back(destCoord(item.hasLeft, item.left));
+        dest.items.push_back(destCoord(item.hasTop, item.top));
+        dest.items.push_back(destCoord(item.hasZoom, item.zoom));
+    }
+    return dest;
+}
+
+struct WrittenObj {
+    int obj = 0;
+    long long offset = 0;
+};
+
+void writeOutlineTree(
+    Parser& parser,
+    std::ostream& out,
+    int& nextObj,
+    std::vector<WrittenObj>& written,
+    const std::vector<JustPdfBookmarkItem>& bookmarks)
+{
+    Ref catalogRef;
+    if (!parser.getCatalogRef(catalogRef)) {
+        return;
+    }
+    StreamObj catalog;
+    if (!parser.parseObject(catalogRef.obj, catalog)) {
+        return;
+    }
+
+    if (bookmarks.empty()) {
+        dictRemove(catalog.dict, "Outlines");
+        const long long catalogOffset = static_cast<long long>(out.tellp());
+        out << catalogRef.obj << " 0 obj\n";
+        writeValue(out, catalog.dict);
+        out << "\nendobj\n";
+        written.push_back({ catalogRef.obj, catalogOffset });
+        return;
+    }
+
+    const int rootObj = nextObj++;
+    std::vector<int> itemObjs(bookmarks.size(), 0);
+    for (size_t i = 0; i < bookmarks.size(); i++) {
+        itemObjs[i] = nextObj++;
+    }
+
+    struct Node {
+        int parent = -1;
+        int prev = -1;
+        int next = -1;
+        int first = -1;
+        int last = -1;
+        int count = 0;
+    };
+    std::vector<Node> nodes(bookmarks.size());
+    std::vector<int> stack;
+    for (int i = 0; i < static_cast<int>(bookmarks.size()); i++) {
+        while (!stack.empty() && bookmarks[static_cast<size_t>(stack.back())].depth >= bookmarks[static_cast<size_t>(i)].depth) {
+            stack.pop_back();
+        }
+        nodes[static_cast<size_t>(i)].parent = stack.empty() ? -1 : stack.back();
+        stack.push_back(i);
+    }
+
+    std::vector<std::vector<int>> children(bookmarks.size());
+    std::vector<int> roots;
+    for (int i = 0; i < static_cast<int>(bookmarks.size()); i++) {
+        const int parent = nodes[static_cast<size_t>(i)].parent;
+        if (parent < 0) {
+            roots.push_back(i);
+        } else {
+            children[static_cast<size_t>(parent)].push_back(i);
+        }
+    }
+    for (int i = 0; i < static_cast<int>(bookmarks.size()); i++) {
+        const std::vector<int>& kids = children[static_cast<size_t>(i)];
+        if (kids.empty()) {
+            continue;
+        }
+        nodes[static_cast<size_t>(i)].first = kids.front();
+        nodes[static_cast<size_t>(i)].last = kids.back();
+        for (size_t k = 0; k < kids.size(); k++) {
+            if (k > 0) {
+                nodes[static_cast<size_t>(kids[k])].prev = kids[k - 1];
+            }
+            if (k + 1 < kids.size()) {
+                nodes[static_cast<size_t>(kids[k])].next = kids[k + 1];
+            }
+        }
+    }
+    for (size_t k = 0; k < roots.size(); k++) {
+        if (k > 0) {
+            nodes[static_cast<size_t>(roots[k])].prev = roots[k - 1];
+        }
+        if (k + 1 < roots.size()) {
+            nodes[static_cast<size_t>(roots[k])].next = roots[k + 1];
+        }
+    }
+
+    for (int i = static_cast<int>(bookmarks.size()) - 1; i >= 0; i--) {
+        int desc = static_cast<int>(children[static_cast<size_t>(i)].size());
+        for (int child : children[static_cast<size_t>(i)]) {
+            desc += nodes[static_cast<size_t>(child)].count;
+        }
+        nodes[static_cast<size_t>(i)].count = desc;
+    }
+
+    int rootCount = static_cast<int>(roots.size());
+    for (int root : roots) {
+        rootCount += nodes[static_cast<size_t>(root)].count;
+    }
+
+    Value rootDict;
+    rootDict.kind = Kind::Dict;
+    dictSet(rootDict, "Type", makeName("Outlines"));
+    if (!roots.empty()) {
+        dictSet(rootDict, "First", makeRef(itemObjs[static_cast<size_t>(roots.front())]));
+        dictSet(rootDict, "Last", makeRef(itemObjs[static_cast<size_t>(roots.back())]));
+        dictSet(rootDict, "Count", makeInt(rootCount));
+    }
+    const long long rootOffset = static_cast<long long>(out.tellp());
+    out << rootObj << " 0 obj\n";
+    writeValue(out, rootDict);
+    out << "\nendobj\n";
+    written.push_back({ rootObj, rootOffset });
+
+    for (size_t i = 0; i < bookmarks.size(); i++) {
+        Value item;
+        item.kind = Kind::Dict;
+        dictSet(item, "Title", makeString(bookmarks[i].title));
+        const int parent = nodes[i].parent;
+        dictSet(item, "Parent", makeRef(parent < 0 ? rootObj : itemObjs[static_cast<size_t>(parent)]));
+        if (nodes[i].prev >= 0) {
+            dictSet(item, "Prev", makeRef(itemObjs[static_cast<size_t>(nodes[i].prev)]));
+        }
+        if (nodes[i].next >= 0) {
+            dictSet(item, "Next", makeRef(itemObjs[static_cast<size_t>(nodes[i].next)]));
+        }
+        if (nodes[i].first >= 0) {
+            dictSet(item, "First", makeRef(itemObjs[static_cast<size_t>(nodes[i].first)]));
+            dictSet(item, "Last", makeRef(itemObjs[static_cast<size_t>(nodes[i].last)]));
+            dictSet(item, "Count", makeInt(nodes[i].count));
+        }
+        Value dest = makeBookmarkDest(parser, bookmarks[i]);
+        if (!dest.items.empty()) {
+            dictSet(item, "Dest", dest);
+            Value action;
+            action.kind = Kind::Dict;
+            dictSet(action, "S", makeName("GoTo"));
+            dictSet(action, "D", dest);
+            dictSet(item, "A", action);
+        }
+        if (bookmarks[i].titleColor != 0) {
+            Value color;
+            color.kind = Kind::Array;
+            color.items.push_back(makeReal((bookmarks[i].titleColor & 0xFF) / 255.0));
+            color.items.push_back(makeReal(((bookmarks[i].titleColor >> 8) & 0xFF) / 255.0));
+            color.items.push_back(makeReal(((bookmarks[i].titleColor >> 16) & 0xFF) / 255.0));
+            dictSet(item, "C", color);
+        }
+        const int flags = (bookmarks[i].isItalic ? 1 : 0) | (bookmarks[i].isBold ? 2 : 0);
+        if (flags != 0) {
+            dictSet(item, "F", makeInt(flags));
+        }
+        const long long itemOffset = static_cast<long long>(out.tellp());
+        out << itemObjs[i] << " 0 obj\n";
+        writeValue(out, item);
+        out << "\nendobj\n";
+        written.push_back({ itemObjs[i], itemOffset });
+    }
+
+    dictSet(catalog.dict, "Outlines", makeRef(rootObj));
+    const long long catalogOffset = static_cast<long long>(out.tellp());
+    out << catalogRef.obj << " 0 obj\n";
+    writeValue(out, catalog.dict);
+    out << "\nendobj\n";
+    written.push_back({ catalogRef.obj, catalogOffset });
+}
+
 } // namespace
 
 JustPdfAnnotWriteResult JustPdf_WritePolylines(
     const std::string& inputPath,
     const std::string& outputPath,
-    const std::vector<JustPdfPolylineStroke>& strokes)
+    const std::vector<JustPdfPolylineStroke>& strokes,
+    const std::vector<int>& stripPageIndices,
+    const std::vector<JustPdfBookmarkItem>& bookmarks,
+    bool writeBookmarks)
 {
     JustPdfAnnotWriteResult result;
-    if (inputPath.empty() || outputPath.empty() || strokes.empty()) {
+    if (inputPath.empty() || outputPath.empty()) {
         result.status = JUSTPDF_ANNOT_ERR_ARGS;
         result.message = "empty args";
         return result;
@@ -1167,10 +1502,10 @@ JustPdfAnnotWriteResult JustPdf_WritePolylines(
         }
         byPage[strokes[i].pageIndex].push_back(i);
     }
-    if (byPage.empty()) {
-        result.status = JUSTPDF_ANNOT_ERR_ARGS;
-        result.message = "no usable strokes";
-        return result;
+    for (int pageIndex : stripPageIndices) {
+        if (pageIndex >= 0) {
+            byPage[pageIndex];
+        }
     }
 
     if (!copyFile(inputPath, outputPath)) {
@@ -1179,18 +1514,26 @@ JustPdfAnnotWriteResult JustPdf_WritePolylines(
         return result;
     }
 
-    std::ofstream out(outputPath.c_str(), std::ios::binary | std::ios::app);
+    if (byPage.empty() && !writeBookmarks) {
+        result.status = JUSTPDF_ANNOT_OK;
+        result.message = "copied";
+        return result;
+    }
+
+    std::fstream out(outputPath.c_str(), std::ios::binary | std::ios::in | std::ios::out);
     if (!out) {
         result.status = JUSTPDF_ANNOT_ERR_WRITE;
         result.message = "append failed";
         return result;
     }
+    out.seekp(0, std::ios::end);
+    if (!out || static_cast<long long>(out.tellp()) < 0) {
+        result.status = JUSTPDF_ANNOT_ERR_WRITE;
+        result.message = "seek end failed";
+        return result;
+    }
     out << '\n';
 
-    struct WrittenObj {
-        int obj = 0;
-        long long offset = 0;
-    };
     std::vector<WrittenObj> written;
     int nextObj = parser.nextObjectNumber();
 
@@ -1231,7 +1574,12 @@ JustPdfAnnotWriteResult JustPdf_WritePolylines(
                 guard++;
             }
             if (resolved.kind == Kind::Array) {
-                annots.items = resolved.items;
+                for (const Value& item : resolved.items) {
+                    if (parser.isPolylineAnnot(item)) {
+                        continue;
+                    }
+                    annots.items.push_back(item);
+                }
             }
         }
 
@@ -1258,6 +1606,10 @@ JustPdfAnnotWriteResult JustPdf_WritePolylines(
         out << "\nendobj\n";
         written.push_back({ pageRef.obj, pageOffset });
         result.writtenPageCount++;
+    }
+
+    if (writeBookmarks && !bookmarks.empty()) {
+        writeOutlineTree(parser, out, nextObj, written, bookmarks);
     }
 
     const long long xrefOffset = static_cast<long long>(out.tellp());
