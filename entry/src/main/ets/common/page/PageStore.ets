@@ -563,6 +563,20 @@ export class PageStore implements IDataSource {
     });
   }
 
+  public async replacePagePath(pagePath: string, password: string): Promise<boolean> {
+    for (const pageInfo of this.pages) {
+      pageInfo.setPagePath(pagePath);
+    }
+    try {
+      await PdfRenderSession.getInstance().replace(pagePath, password);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'replace failed';
+      hilog.error(0, 'PageStore', 'PdfRenderSession.replace 失败: ' + message);
+      return false;
+    }
+  }
+
   /**
    * 在光栅 Worker 中分批探测含折线批注的页码（复用已打开文档，避免反复 loadDocument）。
    */

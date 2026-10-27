@@ -419,6 +419,9 @@ struct PDFView {
           }
           this.isDocumentSaving = true;
           this.documentSaveMessage = message;
+        },
+        onDocumentReloadedAfterSave: () => {
+          this.bookmarkController.refresh();
         }
       })
     ),

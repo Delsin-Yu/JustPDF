@@ -1,6 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { pdfService } from '@kit.PDFKit';
 import { taskpool } from '@kit.ArkTS';
+import { reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
 import { PageStore } from '../../common/page/PageStore';
 import { AnnotationLayer, AnnotationLayerListItem } from '../../common/page/AnnotationLayer';
 import { ReadonlyStroke, Stroke } from '../../common/page/Stroke';
@@ -39,7 +40,9 @@ export interface StrokeStore {
   deleteLayer(pageIndex: number, layerId: string): Stroke[];
   ensureActiveLayerVisible(pageIndex: number): boolean;
   invalidateCaches(pageIndex: number): void;
+  resetAllPdfPageHandles(): void;
   setPagePath(pagePath: string): void;
+  replacePagePath(pagePath: string, password: string): Promise<boolean>;
   ensureCached(pageIndex: number, renderScale: number, priority: taskpool.Priority): void;
   probePolylineAnnotationPageIndices(
     documentPath: string,
@@ -71,6 +74,7 @@ export interface DocumentIO {
   getFileName(): string;
   getUIContext(): UIContext;
   getPreferences(): preferences.Preferences | undefined;
+  reloadFromSandbox(): pdfService.ParseResult;
 }
 
 /**
@@ -99,6 +103,7 @@ export interface AnnotationHostCallbacks {
   onRedrawRequested(): void;
   onRefreshDisplayedPages(): Promise<void>;
   onSavePhase(message: string): void;
+  onDocumentReloadedAfterSave(): void;
 }
 
 /** PageStore → StrokeStore 适配器 */
@@ -197,8 +202,16 @@ export class PageStoreStrokeStore implements StrokeStore {
     this.pageStore.invalidateCaches(pageIndex);
   }
 
+  resetAllPdfPageHandles(): void {
+    this.pageStore.resetAllPdfPageHandles();
+  }
+
   setPagePath(pagePath: string): void {
     this.pageStore.setPagePath(pagePath);
+  }
+
+  replacePagePath(pagePath: string, password: string): Promise<boolean> {
+    return this.pageStore.replacePagePath(pagePath, password);
   }
 
   ensureCached(pageIndex: number, renderScale: number, priority: taskpool.Priority): void {
@@ -298,6 +311,10 @@ export class PDFAnnotationDocumentIO implements DocumentIO {
   getPreferences(): preferences.Preferences | undefined {
     return this.callbacks.getPreferences();
   }
+
+  reloadFromSandbox(): pdfService.ParseResult {
+    return reloadPdfDocument(this.getDocument(), this.getSandBoxPath(), this.getOpenPassword());
+  }
 }
 
 export interface PDFAnnotationPageNavigatorCallbacks {
@@ -362,6 +379,7 @@ export interface PDFAnnotationHostCallbackFns {
   onRedrawRequested: () => void;
   onRefreshDisplayedPages: () => Promise<void>;
   onSavePhase: (message: string) => void;
+  onDocumentReloadedAfterSave: () => void;
 }
 
 export class PDFAnnotationHostBridge implements AnnotationHostCallbacks {
@@ -381,6 +399,10 @@ export class PDFAnnotationHostBridge implements AnnotationHostCallbacks {
 
   onSavePhase(message: string): void {
     this.callbacks.onSavePhase(message);
+  }
+
+  onDocumentReloadedAfterSave(): void {
+    this.callbacks.onDocumentReloadedAfterSave();
   }
 }
 

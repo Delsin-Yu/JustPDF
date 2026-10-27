@@ -736,12 +736,35 @@ export class PDFAnnotationController {
 
     this.dependencies.strokes.clearAllStrokes();
     this.dependencies.strokes.clearImportedPdfPolylineTracking();
-    this.dependencies.strokes.setPagePath(this.dependencies.documentIO.getSandBoxPath());
+    const reloadResult = this.dependencies.documentIO.reloadFromSandbox();
+    if (reloadResult !== pdfService.ParseResult.PARSE_SUCCESS) {
+      hilog.error(0, 'PDFView', '保存后重载 PDF 失败 result=' + reloadResult.toString());
+      await showAlertDialog(
+        '保存完成，但无法继续编辑批注',
+        '请关闭文档后重新打开，再擦除或修改刚保存的批注。',
+        this.dependencies.documentIO.getUIContext()
+      );
+      return true;
+    }
+    this.dependencies.strokes.resetAllPdfPageHandles();
+    const replaced = await this.dependencies.strokes.replacePagePath(
+      this.dependencies.documentIO.getSandBoxPath(),
+      this.dependencies.documentIO.getOpenPassword()
+    );
+    if (!replaced) {
+      await showAlertDialog(
+        '保存完成，但无法继续编辑批注',
+        '请关闭文档后重新打开，再擦除或修改刚保存的批注。',
+        this.dependencies.documentIO.getUIContext()
+      );
+      return true;
+    }
     this.clearHistory();
     this.layerCatalogDirty = false;
     this.hasUnsavedStrokes = false;
     this.importedPolylinePrepared = false;
     this.refreshLayerItems();
+    this.dependencies.host.onDocumentReloadedAfterSave();
 
     await this.reportSavePhase('正在刷新页面…');
     await this.refreshAfterSave(Array.from(affectedPage.keys()));
