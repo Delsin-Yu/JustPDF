@@ -1146,22 +1146,32 @@ void writeAppearanceForm(
     const double height = (geom.maxY + pad) - y0;
     std::ostringstream content;
     content << "q\n";
-    appendPdfNumber(content, geom.r);
-    content << ' ';
-    appendPdfNumber(content, geom.g);
-    content << ' ';
-    appendPdfNumber(content, geom.b);
-    content << " RG\n";
-    appendPdfNumber(content, stroke.borderWidth > 0 ? stroke.borderWidth : 1.0);
-    content << " w\n1 J\n1 j\n";
-    const size_t n = std::min(stroke.xs.size(), stroke.ys.size());
-    for (size_t i = 0; i < n; i++) {
-        appendPdfNumber(content, stroke.xs[i] - x0);
+    // 阅读器光栅用 /AP，不看 Annot /CA。隐藏图层必须把透明度画进外观流。
+    if (stroke.opacity > 0.0001f) {
+        if (stroke.opacity < 0.999f) {
+            appendPdfNumber(content, stroke.opacity);
+            content << " CA ";
+            appendPdfNumber(content, stroke.opacity);
+            content << " ca\n";
+        }
+        appendPdfNumber(content, geom.r);
         content << ' ';
-        appendPdfNumber(content, stroke.ys[i] - y0);
-        content << (i == 0 ? " m\n" : " l\n");
+        appendPdfNumber(content, geom.g);
+        content << ' ';
+        appendPdfNumber(content, geom.b);
+        content << " RG\n";
+        appendPdfNumber(content, stroke.borderWidth > 0 ? stroke.borderWidth : 1.0);
+        content << " w\n1 J\n1 j\n";
+        const size_t n = std::min(stroke.xs.size(), stroke.ys.size());
+        for (size_t i = 0; i < n; i++) {
+            appendPdfNumber(content, stroke.xs[i] - x0);
+            content << ' ';
+            appendPdfNumber(content, stroke.ys[i] - y0);
+            content << (i == 0 ? " m\n" : " l\n");
+        }
+        content << "S\n";
     }
-    content << "S\nQ\n";
+    content << "Q\n";
     const std::string stream = content.str();
 
     out << formObj << " 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 ";
