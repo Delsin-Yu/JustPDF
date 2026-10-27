@@ -28,6 +28,12 @@ import {
   AnnotatePreparePhaseOptions,
   PDFAnnotationControllerDependencies
 } from './PDFAnnotationDependencies';
+import {
+  NativeAnnotErrEncrypt,
+  NativeAnnotOk,
+  NativePolylineWriteItem,
+  writeNativePolylines
+} from './PDFAnnotationNative';
 
 export { AnnotatePreparePhaseOptions } from './PDFAnnotationDependencies';
 
@@ -832,22 +838,11 @@ export class PDFAnnotationController {
         continue;
       }
 
-      const pdfPageSize = this.dependencies.strokes.getPageRawSize(pageIndex);
-      const canvasSizePx = mul(pdfPageSize, this.canvasOverSampling);
-      const canvasSizeVp = pxToVp(canvasSizePx, this.dependencies.documentIO.getUIContext());
-      const annotationsToAdd: pdfService.PolylineAnnotationInfo[] = [];
-
-      for (const stroke of this.dependencies.strokes.iteratePageStrokes(pageIndex)) {
-        annotationsToAdd.push(this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp, pageIndex));
-      }
-
       hilog.info(0, 'PDFView',
         '保存批注 page=' + pageIndex.toString() +
-          ' strokes=' + annotationsToAdd.length.toString());
-      const annotations = annotationsToAdd.length > 0
-        ? this.dependencies.strokes.addPdfAnnotations(pageIndex, annotationsToAdd)
-        : [];
-      affectedPage.set(pageIndex, annotations);
+          ' strokes=' + this.dependencies.strokes.getPageStrokesCount(pageIndex).toString());
+      // 不再调用 PDFKit addAnnotation：saveDocument 会把同一批注写进每一页。
+      affectedPage.set(pageIndex, []);
     }
 
     return affectedPage;
@@ -906,18 +901,80 @@ export class PDFAnnotationController {
     annotationInfo.opacity = visible ? 1 : 0;
   }
 
+  private collectNativePolylines(): NativePolylineWriteItem[] {
+    const items: NativePolylineWriteItem[] = [];
+    const totalPageCount = this.dependencies.strokes.totalPageCount();
+    for (let pageIndex = 0; pageIndex < totalPageCount; pageIndex++) {
+      if (this.dependencies.strokes.getPageStrokesCount(pageIndex) == 0) {
+        continue;
+      }
+      const pdfPageSize = this.dependencies.strokes.getPageRawSize(pageIndex);
+      const canvasSizePx = mul(pdfPageSize, this.canvasOverSampling);
+      const canvasSizeVp = pxToVp(canvasSizePx, this.dependencies.documentIO.getUIContext());
+      for (const stroke of this.dependencies.strokes.iteratePageStrokes(pageIndex)) {
+        const info = this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp, pageIndex);
+        const item = new NativePolylineWriteItem();
+        item.pageIndex = pageIndex;
+        item.uniqueId = info.uniqueId;
+        item.lineColor = stroke.pdfLineColor;
+        item.opacity = info.opacity !== undefined ? info.opacity : 1;
+        item.title = info.title !== undefined ? info.title : '';
+        item.content = info.content !== undefined ? info.content : '';
+        item.subject = info.subject !== undefined ? info.subject : '';
+        if (info.vertexes !== undefined) {
+          for (let i = 0; i < info.vertexes.length; i++) {
+            item.xs.push(info.vertexes[i].x);
+            item.ys.push(info.vertexes[i].y);
+          }
+        }
+        items.push(item);
+      }
+    }
+    return items;
+  }
+
   private async saveDocumentToTemp(affectedPage: Map<number, pdfService.PdfAnnotation[]>): Promise<boolean> {
     await this.cleanupTempSaveFile();
     await yieldToUi();
 
-    const success = this.dependencies.documentIO.getDocument().saveDocument(this.dependencies.documentIO.getSaveTempPath());
+    const nativeItems: NativePolylineWriteItem[] = this.collectNativePolylines();
+    const dumpPath: string = this.dependencies.documentIO.getSaveTempPath();
+    const nativePath: string = dumpPath + '.native.pdf';
+    const dumped = this.dependencies.documentIO.getDocument().saveDocument(dumpPath);
     await yieldToUi();
-    if (!success) {
+    if (!dumped) {
       hilog.error(0, 'PDFView', '保存 PDF 文件到临时路径时出错');
-      this.removeAddedAnnotations(affectedPage);
       return false;
     }
 
+    if (nativeItems.length === 0) {
+      return true;
+    }
+    const nativeStatus: number = writeNativePolylines(dumpPath, nativePath, nativeItems);
+    if (nativeStatus !== NativeAnnotOk) {
+      try {
+        await fs.unlink(nativePath);
+      } catch (_error) {
+        // 忽略尚未生成的本地写入产物
+      }
+      if (nativeStatus === NativeAnnotErrEncrypt) {
+        await showAlertDialog('保存失败', '加密 PDF 暂不支持按页写入批注。', this.dependencies.documentIO.getUIContext());
+      } else {
+        await showAlertDialog('保存失败', '无法将批注写入 PDF 文件。', this.dependencies.documentIO.getUIContext());
+      }
+      return false;
+    }
+    try {
+      await fs.unlink(dumpPath);
+    } catch (_error) {
+      // 用本地写入结果覆盖 dump
+    }
+    try {
+      await fs.rename(nativePath, dumpPath);
+    } catch (error) {
+      hilog.error(0, 'PDFView', `替换本地写入结果时出错: ${error}`);
+      return false;
+    }
     return true;
   }
 

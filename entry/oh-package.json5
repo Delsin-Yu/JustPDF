@@ -6,7 +6,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "libpiano.so": "file:./src/main/cpp/types/libpiano"
+    "libpiano.so": "file:./src/main/cpp/types/libpiano",
+    "libjustpdfpdf.so": "file:./src/main/cpp/types/libjustpdfpdf"
   }
 }
 

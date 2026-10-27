@@ -418,78 +418,7 @@ export class PageStore implements IDataSource {
     }
     pageInfo.invalidatePdfLinks();
     this.markPageChanged(index);
-    this.removeLeakedPolylineCopies(index, annotations);
     return annotations;
-  }
-
-  /**
-   * 若 PDFKit 把刚写入的折线复到了其他页，按 uniqueId + 所属页清掉复本。
-   * 先用另一页探测，未泄漏则不做全量扫描。
-   */
-  private removeLeakedPolylineCopies(sourcePageIndex: number, added: pdfService.PdfAnnotation[]): void {
-    if (added.length === 0 || this.pages.length < 2) {
-      return;
-    }
-    const addedIds: Set<string> = new Set<string>();
-    for (let i = 0; i < added.length; i++) {
-      const uniqueId: string = added[i].uniqueId;
-      if (uniqueId.length > 0) {
-        addedIds.add(uniqueId);
-      }
-    }
-    if (addedIds.size === 0) {
-      return;
-    }
-    const probeIndex: number = sourcePageIndex === 0 ? 1 : 0;
-    if (!this.polylineIdsLeakedToPage(probeIndex, addedIds)) {
-      return;
-    }
-    hilog.warn(0, 'PageStore',
-      '折线批注写入后在其他页出现复本，sourcePage=' + sourcePageIndex.toString());
-    for (let pageIndex = 0; pageIndex < this.pages.length; pageIndex++) {
-      if (pageIndex === sourcePageIndex) {
-        continue;
-      }
-      const leaked: pdfService.PdfAnnotation[] = this.collectLeakedPolylinesOnPage(pageIndex, addedIds);
-      if (leaked.length > 0) {
-        this.removePdfAnnotations(pageIndex, leaked);
-      }
-    }
-  }
-
-  private polylineIdsLeakedToPage(pageIndex: number, addedIds: Set<string>): boolean {
-    const annotations: pdfService.PdfAnnotation[] = this.getPageInfo(pageIndex).pdfPage.getAnnotations();
-    for (let i = 0; i < annotations.length; i++) {
-      if (!addedIds.has(annotations[i].uniqueId)) {
-        continue;
-      }
-      if (this.annotationOwnedByPage(annotations[i], pageIndex)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private collectLeakedPolylinesOnPage(pageIndex: number, addedIds: Set<string>): pdfService.PdfAnnotation[] {
-    const leaked: pdfService.PdfAnnotation[] = [];
-    const annotations: pdfService.PdfAnnotation[] = this.getPageInfo(pageIndex).pdfPage.getAnnotations();
-    for (let i = 0; i < annotations.length; i++) {
-      if (!addedIds.has(annotations[i].uniqueId)) {
-        continue;
-      }
-      if (this.annotationOwnedByPage(annotations[i], pageIndex)) {
-        leaked.push(annotations[i]);
-      }
-    }
-    return leaked;
-  }
-
-  private annotationOwnedByPage(annotation: pdfService.PdfAnnotation, pageIndex: number): boolean {
-    try {
-      return annotation.getPdfPage().getIndex() === pageIndex;
-    } catch (_error) {
-      return true;
-    }
   }
 
   public removePdfAnnotations(index: number, annotations: pdfService.PdfAnnotation[]): void {

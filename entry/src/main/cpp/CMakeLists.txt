@@ -13,3 +13,10 @@ target_link_libraries(piano PUBLIC
     libace_napi.z.so
     libohaudio.so
     libhilog_ndk.z.so)
+
+add_library(justpdfpdf SHARED napi_pdfio.cpp pdf_annot_writer.cpp)
+
+target_link_libraries(justpdfpdf PUBLIC
+    libace_napi.z.so
+    libhilog_ndk.z.so
+    libz.so)
