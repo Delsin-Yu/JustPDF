@@ -60,6 +60,14 @@ function toRasterPriority(priority: taskpool.Priority): RasterPriority {
   return RasterPriority.MEDIUM;
 }
 
+function pdfAnnotationBelongsToPage(annotation: pdfService.PdfAnnotation, pageIndex: number): boolean {
+  try {
+    return annotation.getPdfPage().getIndex() === pageIndex;
+  } catch (_error) {
+    return true;
+  }
+}
+
 @Observed
 export class PageInfo implements ReadonlyPageInfo {
   public readonly pageGuid: string = util.generateRandomUUID(true);
@@ -105,6 +113,12 @@ export class PageInfo implements ReadonlyPageInfo {
     this.pdfDocument = pdfDocument;
     this.pagePath = pagePath;
     this.openPassword = openPassword;
+    // @Observed 类的字段初始化器可能共用同一数组/Map 引用；必须在构造里每页各建一份。
+    this.strokes = [];
+    this.deletedLayers = [];
+    this.caches = new Map<number, PageCache>();
+    this.pendingTasks = new Map<number, PendingCacheTask>();
+    this.importedPdfPolylineSources = [];
     this.resetLayerCatalog();
   }
 
@@ -746,6 +760,9 @@ export class PageInfo implements ReadonlyPageInfo {
 
     for (const annotation of annotations) {
       if (annotation.type !== pdfService.AnnotationType.POLYLINE) {
+        continue;
+      }
+      if (!pdfAnnotationBelongsToPage(annotation, this.localPageIndex)) {
         continue;
       }
 

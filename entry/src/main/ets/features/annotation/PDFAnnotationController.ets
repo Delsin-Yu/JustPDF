@@ -487,6 +487,7 @@ export class PDFAnnotationController {
 
   loadPageStrokes(ctx: CanvasRenderingContext2D, pageIndex: number): void {
     if (this.dependencies.strokes.getPageStrokesCount(pageIndex) === 0) {
+      ctx.reset();
       return;
     }
     this.applyStrokeStyle(ctx);
@@ -840,6 +841,9 @@ export class PDFAnnotationController {
         annotationsToAdd.push(this.makePolylineAnnotationInfo(stroke, pdfPageSize, canvasSizeVp, pageIndex));
       }
 
+      hilog.info(0, 'PDFView',
+        '保存批注 page=' + pageIndex.toString() +
+          ' strokes=' + annotationsToAdd.length.toString());
       const annotations = annotationsToAdd.length > 0
         ? this.dependencies.strokes.addPdfAnnotations(pageIndex, annotationsToAdd)
         : [];

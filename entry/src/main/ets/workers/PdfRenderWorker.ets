@@ -207,7 +207,16 @@ function probePolylines(
       const page = document.getPage(pageIndex);
       const annotations = page.getAnnotations();
       for (let i = 0; i < annotations.length; i++) {
-        if (annotations[i].type === pdfService.AnnotationType.POLYLINE) {
+        if (annotations[i].type !== pdfService.AnnotationType.POLYLINE) {
+          continue;
+        }
+        let ownerIndex: number = pageIndex;
+        try {
+          ownerIndex = annotations[i].getPdfPage().getIndex();
+        } catch (_error) {
+          ownerIndex = pageIndex;
+        }
+        if (ownerIndex === pageIndex) {
           affectedPageIndices.push(pageIndex);
           break;
         }
