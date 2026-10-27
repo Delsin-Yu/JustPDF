@@ -11,12 +11,19 @@ export struct SettingsDialogBuilder {
   private controller: CustomDialogController;
   @State showSlider: boolean = true;
   @State slideSensitivityUi: number = 5;
+  @State animationSpeedUi: number = 1;
   @State linkVisualModeUi: PDFLinkVisualMode = 'fadeOnPageEnter';
   horizontalSlideSensitivity: number = 5;
+  pageTurnAnimationSpeed: number = 1;
   linkVisualMode: PDFLinkVisualMode = 'fadeOnPageEnter';
   onSliderToggled: (show: boolean) => void = () => {};
   onHorizontalSlideSensitivityChange: (level: number) => void = () => {};
+  onPageTurnAnimationSpeedChange: (speed: number) => void = () => {};
   onLinkVisualModeChange: (mode: PDFLinkVisualMode) => void = () => {};
+
+  private formatAnimationSpeed(speed: number): string {
+    return (Math.round(speed * 10) / 10).toFixed(1) + 'x';
+  }
 
   private setLinkVisualMode(mode: PDFLinkVisualMode): void {
     this.linkVisualModeUi = mode;
@@ -140,10 +147,56 @@ export struct SettingsDialogBuilder {
             .alignItems(VerticalAlign.Center)
           }
           .width('100%')
+
+          Column({ space: 6 }) {
+            Row() {
+              Text('翻页动画速度')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(LabelColor)
+                .layoutWeight(1)
+              Text(this.formatAnimationSpeed(this.animationSpeedUi))
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(LabelColor)
+            }
+            .width('100%')
+
+            Text('只影响水平滑动翻页的收尾和半页收尾，叠在系统动画速度之上。左侧更慢，右侧更快，最右为瞬间到位。')
+              .fontSize(12)
+              .fontColor(HintColor)
+              .width('100%')
+
+            Row() {
+              Text('慢')
+                .fontSize(12)
+                .fontColor(HintColor)
+              Slider({
+                value: this.animationSpeedUi,
+                min: 0,
+                max: 2,
+                step: 0.1,
+                style: SliderStyle.OutSet
+              })
+                .layoutWeight(1)
+                .showTips(true)
+                .onChange((value: number, _mode: SliderChangeMode) => {
+                  this.animationSpeedUi = value;
+                  this.onPageTurnAnimationSpeedChange(value);
+                })
+              Text('瞬间')
+                .fontSize(12)
+                .fontColor(HintColor)
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+          }
+          .width('100%')
         }
         .width('100%')
         .onAppear(() => {
           this.slideSensitivityUi = this.horizontalSlideSensitivity;
+          this.animationSpeedUi = this.pageTurnAnimationSpeed;
           this.linkVisualModeUi = this.linkVisualMode;
         })
       }

@@ -547,12 +547,16 @@ struct PDFView {
     builder: SettingsDialogBuilder({
       showSlider: this.viewerViewModel.showSlider,
       horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
+      pageTurnAnimationSpeed: this.viewerViewModel.pageTurnAnimationSpeed,
       linkVisualMode: this.viewerViewModel.linkVisualMode,
       onSliderToggled: (show: boolean) => {
         this.viewerViewModel.setShowSlider(show);
       },
       onHorizontalSlideSensitivityChange: (level: number) => {
         this.viewerViewModel.setHorizontalSlideSensitivity(level);
+      },
+      onPageTurnAnimationSpeedChange: (speed: number) => {
+        this.viewerViewModel.setPageTurnAnimationSpeed(speed);
       },
       onLinkVisualModeChange: (mode: PDFLinkVisualMode) => {
         this.viewerViewModel.setLinkVisualMode(mode);
@@ -874,12 +878,16 @@ struct PDFView {
       builder: SettingsDialogBuilder({
         showSlider: this.viewerViewModel.showSlider,
         horizontalSlideSensitivity: this.viewerViewModel.horizontalSlideSensitivity,
+        pageTurnAnimationSpeed: this.viewerViewModel.pageTurnAnimationSpeed,
         linkVisualMode: this.viewerViewModel.linkVisualMode,
         onSliderToggled: (show: boolean) => {
           this.viewerViewModel.setShowSlider(show);
         },
         onHorizontalSlideSensitivityChange: (level: number) => {
           this.viewerViewModel.setHorizontalSlideSensitivity(level);
+        },
+        onPageTurnAnimationSpeedChange: (speed: number) => {
+          this.viewerViewModel.setPageTurnAnimationSpeed(speed);
         },
         onLinkVisualModeChange: (mode: PDFLinkVisualMode) => {
           this.viewerViewModel.setLinkVisualMode(mode);
@@ -2884,7 +2892,7 @@ struct PDFView {
     }
     await new Promise<void>((resolve: () => void) => {
       this.getUIContext().animateTo({
-        duration: 220,
+        duration: this.viewerViewModel.scalePageTurnDurationMs(220),
         curve: Curve.EaseOut,
         onFinish: () => {
           resolve();

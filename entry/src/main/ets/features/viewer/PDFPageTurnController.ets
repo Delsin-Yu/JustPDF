@@ -416,7 +416,7 @@ export class PDFPageTurnController {
         return;
       }
       this.dependencies.getUIContext().animateTo({
-        duration: SLIDE_NEIGHBOR_FADE_IN_MS,
+        duration: this.dependencies.viewerViewModel.scalePageTurnDurationMs(SLIDE_NEIGHBOR_FADE_IN_MS),
         curve: Curve.EaseOut
       }, () => {
         if (fadeGen !== this.slideNeighborAppearFadeGen) {
@@ -892,7 +892,7 @@ export class PDFPageTurnController {
       this.slideNeighborAppearFadeGen++;
       const cancelAnimGen = this.slideNeighborAppearFadeGen;
       this.dependencies.getUIContext().animateTo({
-        duration: 200,
+        duration: this.dependencies.viewerViewModel.scalePageTurnDurationMs(200),
         curve: Curve.EaseInOut,
         onFinish: () => {
           if (cancelAnimGen !== this.slideNeighborAppearFadeGen || this.isNewerSlideSessionActive()) {
@@ -906,7 +906,7 @@ export class PDFPageTurnController {
       });
       if (hasPreviewStrip) {
         this.dependencies.getUIContext().animateTo({
-          duration: SLIDE_NEIGHBOR_FADE_OUT_MS,
+          duration: this.dependencies.viewerViewModel.scalePageTurnDurationMs(SLIDE_NEIGHBOR_FADE_OUT_MS),
           curve: Curve.EaseIn
         }, () => {
           this.pageTurnNextStripOpacity = 0;
@@ -947,7 +947,9 @@ export class PDFPageTurnController {
       this.coverPreviewThenGotoPage(targetPage);
       return;
     }
-    const dur = Math.round(Math.min(520, Math.max(240, 220 + (dist / Math.max(1, viewportWvp)) * 320)));
+    const dur = this.dependencies.viewerViewModel.scalePageTurnDurationMs(
+      Math.round(Math.min(520, Math.max(240, 220 + (dist / Math.max(1, viewportWvp)) * 320)))
+    );
     const commitAnimGuard = this.slideCommitAnimGen;
     this.dependencies.getUIContext().animateTo({
       duration: dur,

@@ -53,6 +53,15 @@ export type PalettePersistedTool = 'draw' | 'erase';
 const PaletteToolModePreferenceKey: string = 'paletteToolMode';
 const HorizontalSlideSensitivityPreferenceKey: string = 'horizontalSlideSensitivity';
 const LinkVisualModePreferenceKey: string = 'linkVisualMode';
+const PageTurnAnimationSpeedPreferenceKey: string = 'pageTurnAnimationSpeed';
+const PageTurnAnimationSpeedDefault: number = 1;
+const PageTurnAnimationSpeedMin: number = 0;
+const PageTurnAnimationSpeedMax: number = 2;
+
+function clampPageTurnAnimationSpeed(raw: number): number {
+  const snapped: number = Math.round(raw * 10) / 10;
+  return Math.max(PageTurnAnimationSpeedMin, Math.min(PageTurnAnimationSpeedMax, snapped));
+}
 /** 贴合视口时的溢出容差（vp）。略大于 0 即可吸收 px/vp/scale 浮点误差，避免误开 25% 松弛平移 */
 const PAN_FIT_OVERFLOW_EPSILON_VP: number = 3;
 
@@ -76,6 +85,8 @@ export class PDFViewerViewModel {
   @Trace public showSlider: boolean = true;
   /** 水平滑动翻页灵敏度档位 0～10（设置滑块），5 为默认手感 */
   @Trace public horizontalSlideSensitivity: number = 5;
+  /** 程序内翻页动画倍率，叠在系统动画速度之上。0 更慢，1 为当前默认，2 为瞬间到位 */
+  @Trace public pageTurnAnimationSpeed: number = PageTurnAnimationSpeedDefault;
   @Trace public linkVisualMode: PDFLinkVisualMode = 'fadeOnPageEnter';
   @Trace public controlsTransparency: number = 0.5;
   @Trace public displayedPageIndices: number[] = [];
@@ -108,6 +119,13 @@ export class PDFViewerViewModel {
         this.horizontalSlideSensitivity = Math.max(0, Math.min(10, Math.round(rawSens)));
       } else {
         this.horizontalSlideSensitivity = 5;
+      }
+      const rawSpeed: preferences.ValueType =
+        preferencesValue.getSync(PageTurnAnimationSpeedPreferenceKey, PageTurnAnimationSpeedDefault);
+      if (typeof rawSpeed === 'number') {
+        this.pageTurnAnimationSpeed = clampPageTurnAnimationSpeed(rawSpeed);
+      } else {
+        this.pageTurnAnimationSpeed = PageTurnAnimationSpeedDefault;
       }
       const linkVisualRaw: string = preferencesValue.getSync(LinkVisualModePreferenceKey, 'fadeOnPageEnter') as string;
       if (linkVisualRaw === 'hidden' || linkVisualRaw === 'fadeOnPageEnter' || linkVisualRaw === 'always') {
@@ -434,6 +452,23 @@ export class PDFViewerViewModel {
     }
     this.horizontalSlideSensitivity = clamped;
     this.persistPreference(HorizontalSlideSensitivityPreferenceKey, clamped, '保存水平滑动灵敏度出错');
+  }
+
+  setPageTurnAnimationSpeed(speed: number): void {
+    const clamped: number = clampPageTurnAnimationSpeed(speed);
+    if (clamped === this.pageTurnAnimationSpeed) {
+      return;
+    }
+    this.pageTurnAnimationSpeed = clamped;
+    this.persistPreference(PageTurnAnimationSpeedPreferenceKey, clamped, '保存翻页动画速度出错');
+  }
+
+  /** 滑条越大越快：0=半速，1=默认 duration，2=瞬间到位。系统动画缩放仍作用在结果之上。 */
+  scalePageTurnDurationMs(baseMs: number): number {
+    if (baseMs <= 0 || this.pageTurnAnimationSpeed >= PageTurnAnimationSpeedMax) {
+      return 0;
+    }
+    return Math.max(0, Math.round(baseMs * (PageTurnAnimationSpeedMax - this.pageTurnAnimationSpeed)));
   }
 
   setLinkVisualMode(mode: PDFLinkVisualMode): void {
