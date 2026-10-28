@@ -12,6 +12,7 @@ import {
   TunerReferenceHzMax,
   TunerReferenceHzMin,
 } from './PDFTunerController';
+import { PDFTunerTuneGraph } from './PDFTunerTuneGraph';
 import { SharedPanelBackgroundColor, SharedPanelControlHighlightColor } from '../viewer/PDFPanelVisualConstants';
 const TunerWindowMargin: number = 16;
 const TunerWindowWidth: number = 392;
@@ -47,6 +48,7 @@ const TunerPianoWhiteKeyLabelBottom: number = 5;
 const TunerPianoBlackKeyLabelBottom: number = 4;
 const TunerPianoBlackKeyOffsets: number[] = [0.11, 0.245, 0.53, 0.665, 0.8];
 const TunerSpectrumOverlayTravelVp: number = 52;
+const TunerNoteReadoutHeight: number = 120;
 
 interface FloatingTunerOffset {
   x: number;
@@ -668,17 +670,34 @@ export struct PDFTunerPanelContent {
                   }
                   .width('100%')
                 } else {
-                  Text(this.getFormattedDetectedNote())
-                    .fontSize(40)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor(Color.White)
-                  Text(this.getDetuneCentsText())
-                    .fontSize(15)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(this.getDetuneColor())
-                  Text(this.getDetuneSummary())
-                    .fontSize(12)
-                    .fontColor("rgba(255, 255, 255, 0.54)")
+                  Stack() {
+                    PDFTunerTuneGraph({
+                      controller: this.controller,
+                    })
+                      .width('100%')
+                      .height('100%')
+                      .hitTestBehavior(HitTestMode.None)
+                    Column({ space: 4 }) {
+                      Text(this.getFormattedDetectedNote())
+                        .fontSize(40)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor(Color.White)
+                      Text(this.getDetuneCentsText())
+                        .fontSize(15)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(this.getDetuneColor())
+                      Text(this.getDetuneSummary())
+                        .fontSize(12)
+                        .fontColor("rgba(255, 255, 255, 0.54)")
+                    }
+                    .width('100%')
+                    .height('100%')
+                    .justifyContent(FlexAlign.Center)
+                    .alignItems(HorizontalAlign.Center)
+                    .hitTestBehavior(HitTestMode.Transparent)
+                  }
+                  .width('100%')
+                  .height(TunerNoteReadoutHeight)
                 }
               }
               .width("100%")

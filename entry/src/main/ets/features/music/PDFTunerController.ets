@@ -71,6 +71,8 @@ const TunerPitchNoteNames: string[] = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G'
 const TunerSpectrumBarPublishEpsilon: number = 0.02;
 const TunerAnalysisWindowDefault: number = 4096;
 const TunerAnalysisWindowLow: number = 8192;
+/** 约 8 秒历史（分析 hop ≈ 21ms）。 */
+export const TunerTuneGraphCapacity: number = 384;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -203,6 +205,10 @@ export class PDFTunerController {
   private displayCentsSmoothed: number = 0;
   private pendingNoteName: string = '--';
   private pendingNoteHoldCount: number = 0;
+  private readonly tuneGraphCents: number[] = [];
+  private tuneGraphCount: number = 0;
+  private tuneGraphWrite: number = 0;
+  private readonly tuneGraphRedrawListeners: Array<() => void> = [];
 
   @Trace public referenceHz: number = 440;
   @Trace public transposeIndex: number = 0;
@@ -223,11 +229,13 @@ export class PDFTunerController {
   @Trace public microphonePermissionDenied: boolean = false;
   @Trace public detectedNote: string = '--';
   @Trace public detuneCents: number = 0;
+  @Trace public tuneGraphEpoch: number = 0;
 
   initialize(preferenceStore: preferences.Preferences): void {
     this.preferenceStore = preferenceStore;
     this.loadPreferences(preferenceStore);
     this.initializeSmoothedMicSpectrum();
+    this.initializeTuneGraph();
     this.updateFilterCurveLevels();
     nativeTunerSetResultCallback(this.handleNativeAnalysisResult);
     this.pushNativeAnalysisConfig();
@@ -379,6 +387,38 @@ export class PDFTunerController {
       this.stopMicrophoneMonitoring();
     }
     this.syncReferenceTonePlaybackState();
+  }
+
+  addTuneGraphRedrawListener(listener: () => void): void {
+    if (this.tuneGraphRedrawListeners.indexOf(listener) >= 0) {
+      return;
+    }
+    this.tuneGraphRedrawListeners.push(listener);
+  }
+
+  removeTuneGraphRedrawListener(listener: () => void): void {
+    const index: number = this.tuneGraphRedrawListeners.indexOf(listener);
+    if (index < 0) {
+      return;
+    }
+    this.tuneGraphRedrawListeners.splice(index, 1);
+  }
+
+  copyTuneGraphCents(out: number[]): number {
+    this.initializeTuneGraph();
+    while (out.length < TunerTuneGraphCapacity) {
+      out.push(Number.NaN);
+    }
+    const count: number = this.tuneGraphCount;
+    const startPad: number = TunerTuneGraphCapacity - count;
+    for (let index = 0; index < startPad; index++) {
+      out[index] = Number.NaN;
+    }
+    const oldest: number = (this.tuneGraphWrite - count + TunerTuneGraphCapacity) % TunerTuneGraphCapacity;
+    for (let index = 0; index < count; index++) {
+      out[startPad + index] = this.tuneGraphCents[(oldest + index) % TunerTuneGraphCapacity];
+    }
+    return TunerTuneGraphCapacity;
   }
 
   setReferenceNoteMidi(value: number): void {
@@ -781,6 +821,50 @@ export class PDFTunerController {
     }
   }
 
+  private initializeTuneGraph(): void {
+    if (this.tuneGraphCents.length === TunerTuneGraphCapacity) {
+      return;
+    }
+    this.tuneGraphCents.length = 0;
+    for (let index = 0; index < TunerTuneGraphCapacity; index++) {
+      this.tuneGraphCents.push(Number.NaN);
+    }
+    this.tuneGraphCount = 0;
+    this.tuneGraphWrite = 0;
+  }
+
+  private pushTuneGraphSample(cents: number): void {
+    this.initializeTuneGraph();
+    this.tuneGraphCents[this.tuneGraphWrite] = cents;
+    this.tuneGraphWrite = (this.tuneGraphWrite + 1) % TunerTuneGraphCapacity;
+    if (this.tuneGraphCount < TunerTuneGraphCapacity) {
+      this.tuneGraphCount++;
+    }
+    this.notifyTuneGraphRedraw();
+  }
+
+  private clearTuneGraph(): void {
+    this.initializeTuneGraph();
+    for (let index = 0; index < TunerTuneGraphCapacity; index++) {
+      this.tuneGraphCents[index] = Number.NaN;
+    }
+    this.tuneGraphCount = 0;
+    this.tuneGraphWrite = 0;
+    this.notifyTuneGraphRedraw();
+  }
+
+  private notifyTuneGraphRedraw(): void {
+    this.tuneGraphEpoch++;
+    const listeners: Array<() => void> = this.tuneGraphRedrawListeners.slice();
+    for (let index = 0; index < listeners.length; index++) {
+      try {
+        listeners[index]();
+      } catch (error) {
+        hilog.error(0, 'PDFTunerController', `tuneGraph redraw listener failed: ${String(error)}`);
+      }
+    }
+  }
+
   private getCurrentFilterPresetDefinition(): TunerFilterPresetDefinition {
     switch (this.filterPresetId) {
       case 'contrabass':
@@ -945,6 +1029,7 @@ export class PDFTunerController {
         this.displayCentsSmoothed = 0;
         this.pendingNoteHoldCount = 0;
       }
+      this.pushTuneGraphSample(Number.NaN);
       return;
     }
 
@@ -977,6 +1062,7 @@ export class PDFTunerController {
     if (this.pendingNoteHoldCount >= TunerDisplayNoteHoldFrames && this.detectedNote !== candidateNote) {
       this.detectedNote = candidateNote;
     }
+    this.pushTuneGraphSample(nextCents);
   }
 
   private resetSpectrumLevels(): void {
@@ -994,5 +1080,6 @@ export class PDFTunerController {
     this.displayCentsSmoothed = 0;
     this.pendingNoteName = '--';
     this.pendingNoteHoldCount = 0;
+    this.clearTuneGraph();
   }
 }
