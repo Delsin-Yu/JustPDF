@@ -3,6 +3,14 @@ import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { nativePianoSetTunerTone, prepareNativePiano } from './PDFPianoNative';
+import {
+  nativeTunerClearResultCallback,
+  nativeTunerSetConfig,
+  nativeTunerSetResultCallback,
+  nativeTunerStartMic,
+  nativeTunerStopMic,
+  TunerNativeAnalysisResult,
+} from './PDFTunerNative';
 
 const TunerReferenceHzPreferenceKey: string = 'tunerReferenceHz';
 /** 参考音「A4」频率可调范围（Hz），与界面 ScrollSpinBox 一致。 */
@@ -33,11 +41,10 @@ const TunerReferenceToneHighAttenExponent: number = 0.17;
 /** 高音端增益下限，避免极高频时过细听不清。 */
 const TunerReferenceToneHighGainMin: number = 0.78;
 const TunerMicSpectrumBandCount: number = 20;
-const TunerMicSampleRateHz: number = 48000;
 const TunerMicPermission: Permissions = 'ohos.permission.MICROPHONE';
 const TunerMicSpectrumFreqMinHz: number = 90;
 const TunerMicSpectrumFreqMaxHz: number = 6000;
-/** 每次 readData 回调后，未刷新到新峰值时柱值线性回落的步长（0～∞量纲，与 instant 一致）。 */
+/** 每次分析结果后，未刷新到新峰值时柱值线性回落的步长（0～∞量纲，与 instant 一致）。 */
 const TunerMicSpectrumPeakFallPerUpdate: number = 0.032;
 /** 频谱电平压缩参数：使用 log(1 + gamma*x) 压缩动态范围，避免低频过快顶满。 */
 const TunerMicSpectrumCompressionGamma: number = 12;
@@ -49,14 +56,7 @@ const TunerSpectrumAutoGainTargetEnvelope: number = 0.045;
 const TunerSpectrumAutoGainMinInputEnvelope: number = 0.003;
 const TunerSpectrumAutoGainAttack: number = 0.26;
 const TunerSpectrumAutoGainRelease: number = 0.08;
-const TunerPitchMinHz: number = 55;
-const TunerPitchMaxHz: number = 2000;
-/** 基频检测 RMS 静音门限（归一化振幅）。 */
 const TunerPitchRmsGateThreshold: number = 0.008;
-/** MPM 局部峰值阈值：过低会吸收噪声周期，过高会漏检弱音。 */
-const TunerMpmPeakThreshold: number = 0.42;
-/** MPM 最低清晰度阈值：用于过滤过于模糊的候选。 */
-const TunerMpmMinClarity: number = 0.28;
 /** 平滑后基频对原始值的追踪速度。 */
 const TunerPitchSmoothingFactor: number = 0.32;
 /** 连续多少帧无有效检测后清空显示。 */
@@ -67,16 +67,10 @@ const TunerDisplayCentsLerpFactor: number = 0.18;
 const TunerDisplayNoteHoldFrames: number = 3;
 /** 紧凑音名，键与 Panel 侧 TunerNoteSemitoneMap 一致。 */
 const TunerPitchNoteNames: string[] = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'G#', 'A', 'Bb', 'B'];
-/** 帧间允许的音高变化标准差（半音），越大越宽容。 */
-const TunerPitchTransitionWidth: number = 5;
-/** 转换代价占候选评分的权重；剩余部分为纯候选概率。 */
-const TunerPitchTransitionWeight: number = 0.38;
-/** readData 在 UI 线程，限制分析频率以免占满 16ms 帧预算。 */
-const TunerMicProcessMinIntervalMs: number = 40;
-/** 基频检测前按此倍数抽取，降低 NSDF 复杂度。 */
-const TunerPitchDecimate: number = 8;
 /** 频谱柱变化小于该值时不写 @Trace，减少无效刷新。 */
 const TunerSpectrumBarPublishEpsilon: number = 0.02;
+const TunerAnalysisWindowDefault: number = 4096;
+const TunerAnalysisWindowLow: number = 8192;
 
 export type TunerNoteDisplayMode = 'standard' | 'sharp' | 'flat';
 export type TunerNoteNamingMode = 'pitch' | 'solfege';
@@ -188,15 +182,9 @@ export class PDFTunerController {
   private preferenceStore?: preferences.Preferences;
   private audioRenderer: audio.AudioRenderer | undefined = undefined;
   private audioRendererLoading: boolean = false;
-  private audioCapturer: audio.AudioCapturer | undefined = undefined;
   private micCapturerLoading: boolean = false;
-  private micCaptureSession: number = 0;
   private readonly smoothedMicSpectrum: number[] = [];
   private micPeakEnvelope: number = 0.0001;
-  private micHighPassPrevInput: number = 0;
-  private micHighPassPrevOutput: number = 0;
-  private micLowPassPrevOutput: number = 0;
-  private spectrumAutoGainTarget: number = 1;
   private lastMicrophoneAbilityContext: common.UIAbilityContext | undefined = undefined;
   private pendingRendererStop: Promise<void> | undefined = undefined;
   private audioRequestToken: number = 0;
@@ -209,15 +197,12 @@ export class PDFTunerController {
   private oscillatorAmplitude: number = 0;
   private oscillatorTargetAmplitude: number = 0;
   private useNativeTone: boolean = false;
+  private nativeMicActive: boolean = false;
   private smoothedPitchHz: number = 0;
   private pitchSilenceFrameCount: number = 0;
   private displayCentsSmoothed: number = 0;
   private pendingNoteName: string = '--';
   private pendingNoteHoldCount: number = 0;
-  private lastMicProcessAt: number = 0;
-  private cachedHannLength: number = 0;
-  private cachedHannWindow: Float32Array = new Float32Array(1);
-  private pitchAnalysisArmed: boolean = true;
 
   @Trace public referenceHz: number = 440;
   @Trace public transposeIndex: number = 0;
@@ -244,12 +229,15 @@ export class PDFTunerController {
     this.loadPreferences(preferenceStore);
     this.initializeSmoothedMicSpectrum();
     this.updateFilterCurveLevels();
+    nativeTunerSetResultCallback(this.handleNativeAnalysisResult);
+    this.pushNativeAnalysisConfig();
     this.initializeAudio();
     this.syncReferenceTonePlaybackState();
   }
 
   cleanup(): void {
     this.stopMicrophoneMonitoring();
+    nativeTunerClearResultCallback();
     this.stopReferenceTonePlayback();
     this.releaseAudio();
     this.preferenceStore = undefined;
@@ -263,7 +251,7 @@ export class PDFTunerController {
     if (!this.panelVisible || this.referenceToneEnabled) {
       return;
     }
-    if (this.audioCapturer || this.micCapturerLoading) {
+    if (this.nativeMicActive || this.micCapturerLoading) {
       return;
     }
 
@@ -280,10 +268,17 @@ export class PDFTunerController {
         return;
       }
       this.microphonePermissionDenied = false;
-      if (!this.panelVisible) {
+      if (!this.panelVisible || this.referenceToneEnabled) {
         return;
       }
-      await this.createAndStartMicCapturer();
+      this.pushNativeAnalysisConfig();
+      const started: boolean = nativeTunerStartMic();
+      if (!started) {
+        hilog.error(0, 'PDFTunerController', '启动原生调音器采集失败');
+        this.resetSpectrumLevels();
+        return;
+      }
+      this.nativeMicActive = true;
     } catch (error) {
       hilog.error(0, 'PDFTunerController', `启动麦克风采集失败: ${JSON.stringify(error)}`);
       this.resetSpectrumLevels();
@@ -293,14 +288,9 @@ export class PDFTunerController {
   }
 
   stopMicrophoneMonitoring(): void {
-    this.micCaptureSession += 1;
-    const capturer: audio.AudioCapturer | undefined = this.audioCapturer;
-    this.audioCapturer = undefined;
+    this.nativeMicActive = false;
+    nativeTunerStopMic();
     this.resetSpectrumLevels();
-    if (!capturer) {
-      return;
-    }
-    void this.releaseDetachedAudioCapturer(capturer);
   }
 
   setReferenceHz(value: number): void {
@@ -345,7 +335,7 @@ export class PDFTunerController {
     }
     this.filterPresetId = value;
     this.updateFilterCurveLevels();
-    this.resetPreprocessorState();
+    this.pushNativeAnalysisConfig();
     this.savePreferences();
   }
 
@@ -354,15 +344,11 @@ export class PDFTunerController {
       return;
     }
     this.autoGainEnabled = value;
-    if (value) {
-      this.spectrumAutoGainTarget = this.spectrumGain;
-    }
     this.savePreferences();
   }
 
   setSpectrumGain(value: number): void {
     const nextValue: number = this.clampSpectrumGain(value);
-    this.spectrumAutoGainTarget = nextValue;
     if (this.spectrumGain === nextValue) {
       return;
     }
@@ -427,15 +413,12 @@ export class PDFTunerController {
     return Math.max(TunerReferenceToneHighGainMin, atten);
   }
 
-  private readonly handleCapturerReadData = (buffer: ArrayBuffer): void => {
-    if (!this.audioCapturer) {
+  private readonly handleNativeAnalysisResult = (result: TunerNativeAnalysisResult): void => {
+    if (!this.nativeMicActive) {
       return;
     }
-    const now: number = Date.now();
-    if (this.lastMicProcessAt > 0 && now - this.lastMicProcessAt < TunerMicProcessMinIntervalMs) {
-      return;
-    }
-    this.processMicPcmBuffer(buffer);
+    this.applyNativeSpectrum(result);
+    this.updateDetectedPitch(result.pitchHz);
   };
 
   private readonly handleAudioWriteData: audio.AudioRendererWriteDataCallback = (buffer: ArrayBuffer):
@@ -532,7 +515,6 @@ export class PDFTunerController {
       this.spectrumGain = this.clampSpectrumGain(
         preferenceStore.getSync(TunerSpectrumGainPreferenceKey, 1) as number,
       );
-      this.spectrumAutoGainTarget = this.spectrumGain;
       this.referenceToneEnabled = !!preferenceStore.getSync(TunerReferenceToneEnabledPreferenceKey, false);
       this.referenceNoteMidi = this.clampReferenceNoteMidi(
         preferenceStore.getSync(TunerReferenceNoteMidiPreferenceKey, 69) as number,
@@ -817,6 +799,25 @@ export class PDFTunerController {
     }
   }
 
+  private getAnalysisWindowSize(): number {
+    if (this.filterPresetId === 'contrabass' || this.filterPresetId === 'bass') {
+      return TunerAnalysisWindowLow;
+    }
+    return TunerAnalysisWindowDefault;
+  }
+
+  private pushNativeAnalysisConfig(): void {
+    const preset = this.getCurrentFilterPresetDefinition();
+    nativeTunerSetConfig(
+      preset.pitchMinHz,
+      preset.pitchMaxHz,
+      preset.highPassHz,
+      preset.lowPassHz,
+      preset.rmsGateThreshold,
+      this.getAnalysisWindowSize(),
+    );
+  }
+
   private getFirstOrderHighPassResponse(freqHz: number, cutoffHz: number): number {
     if (cutoffHz <= 0 || freqHz <= 0) {
       return 1;
@@ -843,58 +844,11 @@ export class PDFTunerController {
     this.filterCurveLevels = nextLevels;
   }
 
-  private resetPreprocessorState(): void {
-    this.micHighPassPrevInput = 0;
-    this.micHighPassPrevOutput = 0;
-    this.micLowPassPrevOutput = 0;
-  }
-
-  private getHighPassAlpha(cutoffHz: number): number {
-    if (cutoffHz <= 0) {
-      return 0;
-    }
-    const dt: number = 1 / TunerMicSampleRateHz;
-    const rc: number = 1 / (2 * Math.PI * cutoffHz);
-    return rc / (rc + dt);
-  }
-
-  private getLowPassAlpha(cutoffHz: number): number {
-    if (cutoffHz <= 0) {
-      return 1;
-    }
-    const dt: number = 1 / TunerMicSampleRateHz;
-    const rc: number = 1 / (2 * Math.PI * cutoffHz);
-    return dt / (rc + dt);
-  }
-
-  private preprocessMicSamples(sourceSamples: Int16Array): Float32Array {
-    const preset = this.getCurrentFilterPresetDefinition();
-    const highPassAlpha: number = this.getHighPassAlpha(preset.highPassHz);
-    const lowPassAlpha: number = this.getLowPassAlpha(preset.lowPassHz);
-    const filteredSamples: Float32Array = new Float32Array(sourceSamples.length);
-    for (let i = 0; i < sourceSamples.length; i++) {
-      let sample: number = sourceSamples[i] / 32768;
-      if (preset.highPassHz > 0) {
-        const nextHighPass: number = highPassAlpha * (this.micHighPassPrevOutput + sample - this.micHighPassPrevInput);
-        this.micHighPassPrevInput = sample;
-        this.micHighPassPrevOutput = nextHighPass;
-        sample = nextHighPass;
-      }
-      if (preset.lowPassHz > 0) {
-        this.micLowPassPrevOutput += lowPassAlpha * (sample - this.micLowPassPrevOutput);
-        sample = this.micLowPassPrevOutput;
-      }
-      filteredSamples[i] = sample;
-    }
-    return filteredSamples;
-  }
-
   private updateSpectrumGain(envelopeFloor: number, rawInputEnvelope: number): void {
     if (!this.autoGainEnabled) {
       return;
     }
     if (rawInputEnvelope < TunerSpectrumAutoGainMinInputEnvelope) {
-      this.spectrumAutoGainTarget = this.spectrumGain;
       return;
     }
     const desiredGain: number = this.clampSpectrumGain(
@@ -904,7 +858,6 @@ export class PDFTunerController {
       ? TunerSpectrumAutoGainAttack
       : TunerSpectrumAutoGainRelease;
     const nextGain: number = this.spectrumGain + (desiredGain - this.spectrumGain) * smoothing;
-    this.spectrumAutoGainTarget = desiredGain;
     const clampedGain: number = this.clampSpectrumGain(nextGain);
     if (Math.abs(clampedGain - this.spectrumGain) >= 0.001) {
       this.spectrumGain = clampedGain;
@@ -935,55 +888,12 @@ export class PDFTunerController {
     }
   }
 
-  private async createAndStartMicCapturer(): Promise<void> {
-    const sessionId: number = this.micCaptureSession;
-    try {
-      const capturerOptions: audio.AudioCapturerOptions = {
-        streamInfo: {
-          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_48000,
-          channels: audio.AudioChannel.CHANNEL_1,
-          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
-          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
-        },
-        capturerInfo: {
-          source: audio.SourceType.SOURCE_TYPE_MIC,
-          capturerFlags: 0,
-        },
-      };
-      const capturer: audio.AudioCapturer = await audio.createAudioCapturer(capturerOptions);
-      if (sessionId !== this.micCaptureSession) {
-        await this.releaseDetachedAudioCapturer(capturer);
-        return;
-      }
-
-      this.audioCapturer = capturer;
-      capturer.on('readData', this.handleCapturerReadData);
-      await capturer.start();
-      if (sessionId !== this.micCaptureSession) {
-        this.audioCapturer = undefined;
-        await this.releaseDetachedAudioCapturer(capturer);
-        return;
-      }
-    } catch (error) {
-      if (sessionId === this.micCaptureSession) {
-        this.audioCapturer = undefined;
-        hilog.error(0, 'PDFTunerController', `创建或启动麦克风AudioCapturer失败: ${JSON.stringify(error)}`);
-      }
-      this.resetSpectrumLevels();
-    }
-  }
-
-  private processMicPcmBuffer(buffer: ArrayBuffer): void {
-    this.lastMicProcessAt = Date.now();
-    const samples: Float32Array = this.preprocessMicSamples(new Int16Array(buffer));
-    if (samples.length === 0) {
-      return;
-    }
-
-    const rawMagnitudes: number[] = this.computeSpectrumMagnitudes(samples);
-    let bandPeak: number = 0;
-    for (let band = 0; band < rawMagnitudes.length; band++) {
-      bandPeak = Math.max(bandPeak, rawMagnitudes[band]);
+  private applyNativeSpectrum(result: TunerNativeAnalysisResult): void {
+    const magnitudes: number[] = result.spectrumMagnitudes;
+    let bandPeak: number = result.rawEnvelope;
+    const bandCount: number = Math.min(TunerMicSpectrumBandCount, magnitudes.length);
+    for (let band = 0; band < bandCount; band++) {
+      bandPeak = Math.max(bandPeak, magnitudes[band]);
     }
 
     this.micPeakEnvelope = this.micPeakEnvelope * 0.992 + bandPeak * 0.008;
@@ -993,7 +903,8 @@ export class PDFTunerController {
     const nextLevels: number[] = [];
     for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
       const curveLevel: number = this.filterCurveLevels[band] ?? 0;
-      const weightedInput: number = rawMagnitudes[band] * curveLevel * effectiveSpectrumGain / envelopeFloor;
+      const rawMagnitude: number = magnitudes[band] ?? 0;
+      const weightedInput: number = rawMagnitude * curveLevel * effectiveSpectrumGain / envelopeFloor;
       const instant: number = this.compressSpectrumLevel(weightedInput);
       const held: number = this.smoothedMicSpectrum[band];
       const nextHeld: number = instant > held
@@ -1005,63 +916,6 @@ export class PDFTunerController {
     if (this.shouldPublishSpectrumLevels(nextLevels)) {
       this.spectrumBarLevels = nextLevels.slice();
     }
-    if (this.pitchAnalysisArmed) {
-      const pitchSampleRateHz: number = TunerMicSampleRateHz / TunerPitchDecimate;
-      this.updateDetectedPitch(
-        this.detectPitchHz(this.decimateSamples(samples, TunerPitchDecimate), pitchSampleRateHz),
-      );
-    }
-    this.pitchAnalysisArmed = !this.pitchAnalysisArmed;
-  }
-
-  private ensureHannWindow(sampleCount: number): Float32Array {
-    if (this.cachedHannLength === sampleCount && this.cachedHannWindow.length === sampleCount) {
-      return this.cachedHannWindow;
-    }
-    const window: Float32Array = new Float32Array(sampleCount);
-    const denom: number = Math.max(1, sampleCount - 1);
-    for (let i = 0; i < sampleCount; i++) {
-      window[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / denom));
-    }
-    this.cachedHannWindow = window;
-    this.cachedHannLength = sampleCount;
-    return window;
-  }
-
-  private computeSpectrumMagnitudes(samples: Float32Array): number[] {
-    const n: number = samples.length;
-    const hann: Float32Array = this.ensureHannWindow(n);
-    const magnitudes: number[] = [];
-    for (let band = 0; band < TunerMicSpectrumBandCount; band++) {
-      const freqHz: number = this.getMicSpectrumTargetFreqHz(band);
-      const omega: number = (2 * Math.PI * freqHz) / TunerMicSampleRateHz;
-      const coeff: number = 2 * Math.cos(omega);
-      let s0: number = 0;
-      let s1: number = 0;
-      let s2: number = 0;
-      for (let i = 0; i < n; i++) {
-        s0 = samples[i] * hann[i] + coeff * s1 - s2;
-        s2 = s1;
-        s1 = s0;
-      }
-      const power: number = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-      magnitudes.push(Math.sqrt(Math.max(0, power)) / n);
-    }
-    return magnitudes;
-  }
-
-  private decimateSamples(samples: Float32Array, factor: number): Float32Array {
-    const outLen: number = Math.floor(samples.length / factor);
-    const decimated: Float32Array = new Float32Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      let sum: number = 0;
-      const base: number = i * factor;
-      for (let k = 0; k < factor; k++) {
-        sum += samples[base + k];
-      }
-      decimated[i] = sum / factor;
-    }
-    return decimated;
   }
 
   private shouldPublishSpectrumLevels(nextLevels: number[]): boolean {
@@ -1079,90 +933,6 @@ export class PDFTunerController {
   private getMicSpectrumTargetFreqHz(bandIndex: number): number {
     const t: number = bandIndex / (TunerMicSpectrumBandCount - 1);
     return TunerMicSpectrumFreqMinHz * Math.pow(TunerMicSpectrumFreqMaxHz / TunerMicSpectrumFreqMinHz, t);
-  }
-
-  /**
-   * MPM（McLeod Pitch Method）基频检测：
-   * 1. 计算 NSDF（Normalized Square Difference Function）
-   * 2. 在当前预设音域内寻找局部峰值
-   * 3. 对最佳峰值做抛物线插值，并结合前一帧音高抑制跳变
-   */
-  private detectPitchHz(samples: Float32Array, sampleRateHz: number): number {
-    const n: number = samples.length;
-    const preset = this.getCurrentFilterPresetDefinition();
-    const minLag: number = Math.floor(sampleRateHz / preset.pitchMaxHz);
-    const maxLag: number = Math.min(
-      Math.floor(sampleRateHz / preset.pitchMinHz),
-      Math.floor(n / 2),
-    );
-    if (maxLag <= minLag) {
-      return 0;
-    }
-
-    let sumSq: number = 0;
-    for (let i: number = 0; i < n; i++) {
-      const s: number = samples[i];
-      sumSq += s * s;
-    }
-    if (Math.sqrt(sumSq / n) < preset.rmsGateThreshold) {
-      return 0;
-    }
-
-    const nsdf: number[] = new Array<number>(maxLag + 1);
-    nsdf[0] = 1;
-    for (let tau: number = 1; tau <= maxLag; tau++) {
-      let acf: number = 0;
-      let divisor: number = 0;
-      for (let i: number = 0; i < n - tau; i++) {
-        const x: number = samples[i];
-        const y: number = samples[i + tau];
-        acf += x * y;
-        divisor += x * x + y * y;
-      }
-      nsdf[tau] = divisor > 0 ? (2 * acf) / divisor : 0;
-    }
-
-    let bestScore: number = -1;
-    let bestRefinedTau: number = 0;
-
-    for (let tau: number = minLag + 1; tau < maxLag; tau++) {
-      const peakValue: number = nsdf[tau];
-      if (
-        peakValue < TunerMpmPeakThreshold ||
-        peakValue < nsdf[tau - 1] ||
-        peakValue <= nsdf[tau + 1]
-      ) {
-        continue;
-      }
-
-      const s0: number = nsdf[tau - 1];
-      const s1: number = peakValue;
-      const s2: number = nsdf[tau + 1];
-      const denom: number = s0 - 2 * s1 + s2;
-      let refinedTau: number = tau;
-      if (Math.abs(denom) > 1e-6) {
-        refinedTau = tau + (s0 - s2) / (2 * denom);
-      }
-
-      let score: number = peakValue;
-      if (this.smoothedPitchHz > 0) {
-        const freqHz: number = sampleRateHz / refinedTau;
-        const semitones: number = Math.abs(12 * Math.log2(freqHz / this.smoothedPitchHz));
-        const twiceSigmaSq: number = 2 * TunerPitchTransitionWidth * TunerPitchTransitionWidth;
-        const transition: number = Math.exp(-semitones * semitones / twiceSigmaSq);
-        score *= TunerPitchTransitionWeight * transition + (1 - TunerPitchTransitionWeight);
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestRefinedTau = refinedTau;
-      }
-    }
-
-    if (bestRefinedTau <= 0 || bestScore < TunerMpmMinClarity) {
-      return 0;
-    }
-    return sampleRateHz / bestRefinedTau;
   }
 
   private updateDetectedPitch(pitchHz: number): void {
@@ -1213,9 +983,7 @@ export class PDFTunerController {
     for (let i = 0; i < TunerMicSpectrumBandCount; i++) {
       this.smoothedMicSpectrum[i] = 0;
     }
-    this.resetPreprocessorState();
     this.micPeakEnvelope = 0.0001;
-    this.spectrumAutoGainTarget = this.spectrumGain;
     this.spectrumBarLevels = [
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
@@ -1226,31 +994,5 @@ export class PDFTunerController {
     this.displayCentsSmoothed = 0;
     this.pendingNoteName = '--';
     this.pendingNoteHoldCount = 0;
-  }
-
-  private async releaseDetachedAudioCapturer(
-    capturer: audio.AudioCapturer,
-  ): Promise<void> {
-    try {
-      if (capturer.state === audio.AudioState.STATE_RUNNING || capturer.state === audio.AudioState.STATE_PAUSED) {
-        await capturer.stop();
-      }
-    } catch (error) {
-      hilog.error(0, 'PDFTunerController', `停止麦克风采集失败: ${JSON.stringify(error)}`);
-    }
-
-    try {
-      capturer.off('readData', this.handleCapturerReadData);
-    } catch (error) {
-      hilog.error(0, 'PDFTunerController', `解绑麦克风readData监听失败: ${JSON.stringify(error)}`);
-    }
-
-    try {
-      if (capturer.state !== audio.AudioState.STATE_RELEASED) {
-        await capturer.release();
-      }
-    } catch (error) {
-      hilog.error(0, 'PDFTunerController', `释放麦克风AudioCapturer失败: ${JSON.stringify(error)}`);
-    }
   }
 }

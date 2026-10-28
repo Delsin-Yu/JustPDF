@@ -1,0 +1,6 @@
+{
+  "name": "libtuner.so",
+  "types": "./Index.d.ts",
+  "version": "1.0.0",
+  "description": "JustPDF native OHAudio tuner capture and FFT-YIN analysis"
+}

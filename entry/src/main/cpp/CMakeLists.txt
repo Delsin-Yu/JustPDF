@@ -14,6 +14,13 @@ target_link_libraries(piano PUBLIC
     libohaudio.so
     libhilog_ndk.z.so)
 
+add_library(tuner SHARED napi_tuner.cpp tuner_engine.cpp tuner_yin.cpp)
+
+target_link_libraries(tuner PUBLIC
+    libace_napi.z.so
+    libohaudio.so
+    libhilog_ndk.z.so)
+
 add_library(justpdfpdf SHARED napi_pdfio.cpp pdf_annot_writer.cpp)
 
 target_link_libraries(justpdfpdf PUBLIC

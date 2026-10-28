@@ -7,6 +7,7 @@
   "license": "",
   "dependencies": {
     "libpiano.so": "file:./src/main/cpp/types/libpiano",
+    "libtuner.so": "file:./src/main/cpp/types/libtuner",
     "libjustpdfpdf.so": "file:./src/main/cpp/types/libjustpdfpdf"
   }
 }
