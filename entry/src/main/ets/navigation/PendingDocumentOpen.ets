@@ -6,6 +6,7 @@ import {
   APP_SESSION_PDF_VIEWER_ACTIVE_KEY,
   APP_SESSION_PDF_VIEWER_HAS_UNSAVED_KEY,
   APP_SESSION_PENDING_DOCUMENT_OPEN_PARAMS_KEY,
+  isPdfViewerActive as isPdfViewerActiveSession,
   isPdfViewerActiveWithUnsaved as isPdfViewerActiveWithUnsavedSession,
   setExitViewerOnBack as setExitViewerOnBackSession,
   setPdfViewerActive as setPdfViewerActiveSession,
@@ -64,7 +65,7 @@ export function takePendingDocumentOpenParams(): Record<string, string> | undefi
 }
 
 /**
- * 在阅读页有未保存更改时暂存并通知 PDFView 弹窗；否则直接 replaceUrl。
+ * 阅读页已打开时一律交给 PDFView 做未保存守卫；否则直接 replaceUrl。
  * @returns 是否已处理（含已 defer 到 PDFView）
  */
 export function requestReplacePdfDocument(
@@ -75,7 +76,7 @@ export function requestReplacePdfDocument(
   if (!isValidPendingDocumentOpenParams(args)) {
     return false;
   }
-  if (isPdfViewerActiveWithUnsaved()) {
+  if (isPdfViewerActiveSession()) {
     stashPendingDocumentOpenParams(args);
     abilityContext.eventHub.emit(EVENT_DOCUMENT_OPEN_REQUESTED);
     return true;

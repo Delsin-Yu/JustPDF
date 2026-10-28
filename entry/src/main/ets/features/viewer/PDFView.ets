@@ -11,7 +11,6 @@ import {
   EVENT_APP_TERMINATE_REQUESTED,
   EVENT_DOCUMENT_OPEN_REQUESTED,
   isValidPendingDocumentOpenParams,
-  requestReplacePdfDocument,
   setExitViewerOnBack,
   setPdfViewerActive,
   shouldExitViewerOnBack,
@@ -843,8 +842,12 @@ struct PDFView {
     }
     try {
       const params = await prepareFromUri(abilityContext, uri);
-      await rememberOpenedDocument(this.preferences, params);
-      requestReplacePdfDocument(abilityContext, uiContext.getRouter(), documentOpenParamsToRecord(params));
+      const args = documentOpenParamsToRecord(params);
+      // 用阅读页实时未保存状态弹窗；不要走 requestReplacePdfDocument（它只看可能过期的 AppStorage）。
+      void this.runWithUnsavedGuard(async () => {
+        await rememberOpenedDocument(this.preferences, params);
+        await this.replaceUrlToOpenDocument(args);
+      });
     } catch (error) {
       hilog.error(0, 'PDFView', `拖入 PDF 打开失败: ${error}`);
       await showAlertDialog('文件打开失败', `无法打开拖入的 PDF。\n错误信息: ${error}`, uiContext);
