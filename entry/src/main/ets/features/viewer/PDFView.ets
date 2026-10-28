@@ -3489,7 +3489,15 @@ struct PDFView {
     }
 
     // 手写笔触点 id 常非 0；仅用 id===0 会拒绝整段笔迹（见 ArkUI TouchObject / sourceTool）。
+    // 第二指落下时先清掉进行中的笔迹，避免等全页层认出双指之前继续画。
     if (!this.isSinglePointerForDrawTouch(event)) {
+      const resetResult = this.annotationController.resetTransientState();
+      if (resetResult.clearedDraw) {
+        drawCtx.reset();
+      }
+      if (resetResult.clearedErase) {
+        this.redrawStrokes();
+      }
       return;
     }
 
@@ -3556,24 +3564,41 @@ struct PDFView {
       && vpY >= offset.y + margin && vpY <= offset.y + margin + h;
   }
 
+  private isTouchInsidePalette(touch: TouchObject): boolean {
+    return this.isPointInsidePaletteVp(
+      this.getUIContext().px2vp(touch.x),
+      this.getUIContext().px2vp(touch.y)
+    );
+  }
+
+  // 只有全部触点都在调色板上才交给调色板；一指在板上、一指在页面时仍走页面捏合。
+  private areAllTouchesInsidePalette(event: TouchEvent): boolean {
+    if (event.touches.length === 0) {
+      return false;
+    }
+    for (let i = 0; i < event.touches.length; i++) {
+      if (!this.isTouchInsidePalette(event.touches[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   handleViewAction(event: TouchEvent): void {
     if (this.isPanelGestureActive) {
       return;
     }
 
-    if (event.touches.length > 0 &&
-      this.isPointInsidePaletteVp(
-        this.getUIContext().px2vp(event.touches[0].x),
-        this.getUIContext().px2vp(event.touches[0].y)
-      )) {
+    // 双指交给页面捏合；调色板缩放只靠 isPanelGestureActive（与节拍器一致）。
+    if (event.touches.length < 2 && this.areAllTouchesInsidePalette(event)) {
       return;
     }
 
     const isSingleFingerTouch = event.touches.length === 1 && event.touches[0].id === 0;
     const isPenSingleTouch = event.touches.length === 1 && event.sourceTool === SourceTool.Pen;
-    const isDualTouch = event.touches.length === 2 && event.touches[0].id === 0 && event.touches[1].id === 1;
-    const isTripleTouch =
-      event.touches.length === 3 && event.touches[0].id === 0 && event.touches[1].id === 1 && event.touches[2].id === 2;
+    // 触点 id 不一定是 0/1（手写笔、第二指迟到），只按数量判断。
+    const isDualTouch = event.touches.length === 2;
+    const isTripleTouch = event.touches.length === 3;
 
     if (isTripleTouch) {
       if (!this.isDocumentReadOnly()
@@ -3676,8 +3701,10 @@ struct PDFView {
         Math.pow(touch2.x - touch1.x, 2) + Math.pow(touch2.y - touch1.y, 2)
       );
 
-      if (event.type == TouchType.Down) {
-        // 捏合手势的开始
+      // 先落下一指再补第二指时，全页层往往只收到 Move，不会再来 Down。
+      const isPinchStart = event.type === TouchType.Down ||
+        (event.type === TouchType.Move && this.lastPinchDistance === undefined);
+      if (isPinchStart) {
         this.lastPinchDistance = pinchDistance;
         this.lastPinchCenter = pinchCenter;
         this.beginInteractiveMotionDemote();
@@ -3695,7 +3722,7 @@ struct PDFView {
           this.lastPinchDistance = pinchDistance;
           this.lastPinchCenter = pinchCenter;
         }
-      } else if (event.type == TouchType.Up) {
+      } else if (event.type == TouchType.Up || event.type === TouchType.Cancel) {
         this.lastPinchDistance = undefined;
         this.lastPinchCenter = undefined;
         // 记录双指手势结束的时间以进行意外触摸保护
@@ -3709,6 +3736,9 @@ struct PDFView {
       // 在捏合模式下清除单指触摸跟踪
       this.lastTouchPoint = undefined;
     } else {
+      if (this.isDualFingerActive && event.type !== TouchType.Up && event.type !== TouchType.Cancel) {
+        return;
+      }
       // 重置所有触摸跟踪
       this.lastTouchPoint = undefined;
       this.panSessionStartPoint = undefined;

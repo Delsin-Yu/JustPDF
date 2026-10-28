@@ -140,6 +140,8 @@ export struct PDFPageSlot {
         .size(toSizePx(this.canvasSize))
         .scale(this.canvasScale)
         .visibility(toVisibility(this.drawCanvasVisible))
+        // Default 会吃掉后续触点，批注时双指缩放/平移到不了全页透明层。
+        .hitTestBehavior(HitTestMode.Transparent)
         .onTouch((event: TouchEvent) => this.onDrawTouch(event))
         .onMouse((event: MouseEvent) => this.onDrawMouse(event))
       if (this.shouldRenderLinkOverlay()) {
