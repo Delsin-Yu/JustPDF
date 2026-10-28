@@ -1,10 +1,17 @@
-import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
+import { ContainerCfg, ContainerPadding, FullRect, MakeSlider, showAlertDialog, TopLeft, TopRight, toResultCode, toVisibility } from '../../common/ui/UIComponents';
 import { hasUnsavedDocumentChanges, promptUnsavedChangesAction, UnsavedChangesChoice } from '../../common/ui/UnsavedChangesPrompt';
 import { reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
+import { extractFirstPdfUriFromDragEvent, pdfDropAcceptedTypes } from '../../common/document/PdfDropOpen';
+import {
+  documentOpenParamsToRecord,
+  prepareFromUri,
+  rememberOpenedDocument
+} from '../../common/document/DocumentOpenService';
 import {
   EVENT_APP_TERMINATE_REQUESTED,
   EVENT_DOCUMENT_OPEN_REQUESTED,
   isValidPendingDocumentOpenParams,
+  requestReplacePdfDocument,
   setExitViewerOnBack,
   setPdfViewerActive,
   shouldExitViewerOnBack,
@@ -48,6 +55,8 @@ import { PageStore } from '../../common/page/PageStore';
 import { InputAction } from '../../common/ui/Input';
 import { SettingsDialogBuilder } from '../../common/ui/SettingsDialog';
 import { PDFAnnotationController } from '../annotation/PDFAnnotationController';
+import { notifyStylusFrameBoost } from '../annotation/StylusFrameBoostHelper';
+import { setViewerKeepAwake } from './ViewerKeepAwake';
 import {
   AnnotatePreparePhaseOptions,
   PageStoreStrokeStore,
@@ -817,6 +826,30 @@ struct PDFView {
     setExitViewerOnBack(true);
     this.requestOpenDocument(params);
   };
+
+  private handlePdfDrop(event: DragEvent): void {
+    const uri: string = extractFirstPdfUriFromDragEvent(event);
+    if (uri.length === 0) {
+      return;
+    }
+    void this.openDroppedPdf(uri);
+  }
+
+  private async openDroppedPdf(uri: string): Promise<void> {
+    const uiContext: UIContext = this.getUIContext();
+    const abilityContext = uiContext.getHostContext() as common.UIAbilityContext;
+    if (abilityContext === undefined) {
+      return;
+    }
+    try {
+      const params = await prepareFromUri(abilityContext, uri);
+      await rememberOpenedDocument(this.preferences, params);
+      requestReplacePdfDocument(abilityContext, uiContext.getRouter(), documentOpenParamsToRecord(params));
+    } catch (error) {
+      hilog.error(0, 'PDFView', `拖入 PDF 打开失败: ${error}`);
+      await showAlertDialog('文件打开失败', `无法打开拖入的 PDF。\n错误信息: ${error}`, uiContext);
+    }
+  }
 
   private onAppTerminateRequested = (): void => {
     void this.runWithUnsavedGuard(() => {
@@ -2012,6 +2045,7 @@ struct PDFView {
     }
     this.documentSession.enableContinuationForMigration();
     this.immersiveListening();
+    setViewerKeepAwake(this.mainWindow, true);
   }
 
   @Builder
@@ -2104,6 +2138,7 @@ struct PDFView {
   }
 
   aboutToDisappear(): void {
+    setViewerKeepAwake(this.mainWindow, false);
     // 不在此处 clearContinuationReadingState：系统发起接续时可能先销毁页面再调 onContinue
     this.cancelAnnotatePrepareSession();
     this.documentSession.resetSessionOnLeave();
@@ -2204,6 +2239,7 @@ struct PDFView {
   }
 
   onPageHide(): void {
+    setViewerKeepAwake(this.mainWindow, false);
     const context = this.getUIContext().getHostContext() as Context;
     context.eventHub.emit('onBackGround');
   }
@@ -3437,6 +3473,7 @@ struct PDFView {
     pageIndex: number,
     event: TouchEvent
   ): void {
+    notifyStylusFrameBoost(event);
     if (this.isDocumentReadOnly()) {
       return;
     }
@@ -3955,6 +3992,13 @@ struct PDFView {
         }
         this.annotationController.pushRecentCustomColor(color);
         this.annotationController.flushPendingDrawColorPreferences();
+        this.syncPanelOverlays();
+      },
+      onReplaceRecentCustomColors: (colors: AnnotationColor[]) => {
+        if (this.isDocumentReadOnly()) {
+          return;
+        }
+        this.annotationController.replaceRecentCustomColors(colors);
         this.syncPanelOverlays();
       },
       onUndo: () => {
@@ -4936,6 +4980,10 @@ struct PDFView {
       }
     })
     .onTouchTestDone(() => this.startTransparencyTimeout())
+    .allowDrop(pdfDropAcceptedTypes())
+    .onDrop((event: DragEvent) => {
+      this.handlePdfDrop(event);
+    })
     .width('100%')
     .height('100%')
   }

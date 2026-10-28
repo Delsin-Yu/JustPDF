@@ -239,6 +239,19 @@ export class PDFAnnotationController {
     this.persistDrawColorPreferences();
   }
 
+  replaceRecentCustomColors(colors: AnnotationColor[]): void {
+    const next: AnnotationColor[] = [];
+    for (let i = 0; i < colors.length && next.length < RecentCustomColorCapacity; i++) {
+      const color: AnnotationColor = colors[i];
+      if (color.id === CustomAnnotationColorId) {
+        next.push(color);
+      }
+    }
+    this.recentCustomColors = next;
+    this.cancelDrawColorPersistSchedule();
+    this.persistDrawColorPreferences();
+  }
+
   isImportedPolylinePrepared(): boolean {
     return this.importedPolylinePrepared;
   }

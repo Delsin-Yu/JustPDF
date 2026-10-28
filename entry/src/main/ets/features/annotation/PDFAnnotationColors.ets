@@ -141,6 +141,26 @@ export function rgbToHex(r: number, g: number, b: number): string {
   return toHexByte(cr) + toHexByte(cg) + toHexByte(cb);
 }
 
+export function annotationColorToArgbHex(color: AnnotationColor): string {
+  const rgb: RgbTuple = pdfColorToRgb(color.pdfColor);
+  return '#FF' + rgbToHex(rgb.r, rgb.g, rgb.b);
+}
+
+export function annotationColorFromArgbHex(hex: string): AnnotationColor | undefined {
+  let cleaned: string = hex.trim();
+  if (cleaned.startsWith('#')) {
+    cleaned = cleaned.substring(1);
+  }
+  if (cleaned.length === 8) {
+    cleaned = cleaned.substring(2);
+  }
+  const rgb: RgbTuple | undefined = parseHexColor(cleaned);
+  if (rgb === undefined) {
+    return undefined;
+  }
+  return makeCustomAnnotationColor(rgb.r, rgb.g, rgb.b);
+}
+
 export function parseHexColor(hex: string): RgbTuple | undefined {
   let cleaned: string = hex.trim();
   if (cleaned.startsWith('#')) {

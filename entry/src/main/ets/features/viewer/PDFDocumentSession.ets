@@ -1,4 +1,5 @@
 import { toResultCode } from '../../common/ui/UIComponents';
+import { beginLocalFilePerfHint, endLocalFilePerfHint } from '../../common/document/PerfHintSession';
 import { pdfLoadNeedsPassword, reloadPdfDocument } from '../../common/document/PdfDocumentLoader';
 import { PageInfo } from '../../common/page/PageInfo';
 import { PageStore } from '../../common/page/PageStore';
@@ -249,6 +250,15 @@ export class PDFDocumentSession {
    * 密码仅保存在 sessionPdfPassword，不写入 preferences。
    */
   private async loadDocumentWithPasswordPrompt(loadVersion: number): Promise<boolean> {
+    await beginLocalFilePerfHint();
+    try {
+      return await this.loadDocumentWithPasswordPromptInner(loadVersion);
+    } finally {
+      await endLocalFilePerfHint();
+    }
+  }
+
+  private async loadDocumentWithPasswordPromptInner(loadVersion: number): Promise<boolean> {
     let password = '';
     let passwordErrorHint = '';
 

@@ -62,6 +62,7 @@ export struct PDFAnnotationPalette {
   @Param onSelectDrawColor: (color: AnnotationColor) => void = () => {};
   @Param onSetCustomDrawColor: (color: AnnotationColor) => void = () => {};
   @Param onCommitRecentCustomColor: (color: AnnotationColor) => void = () => {};
+  @Param onReplaceRecentCustomColors: (colors: AnnotationColor[]) => void = () => {};
   @Param onUndo: () => void = () => {};
   @Param onRedo: () => void = () => {};
   @Param onSave: () => void = () => {};
@@ -174,7 +175,7 @@ export struct PDFAnnotationPalette {
   }
 
   @Builder
-  private buildCustomPicker() {
+  private buildLegacyColorPicker() {
     PDFCustomColorPicker({
       initialPdfColor: this.customDrawColor.pdfColor,
       recentColors: this.recentCustomColors,
@@ -182,6 +183,12 @@ export struct PDFAnnotationPalette {
         this.onSetCustomDrawColor(color);
       }
     })
+  }
+
+  @Builder
+  private buildCustomPicker() {
+    // HdsColorPicker 是 API 26 组件。静态 import 会让 API 24 加载 PDFView 直接 LoadPageFailed。
+    this.buildLegacyColorPicker();
   }
 
   @Builder

@@ -27,6 +27,10 @@
     {
       "name": "permission_prepare_app_terminate_reason",
       "value": "用于在关闭应用前提示保存未保存的 PDF 更改。"
+    },
+    {
+      "name": "permission_stylus_frame_boost_reason",
+      "value": "用于批注时降低手写笔书写延迟。"
     }
   ]
 }

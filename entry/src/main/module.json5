@@ -107,6 +107,16 @@
           ],
           "when": "inuse"
         }
+      },
+      {
+        "name": "ohos.permission.STYLUS_FRAME_BOOST",
+        "reason": "$string:permission_stylus_frame_boost_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
       }
     ],
     "extensionAbilities": [

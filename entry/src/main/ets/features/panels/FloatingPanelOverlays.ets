@@ -159,6 +159,7 @@ interface AnnotationPaletteOverlayOptions {
   onSelectDrawColor: (color: AnnotationColor) => void;
   onSetCustomDrawColor: (color: AnnotationColor) => void;
   onCommitRecentCustomColor: (color: AnnotationColor) => void;
+  onReplaceRecentCustomColors: (colors: AnnotationColor[]) => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -196,6 +197,7 @@ export class AnnotationPaletteOverlayParams {
   onSelectDrawColor: (color: AnnotationColor) => void;
   onSetCustomDrawColor: (color: AnnotationColor) => void;
   onCommitRecentCustomColor: (color: AnnotationColor) => void;
+  onReplaceRecentCustomColors: (colors: AnnotationColor[]) => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -232,6 +234,7 @@ export class AnnotationPaletteOverlayParams {
     this.onSelectDrawColor = options.onSelectDrawColor;
     this.onSetCustomDrawColor = options.onSetCustomDrawColor;
     this.onCommitRecentCustomColor = options.onCommitRecentCustomColor;
+    this.onReplaceRecentCustomColors = options.onReplaceRecentCustomColors;
     this.onUndo = options.onUndo;
     this.onRedo = options.onRedo;
     this.onSave = options.onSave;
@@ -497,6 +500,7 @@ export function BuildAnnotationPaletteOverlay(params: AnnotationPaletteOverlayPa
         onSelectDrawColor: params.onSelectDrawColor,
         onSetCustomDrawColor: params.onSetCustomDrawColor,
         onCommitRecentCustomColor: params.onCommitRecentCustomColor,
+        onReplaceRecentCustomColors: params.onReplaceRecentCustomColors,
         onUndo: params.onUndo,
         onRedo: params.onRedo,
         onSave: params.onSave,

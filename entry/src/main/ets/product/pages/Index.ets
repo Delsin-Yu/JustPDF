@@ -25,6 +25,7 @@ import {
   prepareFromUriForPicker,
   rememberOpenedDocument
 } from '../../common/document/DocumentOpenService';
+import { extractFirstPdfUriFromDragEvent, pdfDropAcceptedTypes } from '../../common/document/PdfDropOpen';
 const TAG = 'JustPDFIndex';
 
 type EntryStatus = 'valid' | 'noperm' | 'deleted';
@@ -781,6 +782,14 @@ struct Index {
     .width('100%')
     .height('100%')
     .clip(true)
+    .allowDrop(pdfDropAcceptedTypes())
+    .onDrop((event: DragEvent) => {
+      const uri: string = extractFirstPdfUriFromDragEvent(event);
+      if (uri.length === 0) {
+        return;
+      }
+      void this.loadAndViewFile(uri);
+    })
   }
 }
 
