@@ -3,7 +3,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { preferences } from '@kit.ArkData';
-import { window } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { pickFilePathAsync, pickFilePathWithDefaultAsync } from '../../common/ui/GUIO';
 import { showAlertDialog } from '../../common/ui/UIComponents';
 import {
@@ -26,6 +26,11 @@ import {
   rememberOpenedDocument
 } from '../../common/document/DocumentOpenService';
 import { extractFirstPdfUriFromDragEvent, pdfDropAcceptedTypes } from '../../common/document/PdfDropOpen';
+import {
+  bindIndexFoldStatusChange,
+  measureIndexFoldSplit,
+  unbindIndexFoldStatusChange
+} from './IndexFoldSplit';
 const TAG = 'JustPDFIndex';
 
 type EntryStatus = 'valid' | 'noperm' | 'deleted';
@@ -55,10 +60,8 @@ const LAYOUT_ANIM_DURATION = 300;
 const HISTORY_TRANSITION: TransitionEffect = TransitionEffect.OPACITY
   .combine(TransitionEffect.translate({ y: 16 }))
   .animation({ duration: LAYOUT_ANIM_DURATION, curve: Curve.Friction });
-/** 版本水印字号；竖向布局时历史面板按此预留底部空间 */
-const VERSION_WATERMARK_FONT_SIZE = 14;
-/** 版本水印与历史面板底边之间的空隙 */
-const VERSION_WATERMARK_GAP = 8;
+/** 标题下方版本号字号，与「最近打开」眉题同级 */
+const VERSION_CAPTION_FONT_SIZE = 13;
 
 @Entry
 @Component
@@ -81,13 +84,22 @@ struct Index {
   @State heroTint: string = HERO_TINT_BRIGHT;
   /** 页面可见时为 true，隐藏时暂停背景动画 */
   @State backgroundActive: boolean = true;
-  /** 首页左下角水印：app.json5 的 versionName */
+  /** 半折/笔记本姿态时为 true，竖向最近打开才收到下半屏 */
+  @State foldLaptopMode: boolean = false;
+  /** 笔记本态主视觉高度（vp）；横折痕锚点或 50% 回退 */
+  @State foldHeroHeightVp: number = 0;
+  /** 横折痕占位高度（含 16/40 安全间距）；竖折痕为 0 */
+  @State foldCreaseBandVp: number = 0;
+  /** 首页标题下版本号：app.json5 的 versionName */
   private appVersionName: string = readAppVersionName();
   private preferences: preferences.Preferences | undefined = getSessionPreferences();
   private mainWindow: window.Window | undefined = undefined;
   private windowSizeCallback: (size: window.Size) => void = (size: window.Size) => {
     // 尺寸与断点立即生效，避免 animateTo 插值中间帧出现裁切
     this.applyWindowSize(size.width, size.height);
+  };
+  private foldStatusCallback: Callback<display.FoldStatus> = (_status: display.FoldStatus) => {
+    this.refreshFoldSplit();
   };
 
   aboutToAppear(): void {
@@ -100,7 +112,10 @@ struct Index {
         this.mainWindow.on('windowSizeChange', this.windowSizeCallback);
       } catch (_e) {
       }
+    } else {
+      this.refreshFoldSplit();
     }
+    bindIndexFoldStatusChange(this.foldStatusCallback);
 
     let context = this.getUIContext();
     let routerParams = context.getRouter().getParams() as Record<string, string>;
@@ -121,6 +136,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    unbindIndexFoldStatusChange(this.foldStatusCallback);
     if (this.mainWindow) {
       try {
         this.mainWindow.off('windowSizeChange', this.windowSizeCallback);
@@ -155,11 +171,28 @@ struct Index {
     }
   }
 
-  /** 同步窗口宽高（px→vp）并刷新断点 */
+  /** 同步窗口宽高（px→vp）并刷新断点与折痕分屏 */
   private applyWindowSize(widthPx: number, heightPx: number): void {
     this.windowWidthVp = this.getUIContext().px2vp(widthPx);
     this.windowHeightVp = this.getUIContext().px2vp(heightPx);
     this.refreshBreakpoints();
+    this.refreshFoldSplit();
+  }
+
+  /** 按当前窗口与折痕重算竖向下半屏几何 */
+  private refreshFoldSplit(): void {
+    const uiContext: UIContext = this.getUIContext();
+    const topInsetVp: number = uiContext.px2vp(this.avoidAreaTopPx);
+    const bottomInsetVp: number = uiContext.px2vp(this.avoidAreaBottomPx);
+    const contentHeightVp: number = this.windowHeightVp - topInsetVp - bottomInsetVp;
+    const snap = measureIndexFoldSplit({
+      uiContext: uiContext,
+      contentHeightVp: contentHeightVp,
+      contentTopInsetVp: topInsetVp
+    });
+    this.foldLaptopMode = snap.laptopMode;
+    this.foldHeroHeightVp = snap.heroHeightVp;
+    this.foldCreaseBandVp = snap.creaseBandVp;
   }
 
   private async validateRecentFilesAsync(): Promise<void> {
@@ -314,8 +347,11 @@ struct Index {
     return fitted;
   }
 
-  /** 历史列表顶部内边距 */
+  /** 历史列表顶部内边距；笔记本态贴折痕时收紧 */
   private historyTopInset(): number {
+    if (this.useLowerHalfHistory()) {
+      return 8;
+    }
     return this.isWide() ? 24 : 12;
   }
 
@@ -324,20 +360,15 @@ struct Index {
     return this.isWide() ? 24 : 12;
   }
 
-  /** 竖向布局时为左下角版本水印抬高历史面板 */
-  private versionWatermarkReserve(): number {
-    if (this.appVersionName.length === 0) {
-      return 0;
+  /**
+   * 仅笔记本/悬停半折且竖向有历史时，最近打开收到下半屏。
+   * 展开竖持、直板机仍用 40/60，不收窄。
+   */
+  private useLowerHalfHistory(): boolean {
+    if (this.useSideBySide() || this.recentFiles.length === 0 || !this.isTall()) {
+      return false;
     }
-    return VERSION_WATERMARK_FONT_SIZE + VERSION_WATERMARK_GAP;
-  }
-
-  /** 历史面板底边距：分栏时只留外沿；竖向时额外避开版本号 */
-  private historyPanelBottomInset(): number {
-    if (this.useSideBySide()) {
-      return this.historyPanelOuterInset();
-    }
-    return this.historyPanelOuterInset() + this.versionWatermarkReserve();
+    return this.foldLaptopMode && this.foldHeroHeightVp > 0;
   }
 
   /** 主视觉块左右内边距，为外发光留出空间避免贴边裁切 */
@@ -457,22 +488,32 @@ struct Index {
   buildHeroBlock() {
     Column() {
       // 玻璃标题：半透明着色器 + 柔光，笔画直接透出海洋渐变。
-      Text('Just PDF')
-        .fontSize(this.titleFontSize())
-        .fontWeight(FontWeight.Bold)
-        .lineHeight(this.titleFontSize() * 1.16)
-        .letterSpacing(2)
-        .maxLines(1)
-        .width('100%')
-        .textAlign(TextAlign.Center)
-        .shaderStyle(this.glassTitleShader())
-        .opacity(0.82)
-        .textShadow({
-          radius: 26,
-          color: this.glowTint(),
-          offsetX: 0,
-          offsetY: 0
-        })
+      Column() {
+        Text('Just PDF')
+          .fontSize(this.titleFontSize())
+          .fontWeight(FontWeight.Bold)
+          .lineHeight(this.titleFontSize())
+          .letterSpacing(2)
+          .maxLines(1)
+          .shaderStyle(this.glassTitleShader())
+          .opacity(0.82)
+          .textShadow({
+            radius: 26,
+            color: this.glowTint(),
+            offsetX: 0,
+            offsetY: 0
+          })
+
+        if (this.appVersionName.length > 0) {
+          Text(this.appVersionName)
+            .fontSize(VERSION_CAPTION_FONT_SIZE)
+            .fontWeight(FontWeight.Medium)
+            .letterSpacing(0.6)
+            .fontColor(this.eyebrowTint())
+            .margin({ top: 0 })
+            .alignSelf(ItemAlign.End)
+        }
+      }
 
       if (this.isLoading) {
         Row({ space: 10 }) {
@@ -663,31 +704,6 @@ struct Index {
     .clip(true)
   }
 
-  /** 首页左下角版本水印：跟眉题同一套字距/色调，不抢主视觉 */
-  @Builder
-  buildVersionWatermark() {
-    if (this.appVersionName.length > 0) {
-      Column() {
-        Text(this.appVersionName)
-          .fontSize(VERSION_WATERMARK_FONT_SIZE)
-          .fontWeight(FontWeight.Bolder)
-          .letterSpacing(0.6)
-          .fontColor(this.eyebrowTint())
-      }
-      .width('100%')
-      .height('100%')
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.End)
-      .padding({
-        left: this.getUIContext().px2vp(this.avoidAreaLeftPx) + this.historyPanelOuterInset(),
-        right: this.getUIContext().px2vp(this.avoidAreaRightPx),
-        top: this.getUIContext().px2vp(this.avoidAreaTopPx),
-        bottom: this.getUIContext().px2vp(this.avoidAreaBottomPx) + this.historyPanelOuterInset()
-      })
-      .hitTestBehavior(HitTestMode.Transparent)
-    }
-  }
-
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 全屏海洋渐变背景，铺满整个窗口（含状态栏之下）
@@ -722,7 +738,7 @@ struct Index {
             .padding({
               right: this.historyPanelOuterInset(),
               top: this.historyPanelOuterInset(),
-              bottom: this.historyPanelBottomInset()
+              bottom: this.historyPanelOuterInset()
             })
             .transition(HISTORY_TRANSITION)
           }
@@ -730,9 +746,36 @@ struct Index {
           .height('100%')
           .layoutWeight(1)
         } else {
-          // 窄窗或窄高窗：主视觉占顶部 40%，历史列表铺满余下空间
+          // 窄窗或窄高窗：直板机主视觉 40%；可折叠竖向把最近打开放到下半屏
           Column() {
-            if (this.recentFiles.length > 0) {
+            if (this.recentFiles.length > 0 && this.useLowerHalfHistory()) {
+              Column() {
+                this.buildHeroBlock()
+              }
+              .width('100%')
+              .height(this.foldHeroHeightVp)
+              .alignItems(HorizontalAlign.Center)
+              .justifyContent(FlexAlign.Center)
+
+              if (this.foldCreaseBandVp > 0) {
+                Blank()
+                  .width('100%')
+                  .height(this.foldCreaseBandVp)
+              }
+
+              Column() {
+                this.buildHistoryPanel()
+              }
+              .width('100%')
+              .layoutWeight(1)
+              .height('100%')
+              .padding({
+                left: this.historyPanelOuterInset(),
+                right: this.historyPanelOuterInset(),
+                bottom: this.historyPanelOuterInset()
+              })
+              .transition(HISTORY_TRANSITION)
+            } else if (this.recentFiles.length > 0) {
               Column() {
                 this.buildHeroBlock()
               }
@@ -750,7 +793,7 @@ struct Index {
               .padding({
                 left: this.historyPanelOuterInset(),
                 right: this.historyPanelOuterInset(),
-                bottom: this.historyPanelBottomInset()
+                bottom: this.historyPanelOuterInset()
               })
               .transition(HISTORY_TRANSITION)
             } else {
@@ -776,8 +819,6 @@ struct Index {
         left: this.getUIContext().px2vp(this.avoidAreaLeftPx),
         right: this.getUIContext().px2vp(this.avoidAreaRightPx)
       })
-
-      this.buildVersionWatermark()
     }
     .width('100%')
     .height('100%')
@@ -793,7 +834,7 @@ struct Index {
   }
 }
 
-/** 读取当前包的 versionName，失败时返回空串以免水印显示残缺前缀 */
+/** 读取当前包的 versionName，失败时返回空串以免标题下版本号显示残缺前缀 */
 function readAppVersionName(): string {
   try {
     const info: bundleManager.BundleInfo =
